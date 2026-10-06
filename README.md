@@ -43,13 +43,15 @@ and the source of NSS, Firefox and OpenSSL.
 | 0 | ClientHello parser and differ | done |
 | 1 | Reference capture of real Firefox | done |
 | 2 | ClientHello emitter | done |
-| 3 | Full handshake (`cryptography` for primitives) | key exchange done, key schedule next |
-| 4 | HTTP/2 frames, SETTINGS and header order (`h2`) | pending |
+| 3 | Full handshake (`cryptography` for primitives) | done |
+| 4 | HTTP/2 frames, SETTINGS and header order (`h2`) | next |
 | 5 | curl-style CLI | pending |
 | 6 | CONNECT proxy sidecar for other languages | pending |
 
 Phases 0 through 2 are standard library only. Phase 3 requires `cryptography`,
 phase 4 requires `h2`.
+
+    .venv\Scripts\pip install cryptography
 
 ## Usage
 

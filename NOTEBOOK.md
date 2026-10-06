@@ -213,3 +213,50 @@ order of the public keys. That is unverified: nothing checks it until the
 server's Finished verifies against our transcript.
 
 **Next:** record layer, then the key schedule.
+
+---
+
+## 2026-10-06 — Phase 3 complete: full handshake
+
+`connect()` completes a TLS 1.3 handshake against tls.peet.ws, github.com,
+www.cloudflare.com, www.google.com, example.com and www.amazon.com. All
+negotiate TLS_AES_128_GCM_SHA256 and ALPN h2.
+
+**The server Finished verifies.** That single check validates the whole chain
+at once: transcript handling, HKDF-Expand-Label, the three-stage key schedule,
+the AEAD nonce construction, and the open assumption from the previous entry
+that the hybrid shared secret concatenates ML-KEM first. If any of those were
+wrong the HMAC would not match.
+
+**Compressed certificates.** Cloudflare and example.com send handshake message
+0x19, CompressedCertificate from RFC 8879, because the profile advertises
+`compress_certificate` with zlib, brotli and zstd. RFC 8879 puts the compressed
+message into the transcript as sent, so with certificate verification out of
+scope it needs no decompression, only acceptance. Decompression becomes
+necessary the day certificates are verified.
+
+**First end-to-end result.** A hand-rolled minimal HTTP/2 GET to
+`tls.peet.ws/api/all`, using literal HPACK with no Huffman coding, returned:
+
+    ja3_hash       9d42e90b0225e779f03141ddcd699df2
+    ja4            t13d1517h2_8daaf6152771_3cbfd9057e0d
+    peetprint_hash a4bbbc7e3adf3db97d276fd0adb1efc4
+    http_version   h2
+    akamai fp      |00|0|m,p,s,a
+
+The JA4 decodes as TCP, TLS 1.3, SNI present, 15 ciphers, 17 extensions, ALPN
+h2 — the Firefox ClientHello, as intended.
+
+The Akamai fingerprint is the opposite. `|00|0|m,p,s,a` means an empty SETTINGS
+frame, no WINDOW_UPDATE and no PRIORITY frames. Firefox sends specific SETTINGS
+values, an initial WINDOW_UPDATE and a set of PRIORITY frames. So the TLS layer
+now says Firefox while the HTTP/2 layer says hand-written client, which is
+worse than not disguising at all: no real browser produces that combination.
+Phase 4 exists to fix exactly this, and the measurement is the proof it was
+needed.
+
+**To get the target**, open `https://tls.peet.ws/api/all` in Firefox and record
+the `akamai_fingerprint` and header order it reports.
+
+**Not yet measured:** whether any of this defeats bot detection. Nothing here
+has been tested against a protected endpoint.
