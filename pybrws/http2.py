@@ -149,9 +149,13 @@ class Http2Connection:
             elif frame_type == DATA:
                 body += payload
                 if payload:
-                    self.tls.send(
-                        frame(WINDOW_UPDATE, 0, 0, len(payload).to_bytes(4, "big"))
-                    )
+                    # Both windows must be replenished. Only topping up the
+                    # connection stalls any response whose compressed size
+                    # exceeds the per-stream INITIAL_WINDOW_SIZE we advertised.
+                    increment = len(payload).to_bytes(4, "big")
+                    self.tls.send(frame(WINDOW_UPDATE, 0, 0, increment))
+                    if not flags & FLAG_END_STREAM:
+                        self.tls.send(frame(WINDOW_UPDATE, 0, stream_id, increment))
                 done = bool(flags & FLAG_END_STREAM)
 
         decoded = [

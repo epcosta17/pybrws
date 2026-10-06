@@ -147,6 +147,62 @@ class TestRequestFraming(unittest.TestCase):
         self.assertEqual(decoded["user-agent"], firefox157.USER_AGENT)
 
 
+class ScriptedTls(FakeTls):
+    """Replays canned frames so a response can be read without a server."""
+
+    def __init__(self, frames):
+        super().__init__()
+        self._inbound = list(frames)
+
+    def recv(self):
+        if not self._inbound:
+            raise AssertionError("client read past the scripted frames")
+        return self._inbound.pop(0)
+
+
+class TestFlowControl(unittest.TestCase):
+    """A response larger than the advertised stream window must not stall."""
+
+    def read_response(self, chunks):
+        from hpack import Encoder
+
+        stream = firefox157.H2_FIRST_STREAM_ID
+        header_block = Encoder().encode([(":status", "200")])
+        frames = [frame(HEADERS, FLAG_END_HEADERS, stream, header_block)]
+        for index, chunk in enumerate(chunks):
+            last = index == len(chunks) - 1
+            frames.append(frame(0x00, FLAG_END_STREAM if last else 0, stream, chunk))
+
+        tls = ScriptedTls(frames)
+        conn = Http2Connection(tls, profile=firefox157)
+        tls.sent.clear()
+        response = conn._read_response(stream)
+        return response, frames_in(bytes(tls.sent))
+
+    def test_both_windows_are_replenished(self):
+        response, sent = self.read_response([b"a" * 1000, b"b" * 1000])
+        self.assertEqual(response.body, b"a" * 1000 + b"b" * 1000)
+        updates = [(f[2], int.from_bytes(f[3], "big")) for f in sent if f[0] == WINDOW_UPDATE]
+        connection_level = [n for stream, n in updates if stream == 0]
+        stream_level = [n for stream, n in updates if stream != 0]
+        self.assertEqual(connection_level, [1000, 1000])
+        self.assertEqual(stream_level, [1000], "only the non-final frame needs one")
+
+    def test_increments_match_the_bytes_received(self):
+        _, sent = self.read_response([b"x" * 4096, b"y" * 17, b"z" * 1])
+        totals = sum(
+            int.from_bytes(f[3], "big") for f in sent
+            if f[0] == WINDOW_UPDATE and f[2] == 0
+        )
+        self.assertEqual(totals, 4096 + 17 + 1)
+
+    def test_no_stream_update_after_end_stream(self):
+        # The stream is closed; an update on it would be a protocol error.
+        _, sent = self.read_response([b"only"])
+        stream_updates = [f for f in sent if f[0] == WINDOW_UPDATE and f[2] != 0]
+        self.assertEqual(stream_updates, [])
+
+
 class TestDecompress(unittest.TestCase):
     def test_identity(self):
         self.assertEqual(decompress(b"plain", ""), b"plain")

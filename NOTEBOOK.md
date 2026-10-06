@@ -632,3 +632,51 @@ the question is whether the page arrives. The reading changed from
 requires the flag; a browser always follows and never shows a 308. This tool
 imitates a browser, so following is the coherent default. The library keeps
 `follow_redirects=0`, where an explicit caller should decide.
+
+---
+
+## 2026-10-06 — etsy, a query string, and a flow control bug
+
+Reported: `https://www.etsy.com/?dd_referrer=` is served where `/` is blocked.
+`dd_referrer` is a DataDome parameter and etsy runs DataDome, so the obvious
+reading was that the parameter means something to the protection.
+
+Five arms, five interleaved rounds, zero variance anywhere:
+
+| Arm | Result |
+|---|---|
+| `/` pybrws | 0/5 served |
+| `/?dd_referrer=` pybrws | 5/5 served |
+| `/?nonsense=` pybrws | 5/5 served |
+| `/?nonsense=` httpx | 0/5 served |
+| `/c/jewelry` httpx | 0/5 served |
+
+The report is right about the effect and wrong about the cause. **Any query
+string works**, not `dd_referrer` specifically, so the rule is attached to the
+bare `/` path rather than to the parameter. The httpx arm matters just as
+much in the other direction: with the same query string it is still blocked
+5/5, so the query string is not a bypass anyone can use. Both the fingerprint
+and the path are necessary.
+
+A plausible reading is that the most-scraped URL on the site carries the
+strictest rule, and a query string produces a different cache key or rule
+match. That is a guess, and it is not tested.
+
+**The fifth arm found a defect in this client.** `/c/jewelry` timed out 5/5
+for pybrws while httpx got a clean 403, so the failure was ours. Cause: the
+HTTP/2 reader replenished only the connection window, never the stream
+window. The profile advertises `INITIAL_WINDOW_SIZE = 131072`, so any response
+whose **compressed** size passes that stalls forever.
+
+It had been invisible because every success so far was small on the wire.
+zillow's 433 KB is the figure after brotli; compressed it fits the window.
+etsy's category page does not.
+
+Fixed by sending WINDOW_UPDATE on both the connection and the stream, and not
+on a stream already closed by END_STREAM. `/c/jewelry` now returns 200 with
+roughly 990 KB in 2.1 seconds, three for three, and also passes where httpx is
+blocked. Three tests cover it, driving the reader from scripted frames.
+
+The initial WINDOW_UPDATE is the only one in the Akamai fingerprint, so this
+does not change it. The *pattern* of later updates is still a signal, and
+Firefox batches them rather than answering every DATA frame. Not measured.
