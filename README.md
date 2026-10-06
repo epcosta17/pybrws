@@ -15,7 +15,7 @@ fingerprint.
 | www.zillow.com | CloudFront | 403, 5.7 KB block page | **200, 433 KB real page** |
 | www.ticketmaster.com | - | 403, 20 bytes | **200, 562 KB real page** |
 | www.indeed.com | Cloudflare | 403, 25 KB block page | 302 redirect |
-| www.glassdoor.com | Cloudflare | 403 | 308 redirect |
+| www.glassdoor.com | Cloudflare | 403 | 308, then **200, 684 KB** when followed |
 | www.g2.com | Cloudflare | 403 | 403 |
 | www.etsy.com | DataDome | 403 | 403 |
 | www.crunchbase.com | Cloudflare | 200 | 200 |
@@ -72,8 +72,8 @@ and the source of NSS, Firefox and OpenSSL.
 | 3 | Full handshake (`cryptography` for primitives) | done |
 | 4 | HTTP/2 frames, SETTINGS and header order | done |
 | 4b | HTTP/1.1, for hosts that do not offer h2 | done |
-| 5 | curl-style CLI | next |
-| 6 | CONNECT proxy sidecar for other languages | pending |
+| 5 | curl-style CLI | done |
+| 6 | Proxy sidecar for other languages | done |
 
 Phases 0 through 2 are standard library only.
 
@@ -94,9 +94,22 @@ Run the tests:
 
     python -m unittest discover -s tests -t . -v
 
-Fetch a URL over whichever protocol ALPN selects:
+Fetch a URL:
 
-    python -c "from pybrws.client import get; print(get('https://example.com/').status)"
+    python -m pybrws https://example.com/
+    python -m pybrws -IL https://www.glassdoor.com/
+    python -m pybrws -H 'Accept-Language: es-MX,es;q=0.9' -o page.html https://www.zillow.com/
+
+Lend the fingerprint to another language, with no change to its code:
+
+    python -m pybrws.proxy
+    HTTPS_PROXY=http://127.0.0.1:8080 node --use-env-proxy -e "fetch('https://tls.peet.ws/api/all')..."
+    curl -k -x http://127.0.0.1:8080 https://tls.peet.ws/api/all
+
+The proxy terminates TLS rather than tunnelling it, so the caller must trust
+the CA it prints on startup, or skip verification. A plain CONNECT tunnel
+would leave the caller performing its own handshake, which is the fingerprint
+this project replaces.
 
 Compare the live fingerprint against the reference capture:
 

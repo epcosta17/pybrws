@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from .handshake import connect
 from .http1 import Http1Connection
@@ -17,8 +17,16 @@ class UnsupportedUrl(Exception):
     pass
 
 
-def get(url: str, *, profile=firefox157, timeout: float = 20.0, headers=None) -> Response:
-    """Fetch one URL.
+class TooManyRedirects(Exception):
+    pass
+
+
+REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+
+
+def fetch_once(url: str, *, profile=firefox157, timeout: float = 20.0,
+               headers=None) -> Response:
+    """Fetch one URL without following redirects.
 
     The server picks the protocol through ALPN; both branches are implemented,
     so a host that only speaks HTTP/1.1 is handled the same as one that
@@ -51,4 +59,38 @@ def get(url: str, *, profile=firefox157, timeout: float = 20.0, headers=None) ->
             http = Http2Connection(tls, profile=profile)
         else:
             http = Http1Connection(tls, profile=profile)
-        return http.get(path, authority, headers=headers)
+        response = http.get(path, authority, headers=headers)
+    response.url = url
+    return response
+
+
+def get(url: str, *, profile=firefox157, timeout: float = 20.0, headers=None,
+        follow_redirects: int = 0) -> Response:
+    """Fetch a URL, optionally following redirects.
+
+    Args:
+        url: an https URL.
+        profile: the client to imitate.
+        timeout: socket timeout in seconds.
+        headers: overrides the profile's request headers.
+        follow_redirects: how many redirects to follow, 0 to return the first
+            response as it arrives.
+
+    Returns:
+        The final response, with the body decompressed.
+
+    Raises:
+        TooManyRedirects: if the limit is reached while still redirecting.
+    """
+    seen = []
+    for _ in range(follow_redirects + 1):
+        response = fetch_once(url, profile=profile, timeout=timeout, headers=headers)
+        location = response.header("location")
+        if response.status not in REDIRECT_STATUSES or not location:
+            response.history = seen
+            return response
+        seen.append(response)
+        url = urljoin(url, location)
+    raise TooManyRedirects(
+        "still redirecting after " + str(follow_redirects) + " hops, last " + repr(url)
+    )

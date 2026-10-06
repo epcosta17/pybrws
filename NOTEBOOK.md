@@ -486,3 +486,51 @@ front and `Connection` after `Accept-Encoding`, minus `te`.
 test asserts it. A second test asserts the fixture contains `br, zstd` and a
 Sec-Fetch header, so that replacing it with a cleartext capture fails loudly
 rather than silently degrading the profile.
+
+---
+
+## 2026-10-06 — Phases 5 and 6: CLI and proxy
+
+**Redirects.** `client.get` takes `follow_redirects`, and the CLI exposes it
+as `-L`. This changes an earlier result: glassdoor.com was recorded as
+returning 308 rather than a block, and following the chain reaches 200 with
+684 KB of real page. The earlier table understated the outcome.
+
+One fidelity gap worth recording: a real browser changes `Sec-Fetch-Site`
+from `none` to `same-origin` or `cross-site` when following a redirect, and
+this client keeps sending the navigation header set unchanged.
+
+**The proxy terminates TLS; it does not tunnel.** A plain CONNECT tunnel is
+useless here, because the caller performs its own handshake through it and
+presents its own fingerprint, which is the thing being replaced. So the proxy
+has to sit inside the encryption, which costs a certificate authority the
+caller must trust. That tradeoff is the whole design, and it is why
+`HTTPS_PROXY` alone is not enough: the CA has to be trusted too.
+
+**Measured, same endpoint, three callers:**
+
+| Caller | JA4 | Akamai fingerprint |
+|---|---|---|
+| httpx direct | t13d1712h1_ab0a1bf427ad_8e6e362c5eac | 1:4096;2:0;4:65535;5:16384;3:100;6:65536\|16777216\|0\|m,a,s,p |
+| node direct | t13d5212h1_b262b3658495_8e6e362c5eac | 2:0;4:262144\|458753\|0\|a,m,p,s |
+| curl direct | t13d2013h1_2b729b4bf6f3_e24568c0d440 | - |
+| **any of them, proxied** | **t13d1517h2_8daaf6152771_3cbfd9057e0d** | **1:65536;2:0;4:131072;5:16384\|12517377\|0\|m,p,a,s** |
+| Firefox 157 | t13d1517h2_8daaf6152771_3cbfd9057e0d | 1:65536;2:0;4:131072;5:16384\|12517377\|0\|m,p,a,s |
+
+No caller was modified. Only an environment variable and a trusted CA.
+
+**Two certificate problems, both found by running it:**
+
+- OpenSSL 4 rejects a leaf without an Authority Key Identifier matching the
+  issuer's Subject Key Identifier: `certificate verify failed: Missing
+  Authority Key Identifier`. Both extensions are now issued, and a stored CA
+  lacking the subject key id is regenerated rather than reused, since every
+  leaf it signs would fail.
+- `curl --cacert` fails with exit 60 on this machine. That curl is built
+  against Schannel, which consults the Windows certificate store and ignores
+  the flag. `-k` works, or the CA goes in the Windows store.
+
+**Known limits of the proxy:** GET only, one request per tunnel, HTTP/1.1
+toward the caller. The fingerprinted hop is the outbound one, so the inner
+protocol does not matter, but it does mean the caller cannot exercise
+HTTP/2-specific behaviour through it.

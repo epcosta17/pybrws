@@ -35,6 +35,8 @@ class Response:
     headers: list[tuple[str, str]] = field(default_factory=list)
     body: bytes = b""
     http_version: str = ""
+    url: str = ""
+    history: list = field(default_factory=list)
 
     def header(self, name: str) -> str | None:
         wanted = name.lower()
