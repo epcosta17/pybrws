@@ -308,3 +308,64 @@ example.com all advertise `alpn=h3,h2` in their HTTPS DNS records, so a real
 Firefox may reach them over QUIC first. Sessions are never resumed. The header
 set is the one Firefox sends for a top-level navigation; an XHR or a subresource
 request sends different `accept` and `sec-fetch-*` values.
+
+---
+
+## 2026-10-06 — Testing against bot detection
+
+**First attempt used the wrong instruments.** Four targets, pybrws and httpx
+side by side:
+
+| Target | pybrws | httpx |
+|---|---|---|
+| scrapingcourse.com/antibot-challenge | 403 challenge | 403 challenge |
+| scrapingcourse.com/cloudflare-challenge | 403 challenge | 403 challenge |
+| nowsecure.nl | 200 | 200 |
+| cloudflare.com/cdn-cgi/trace | 200 | 200 |
+
+Identical in all four, so the experiment measured nothing. Two targets issue a
+JavaScript challenge to every visitor including real browsers, which no HTTP
+client can clear by construction. The other two serve everyone. Neither is
+sensitive to protocol fingerprint, which is the variable under test. An
+experiment needs a target where a plain client is blocked and a browser is not.
+
+**Finding such targets.** Scanning ten sites with httpx produced six that
+return 403 to a plain client: g2, zillow, indeed, glassdoor, ticketmaster and
+etsy, the last behind DataDome rather than Cloudflare. Those discriminate.
+
+**Result**, one GET each, repeated twice with byte-identical responses:
+
+| Host | Protection | httpx | pybrws |
+|---|---|---|---|
+| www.zillow.com | CloudFront | 403, 5776 B | 200, 433736 B |
+| www.ticketmaster.com | - | 403, 20 B | 200, 562285 B |
+| www.indeed.com | Cloudflare | 403, 25741 B | 302, 71 B |
+| www.glassdoor.com | Cloudflare | 403, 9 B | 308, 10 B |
+| www.g2.com | Cloudflare | 403, 1704 B | 403, 1707 B |
+| www.etsy.com | DataDome | 403, 776 B | 403, 779 B |
+| www.crunchbase.com | Cloudflare | 200 | 200 |
+
+The two 200s carry genuine page titles, so they are real pages rather than
+block pages served with a 200. The two redirects replace a block page with
+ordinary routing, which is also a change in how the client is classified.
+
+Four of six discriminating targets stop blocking. The protocol fingerprint is
+doing measurable work.
+
+**What this does not show.** One client IP, so address reputation is
+uncontrolled; the same test from a datacentre range would likely read
+differently. Two sites still block, and nothing here isolates why. g2 runs
+Cloudflare at a stricter setting and etsy runs DataDome, and both plausibly
+want JavaScript-derived signals that no HTTP client can produce.
+
+**An aside, and a useful control.** tls.browserleaks.com, tools.scrapfly.io and
+www.howsmyssl.com all terminate HTTP/2 with GOAWAY and error code 0 before
+responding. They negotiate h2 over ALPN, and the same hosts answer over
+HTTP/1.1. Installing httpx and reproducing the identical GOAWAY established
+that this is not a defect in this client. Without that control the obvious
+move would have been to spend hours debugging working code.
+
+**Gap this exposed:** bot.incolumitas.com, a purpose-built bot detection test
+site, serves HTTP/1.1 only, and this client speaks HTTP/2 exclusively. A real
+Firefox falls back. That is a fingerprint-visible difference and a reason to
+implement HTTP/1.1.

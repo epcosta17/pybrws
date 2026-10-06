@@ -3,6 +3,32 @@
 A from-scratch HTTPS client in Python that emits a ClientHello byte-identical
 to a real browser's.
 
+## Does it work
+
+Measured against sites that serve a plain Python client a block page, one GET
+each, repeated twice with identical results. `httpx` is a mature HTTP/2 client
+over the stdlib TLS stack; `pybrws` differs from it only in protocol
+fingerprint.
+
+| Host | Protection | httpx | pybrws |
+|---|---|---|---|
+| www.zillow.com | CloudFront | 403, 5.7 KB block page | **200, 433 KB real page** |
+| www.ticketmaster.com | - | 403, 20 bytes | **200, 562 KB real page** |
+| www.indeed.com | Cloudflare | 403, 25 KB block page | 302 redirect |
+| www.glassdoor.com | Cloudflare | 403 | 308 redirect |
+| www.g2.com | Cloudflare | 403 | 403 |
+| www.etsy.com | DataDome | 403 | 403 |
+| www.crunchbase.com | Cloudflare | 200 | 200 |
+
+Four of the six discriminating targets stop blocking. Two do not: a Cloudflare
+site at a stricter setting and a DataDome site, both of which want signals this
+client cannot produce.
+
+Caveats worth stating. A single client IP, so address reputation is an
+uncontrolled variable. No JavaScript challenge is solvable here by
+construction, so any site that issues one is out of reach regardless of
+fingerprint.
+
 ## Clean-room rule
 
 The problem is reconstructed without reading existing solutions.
