@@ -1,0 +1,47 @@
+{
+  "_source": "https://tls.peet.ws/api/all opened in Firefox 157.0 on Windows, 2026-10-06",
+  "_note": "Client IP, client_random and session_id are omitted: per-connection, not fingerprint.",
+  "http_version": "h2",
+  "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:157.0) Gecko/20100101 Firefox/157.0",
+  "tls": {
+    "ja3": "771,4865-4867-4866-49195-49199-52393-52392-49196-49200-49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-34-18-51-43-13-45-28-27-65037,4588-29-23-24-25,0",
+    "ja3_hash": "9d42e90b0225e779f03141ddcd699df2",
+    "ja4": "t13d1517h2_8daaf6152771_3cbfd9057e0d",
+    "ja4_r": "t13d1517h2_002f,0035,009c,009d,1301,1302,1303,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0012,0017,001b,001c,0022,0023,002b,002d,0033,fe0d,ff01_0403,0503,0603,0804,0805,0806,0401,0501,0601,0203,0201",
+    "peetprint": "772-771|2-1.1|4588-29-23-24-25|1027-1283-1539-2052-2053-2054-1025-1281-1537-515-513|1|1-2-3|4865-4867-4866-49195-49199-52393-52392-49196-49200-49171-49172-156-157-47-53|0-10-11-13-16-18-23-27-28-34-35-43-45-5-51-65037-65281",
+    "peetprint_hash": "a4bbbc7e3adf3db97d276fd0adb1efc4",
+    "tls_version_record": "771",
+    "tls_version_negotiated": "772"
+  },
+  "http2": {
+    "akamai_fingerprint": "1:65536;2:0;4:131072;5:16384|12517377|0|m,p,a,s",
+    "akamai_fingerprint_hash": "6ea73faa8fc5aac76bded7bd238f6433",
+    "headers_frame": {
+      "stream_id": 3,
+      "length": 286,
+      "flags": ["EndStream (0x1)", "EndHeaders (0x4)", "Priority (0x20)"],
+      "priority": {"weight": 42, "depends_on": 0, "exclusive": 0},
+      "headers": [
+        ":method: GET",
+        ":path: /api/all",
+        ":authority: tls.peet.ws",
+        ":scheme: https",
+        "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:157.0) Gecko/20100101 Firefox/157.0",
+        "accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-language: en-US,en;q=0.9",
+        "accept-encoding: gzip, deflate, br, zstd",
+        "upgrade-insecure-requests: 1",
+        "sec-fetch-dest: document",
+        "sec-fetch-mode: navigate",
+        "sec-fetch-site: none",
+        "sec-fetch-user: ?1",
+        "priority: u=0, i",
+        "te: trailers"
+      ]
+    }
+  },
+  "tcpip": {
+    "p0f": "4:117+?:0:1400:65535,8:mss,nop,ws,nop,nop,sok:df,id+:0",
+    "_note": "Produced by the host TCP stack, not by this client. Matches only while running on Windows."
+  }
+}

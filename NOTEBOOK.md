@@ -260,3 +260,51 @@ the `akamai_fingerprint` and header order it reports.
 
 **Not yet measured:** whether any of this defeats bot detection. Nothing here
 has been tested against a protected endpoint.
+
+---
+
+## 2026-10-06 — Phase 4: HTTP/2, and the gold bar
+
+Reference captured by opening tls.peet.ws/api/all in Firefox 157. Target:
+
+    1:65536;2:0;4:131072;5:16384|12517377|0|m,p,a,s
+
+Four things the capture revealed that guessing would have missed:
+
+- **Pseudo-header order is `m,p,a,s`**, not `m,p,s,a`. Authority precedes
+  scheme. The throwaway client from the previous entry had it wrong.
+- **The first stream id is 3, not 1.**
+- **Priority travels in the HEADERS frame**, with flag 0x20, weight 42,
+  depends_on 0, exclusive 0. Firefox sends no standalone PRIORITY frames,
+  which is why that section of the Akamai fingerprint is empty. Expecting
+  separate frames there would have been the obvious wrong guess.
+- **The wire carries weight minus one** (RFC 7540). peet.ws reports 42, so the
+  byte is 41.
+
+Result: `akamai_fingerprint` and its hash both match, and the HEADERS frame is
+**286 bytes, the same as Firefox's**. That last number was not a target, it
+fell out of letting `hpack` encode with Huffman. It is the strongest available
+evidence that the HPACK layer is also faithful, since the Akamai fingerprint
+says nothing about header block size.
+
+`tools/verify.py` now automates the comparison, **18 of 18 checks pass**:
+ja3, ja3_hash, ja4, ja4_r, peetprint, peetprint_hash, both TLS versions, the
+Akamai fingerprint and its hash, stream id, HEADERS length, flags, priority,
+the full ordered header list, http_version, user_agent, and the TCP/IP p0f
+signature.
+
+**The p0f match is borrowed, not earned.** It comes from the Windows TCP stack
+this runs on, which happens to be the same stack the reference browser used.
+Move this into a Linux container and that check fails while every other one
+still passes. Worth keeping in the output precisely because it will break.
+
+**Still not measured:** whether any of this defeats bot detection. Every check
+here is a protocol fingerprint reported by a cooperating endpoint. Nothing has
+been tested against a protected site, and no JavaScript challenge is solvable
+by this client by construction.
+
+**Known gaps:** HTTP/3 is never attempted, though Cloudflare, Google and
+example.com all advertise `alpn=h3,h2` in their HTTPS DNS records, so a real
+Firefox may reach them over QUIC first. Sessions are never resumed. The header
+set is the one Firefox sends for a top-level navigation; an XHR or a subresource
+request sends different `accept` and `sec-fetch-*` values.

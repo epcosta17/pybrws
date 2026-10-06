@@ -94,3 +94,38 @@ EXTENSIONS: list[tuple[int, bytes | object]] = [
     (27, bytes.fromhex("06000100020003")),                  # compress_certificate
     (65037, greased_ech),
 ]
+
+
+# --- HTTP/2 ---------------------------------------------------------------
+# Measured from tls.peet.ws/api/all. Akamai fingerprint:
+#   1:65536;2:0;4:131072;5:16384|12517377|0|m,p,a,s
+
+H2_SETTINGS = [
+    (0x01, 65536),   # HEADER_TABLE_SIZE
+    (0x02, 0),       # ENABLE_PUSH
+    (0x04, 131072),  # INITIAL_WINDOW_SIZE
+    (0x05, 16384),   # MAX_FRAME_SIZE
+]
+H2_CONNECTION_WINDOW_UPDATE = 12517377
+H2_FIRST_STREAM_ID = 3
+
+# Firefox carries priority in the HEADERS frame rather than separate PRIORITY
+# frames, which is why the fingerprint's priority section is empty.
+H2_HEADERS_PRIORITY = {"exclusive": False, "depends_on": 0, "weight": 42}
+
+H2_PSEUDO_ORDER = (":method", ":path", ":authority", ":scheme")
+
+# Request headers for a top-level navigation, in wire order.
+H2_NAVIGATION_HEADERS = [
+    ("user-agent", USER_AGENT),
+    ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+    ("accept-language", "en-US,en;q=0.9"),
+    ("accept-encoding", "gzip, deflate, br, zstd"),
+    ("upgrade-insecure-requests", "1"),
+    ("sec-fetch-dest", "document"),
+    ("sec-fetch-mode", "navigate"),
+    ("sec-fetch-site", "none"),
+    ("sec-fetch-user", "?1"),
+    ("priority", "u=0, i"),
+    ("te", "trailers"),
+]

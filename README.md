@@ -20,7 +20,7 @@ and the source of NSS, Firefox and OpenSSL.
 - [x] **Silver** — ClientHello byte-identical, excluding `random` and the
       `key_share` public key, which vary per connection. Verified stronger:
       replaying a capture's own random material reproduces all 1901 bytes
-- [ ] **Gold** — byte-identical plus matching HTTP/2 fingerprint and header
+- [x] **Gold** — byte-identical plus matching HTTP/2 fingerprint and header
       order, verified against `tls.peet.ws/api/all`
 
 ## Scope, v1
@@ -44,14 +44,13 @@ and the source of NSS, Firefox and OpenSSL.
 | 1 | Reference capture of real Firefox | done |
 | 2 | ClientHello emitter | done |
 | 3 | Full handshake (`cryptography` for primitives) | done |
-| 4 | HTTP/2 frames, SETTINGS and header order (`h2`) | next |
-| 5 | curl-style CLI | pending |
+| 4 | HTTP/2 frames, SETTINGS and header order | done |
+| 5 | curl-style CLI | next |
 | 6 | CONNECT proxy sidecar for other languages | pending |
 
-Phases 0 through 2 are standard library only. Phase 3 requires `cryptography`,
-phase 4 requires `h2`.
+Phases 0 through 2 are standard library only.
 
-    .venv\Scripts\pip install cryptography
+    pip install cryptography hpack brotli
 
 ## Usage
 
@@ -67,3 +66,7 @@ Capture a ClientHello (see `fixtures/README.md` for the hostname requirement):
 Run the tests:
 
     python -m unittest discover -s tests -t . -v
+
+Compare the live fingerprint against the reference capture:
+
+    python tools/verify.py
