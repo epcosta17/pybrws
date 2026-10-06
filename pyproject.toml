@@ -1,0 +1,10 @@
+[project]
+name = "pybrws"
+version = "0.1.0"
+description = "A from-scratch browser-fingerprinted TLS client"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+handshake = ["cryptography"]
+http2 = ["h2"]
