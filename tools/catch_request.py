@@ -20,6 +20,7 @@ import socket
 import ssl
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -48,6 +49,25 @@ def self_signed(hostname: str, directory: Path) -> tuple[Path, Path]:
         .add_extension(
             x509.SubjectAlternativeName([x509.DNSName(hostname)]), critical=False
         )
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                key_encipherment=False,
+                content_commitment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=False,
+                crl_sign=False,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .add_extension(
+            x509.ExtendedKeyUsage([x509.ExtendedKeyUsageOID.SERVER_AUTH]),
+            critical=False,
+        )
         .sign(key, hashes.SHA256())
     )
     cert_path = directory / "cert.pem"
@@ -74,41 +94,58 @@ def capture(host: str, port: int, hostname: str, alpn: str, wait: float,
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind((host, port))
-        listener.listen(1)
-        listener.settimeout(wait)
+        listener.listen(8)
         print("listening on https://%s:%d, offering ALPN %r" % (hostname, port, alpn))
-        print("the certificate is self-signed, so the browser will warn; accept it")
+        print("the certificate is self-signed; accept the browser's warning")
+        print("(speculative connections that fail before the warning are normal)")
 
+        deadline = time.monotonic() + wait
+        attempt = 0
         try:
-            raw, peer = listener.accept()
-        except TimeoutError:
-            raise SystemExit("no connection received")
+            while time.monotonic() < deadline:
+                listener.settimeout(max(deadline - time.monotonic(), 0.1))
+                try:
+                    raw, peer = listener.accept()
+                except TimeoutError:
+                    break
+
+                attempt += 1
+                try:
+                    tls = context.wrap_socket(raw, server_side=True)
+                except (ssl.SSLError, OSError) as exc:
+                    print("  attempt %d from port %d: handshake failed (%s)"
+                          % (attempt, peer[1], type(exc).__name__))
+                    raw.close()
+                    continue
+
+                with tls:
+                    negotiated = tls.selected_alpn_protocol()
+                    tls.settimeout(quiet_after)
+                    chunks = []
+                    while True:
+                        try:
+                            chunk = tls.recv(65535)
+                        except TimeoutError:
+                            break
+                        except (ConnectionResetError, ssl.SSLError, OSError):
+                            # A client closing without close_notify lands here
+                            # on Windows. What already arrived is still valid.
+                            break
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+
+                data = b"".join(chunks)
+                if data:
+                    print("  attempt %d from port %d: %d bytes"
+                          % (attempt, peer[1], len(data)))
+                    return data, negotiated
+                print("  attempt %d from port %d: handshake only, no request"
+                      % (attempt, peer[1]))
         finally:
             listener.close()
 
-        print("connection from %s:%d" % peer)
-        try:
-            tls = context.wrap_socket(raw, server_side=True)
-        except ssl.SSLError as exc:
-            raise SystemExit("TLS handshake failed: %s" % exc)
-
-        with tls:
-            negotiated = tls.selected_alpn_protocol()
-            tls.settimeout(quiet_after)
-            chunks = []
-            while True:
-                try:
-                    chunk = tls.recv(65535)
-                except TimeoutError:
-                    break
-                except (ConnectionResetError, ssl.SSLError, OSError):
-                    # A client that closes without close_notify lands here on
-                    # Windows. Whatever already arrived is still valid.
-                    break
-                if not chunk:
-                    break
-                chunks.append(chunk)
-        return b"".join(chunks), negotiated
+        raise SystemExit("no request captured after %d connection(s)" % attempt)
 
 
 def main() -> int:
@@ -127,8 +164,6 @@ def main() -> int:
 
     data, negotiated = capture(args.host, args.port, args.hostname, args.alpn,
                                args.wait, args.quiet_after)
-    if not data:
-        raise SystemExit("handshake completed but no request followed")
 
     Path(args.out).write_bytes(data)
     print("negotiated ALPN: %r" % negotiated)
