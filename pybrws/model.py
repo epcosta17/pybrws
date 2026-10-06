@@ -1,14 +1,11 @@
-"""Shapes and lookup tables. Plumbing - not the exercise.
-
-The exercise is parser.py and emitter.py.
-"""
+"""Data shapes and lookup tables for TLS handshake structures."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-# RFC 8701. Sixteen reserved values, sent by clients to keep middleboxes
-# honest. They must be stripped before computing JA3/JA4.
+# RFC 8701. Reserved values clients advertise to detect ossified middleboxes.
+# Stripped before computing JA3/JA4.
 GREASE_VALUES = frozenset(
     {
         0x0A0A, 0x1A1A, 0x2A2A, 0x3A3A,
@@ -23,28 +20,28 @@ def is_grease(value: int) -> bool:
     return value in GREASE_VALUES
 
 
-# Only the ones that show up in practice. Grouped by the question they answer.
+# Extensions seen in practice, grouped by purpose.
 EXTENSION_NAMES: dict[int, str] = {
-    # "who am I talking to"
+    # peer identification
     0: "server_name",
     16: "alpn",
     17513: "application_settings",      # Chrome only
     65037: "encrypted_client_hello",
-    # "what crypto can I do"
+    # cryptographic parameters
     10: "supported_groups",
     11: "ec_point_formats",
     13: "signature_algorithms",
     43: "supported_versions",
     51: "key_share",
-    # "how do you prove your certificate"
+    # certificate handling
     5: "status_request",
     18: "signed_certificate_timestamp",
     27: "compress_certificate",
-    # "can we resume"
+    # session resumption
     35: "session_ticket",
-    41: "pre_shared_key",               # must be last
+    41: "pre_shared_key",               # must be the last extension
     45: "psk_key_exchange_modes",
-    # fossils and patches
+    # legacy and compatibility
     21: "padding",
     23: "extended_master_secret",
     28: "record_size_limit",            # Firefox / NSS
@@ -74,14 +71,14 @@ class Extension:
 
 @dataclass
 class ClientHello:
-    """The seven fields. Four of them are fossils."""
+    """A parsed ClientHello body."""
 
-    legacy_version: int                 # always 0x0303. Lies on purpose.
+    legacy_version: int                 # 0x0303 regardless of negotiated version
     random: bytes                       # 32 bytes
-    session_id: bytes                   # 32 fake bytes in TLS 1.3 compat mode
-    cipher_suites: list[int]            # matters
-    compression_methods: list[int]      # always [0]
-    extensions: list[Extension]         # matters most
+    session_id: bytes                   # 0 or 32 bytes (TLS 1.3 compat mode)
+    cipher_suites: list[int]
+    compression_methods: list[int]
+    extensions: list[Extension]         # wire order is significant
     raw: bytes = field(default=b"", repr=False)
 
     def extension(self, ext_type: int) -> Extension | None:

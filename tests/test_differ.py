@@ -1,4 +1,4 @@
-"""FASE 0 - estos estan en ROJO hasta que escribas pybrws/differ.py."""
+"""Tests for pybrws.differ."""
 
 import unittest
 
@@ -18,7 +18,7 @@ class TestDiff(unittest.TestCase):
         target = parse_client_hello(MINIMAL)
         mine = parse_client_hello(SWAPPED_CIPHERS)
         found = diff(target, mine)
-        self.assertTrue(found, "swapping two cipher suites must be a difference")
+        self.assertTrue(found, "swapped cipher suites must be reported")
         self.assertTrue(
             any("cipher" in d.field for d in found),
             f"expected a cipher_suites difference, got {[d.field for d in found]}",

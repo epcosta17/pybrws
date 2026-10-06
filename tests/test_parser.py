@@ -1,4 +1,4 @@
-"""FASE 0 - estos estan en ROJO hasta que escribas pybrws/parser.py."""
+"""Tests for pybrws.parser."""
 
 import unittest
 
@@ -11,7 +11,7 @@ class TestParseMinimal(unittest.TestCase):
     def setUp(self):
         self.ch = parse_client_hello(MINIMAL)
 
-    def test_legacy_version_always_lies(self):
+    def test_legacy_version(self):
         self.assertEqual(self.ch.legacy_version, 0x0303)
 
     def test_random_is_32_bytes(self):
@@ -21,10 +21,10 @@ class TestParseMinimal(unittest.TestCase):
     def test_empty_session_id(self):
         self.assertEqual(self.ch.session_id, b"")
 
-    def test_cipher_suites_keep_their_order(self):
+    def test_cipher_suites_preserve_wire_order(self):
         self.assertEqual(self.ch.cipher_suites, [0x1301, 0xC02B])
 
-    def test_compression_is_the_null_fossil(self):
+    def test_compression_methods(self):
         self.assertEqual(self.ch.compression_methods, [0])
 
     def test_extensions_in_wire_order(self):
@@ -40,7 +40,7 @@ class TestParseMinimal(unittest.TestCase):
     def test_raw_is_preserved(self):
         self.assertEqual(self.ch.raw, MINIMAL)
 
-    def test_summary_does_not_explode(self):
+    def test_summary_renders(self):
         self.assertIn("supported_versions", self.ch.summary())
 
 

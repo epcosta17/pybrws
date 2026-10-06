@@ -1,5 +1,4 @@
-"""These should pass out of the box. If they fail, the harness is broken,
-not your code."""
+"""Tests for the data model and hex I/O helpers."""
 
 import tempfile
 import unittest

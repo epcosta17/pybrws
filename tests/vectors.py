@@ -1,30 +1,26 @@
-"""Hand-built test vectors. Known input, known answer.
+"""Hand-built ClientHello test vectors.
 
-MINIMAL is a deliberately tiny but well-formed ClientHello so you get a tight
-red-green loop before you have captured anything real. Count the bytes by hand
-once - it is a useful ten minutes.
-
+MINIMAL layout:
     record    16 0301 003c
     handshake 01 000038
-    body      0303 | random(32) | sid_len=0 | ciphers(2) | compression | extensions(2)
+    body      0303 | random(32) | session_id(0) | ciphers(2) | compression | extensions
 """
 
 MINIMAL_HEX = (
-    "160301003c"                                                          # record
-    "01000038"                                                            # handshake hdr
+    "160301003c"                                                          # record header
+    "01000038"                                                            # handshake header
     "0303"                                                                # legacy_version
     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"    # random
-    "00"                                                                  # session_id len 0
+    "00"                                                                  # session_id, empty
     "00041301c02b"                                                        # 2 cipher suites
     "0100"                                                                # compression [0]
-    "000b"                                                                # extensions len 11
-    "00000000"                                                            #   server_name, 0B
-    "002b0003020304"                                                      #   supported_versions
+    "000b"                                                                # extensions, 11 bytes
+    "00000000"                                                            # server_name, empty
+    "002b0003020304"                                                      # supported_versions
 )
 
-# Same thing with the two cipher suites swapped. Every length stays identical,
-# so the only difference is order - exactly the kind of thing your differ exists
-# to catch.
+# Identical except the two cipher suites are swapped: same lengths throughout,
+# so order is the only difference.
 SWAPPED_CIPHERS_HEX = MINIMAL_HEX.replace("00041301c02b", "0004c02b1301")
 
 MINIMAL = bytes.fromhex(MINIMAL_HEX)

@@ -1,4 +1,4 @@
-"""Load and save hex streams. Plumbing."""
+"""Hex stream I/O."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def save_hex(path: str | Path, data: bytes, width: int = 32) -> None:
 
 
 def hexdump(data: bytes, width: int = 16, start: int = 0) -> str:
-    """Classic offset / hex / ascii dump, for eyeballing a diff."""
+    """Render bytes as an offset / hex / ascii dump."""
     out = []
     for off in range(0, len(data), width):
         chunk = data[off : off + width]

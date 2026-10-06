@@ -1,66 +1,56 @@
 # pybrws
 
-Un cliente HTTPS en Python que emite un ClientHello **byte-idéntico** al de un
-navegador real, escrito desde cero.
+A from-scratch HTTPS client in Python that emits a ClientHello byte-identical
+to a real browser's.
 
-## Regla del proyecto: clean room
+## Clean-room rule
 
-Reconstruyo el problema sin leer a quien ya lo resolvio.
+The problem is reconstructed without reading existing solutions.
 
-**Prohibido:** `curl-impersonate`, `uTLS`, `curl_cffi`, `tls-client`, `camoufox`,
-y cualquier writeup que explique como parchearon. Se abren **al final**, para la
-seccion de comparacion.
+Off limits: `curl-impersonate`, `uTLS`, `curl_cffi`, `tls-client`, `camoufox`,
+and any write-up describing how they patched their TLS stacks. These are opened
+only at the end, for the comparison section.
 
-**Permitido y obligatorio:** mis propias capturas, los RFCs (8446, 8701, 7540),
-`tls13.xargs.org`, y el codigo fuente de NSS / Firefox / OpenSSL. Leer el
-original no es leer la copia.
+In scope: own packet captures, the RFCs (8446, 8701, 7540), `tls13.xargs.org`,
+and the source of NSS, Firefox and OpenSSL.
 
-## Criterio de "terminado"
+## Completion criteria
 
-Tres barras. Declarar explicitamente cual se alcanzo.
+- [ ] **Bronze** — JA4 identical to real Firefox
+- [ ] **Silver** — ClientHello byte-identical, excluding `random` and the
+      `key_share` public key, which vary per connection
+- [ ] **Gold** — byte-identical plus matching HTTP/2 fingerprint and header
+      order, verified against `tls.peet.ws/api/all`
 
-- [ ] **Bronce** — JA4 identico al de Firefox real
-- [ ] **Plata** — ClientHello byte-identico (salvo `random` y `key_share`, que por
-      definicion varian)
-- [ ] **Oro** — byte-identico + fingerprint HTTP/2 identico + orden de headers
-      identico, verificado contra `tls.peet.ws/api/all`
+## Scope, v1
 
-## Scope v1
+- Target: Firefox with post-quantum key agreement disabled via `about:config`.
+  `X25519MLKEM768` support is future work.
+- **Certificates are not verified.** This is a laboratory client, not a secure
+  one. Do not use it for anything real.
+- No renegotiation and no session resumption.
 
-- Objetivo: **Firefox con key agreement post-cuantico deshabilitado**
-  (`about:config`). Soportar `X25519MLKEM768` es trabajo futuro: ver NOTEBOOK.
-- **No se verifica el certificado.** Esto es un laboratorio, no un cliente
-  seguro. No usar para nada real.
-- Sin renegociacion ni reanudacion de sesion en v1.
+## Phases
 
-## Fases
+| Phase | Scope | Status |
+|-------|-------|--------|
+| 0 | ClientHello parser and differ | in progress |
+| 1 | Reference capture of real Firefox | pending |
+| 2 | ClientHello emitter | pending |
+| 3 | Full handshake (`cryptography` for primitives) | pending |
+| 4 | HTTP/2 frames, SETTINGS and header order (`h2`) | pending |
+| 5 | curl-style CLI | pending |
+| 6 | CONNECT proxy sidecar for other languages | pending |
 
-| Fase | Que | Estado |
-|------|-----|--------|
-| 0 | Oraculo: parser + differ de ClientHello | en curso |
-| 1 | Golden file: capturar Firefox real | pendiente |
-| 2 | Emisor: generar bytes hasta que el diff cierre | pendiente |
-| 3 | Handshake completo (`cryptography` para primitivas) | pendiente |
-| 4 | HTTP/2: frames, SETTINGS, orden de headers (`h2`) | pendiente |
-| 5 | CLI con sabor a curl | pendiente |
-| 6 | Sidecar proxy CONNECT (consumible desde Ruby/Node) | pendiente |
+Phases 0 through 2 are standard library only. Phase 3 requires `cryptography`,
+phase 4 requires `h2`.
 
-**Fases 0-2 no necesitan dependencias.** Solo stdlib.
-La Fase 3 pedira `cryptography`; la Fase 4, `h2`.
+## Usage
 
-## El loop
-
-    capturar  ->  computar  ->  mutar  ->  verificar  ->  explicar la diferencia
-
-La profundidad no viene de que el hash coincida. Viene de poder explicar **por
-que** un campo difiere y si esa diferencia es detectable.
-
-## Uso
-
-Capturar un ClientHello (sin Wireshark, ver `fixtures/README.md`):
+Capture a ClientHello (see `fixtures/README.md` for the hostname requirement):
 
     python tools/catch_hello.py fixtures/firefox.hex
 
-Correr los tests:
+Run the tests:
 
     python -m unittest discover -s tests -t . -v

@@ -1,20 +1,20 @@
 # Lab notebook
 
-Una entrada por sesion. Formato: fecha / hipotesis / comando / resultado /
-que aprendi. Este archivo **es** el blog post; no lo dejes para el final.
+One entry per session: hypothesis, what was run, result, conclusion.
 
 ---
 
-## 2026-10-06 — Arranque
+## 2026-10-06 — Project setup
 
-**Hipotesis:** el ClientHello es un formato de 7 campos; puedo parsearlo y
-re-emitirlo byte a byte sin implementar criptografia.
+**Hypothesis:** the ClientHello can be parsed and re-emitted byte for byte
+without implementing any cryptography.
 
-**Hecho:** andamio del proyecto. Tests en rojo que definen la API del parser.
+**Done:** project scaffold, data model, hex I/O, capture tool, failing tests
+defining the parser and differ APIs.
 
-**Pendiente:** escribir `parser.parse_client_hello`.
+**Next:** implement `parser.parse_client_hello`.
 
-**Preguntas abiertas:**
-- Mi Firefox, ¿manda GREASE? (responder con captura propia, no buscando)
-- ¿El ClientHello de Firefox es estable entre conexiones o varia?
-- Con PQ apagado, ¿cuantos bytes mide? ¿cabe en un paquete?
+**Open questions:**
+- Does this Firefox build send GREASE?
+- Is Firefox's ClientHello stable across connections, or does any part vary?
+- With post-quantum disabled, how large is it, and does it fit in one segment?
