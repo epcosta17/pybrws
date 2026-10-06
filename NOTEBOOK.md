@@ -399,8 +399,54 @@ the real server used chunked encoding and the unit tests had not covered it
 yet; there are now four chunked tests, including trailers and chunk
 extensions.
 
-**peet.ws is throttling this address.** Requests time out and `tools/verify.py`
-fails. httpx fails against the same host while the TLS handshake still
-succeeds, so this is not a regression. Backing off; it is a free
-donation-supported service and this session has hit it hard. Verification
-against it should be occasional, not part of a loop.
+**peet.ws failures were transient.** Requests timed out and
+`tools/verify.py` failed; httpx failed against the same host while the TLS
+handshake still succeeded. That ruled out a regression in this client, and
+the conclusion drawn from it, that the address was being throttled, went
+further than the evidence supported. Retested minutes later: both clients get
+200, and the browser never stopped working. Cause unknown and not pursued.
+
+---
+
+## 2026-10-06 — The HTTP/1.1 reference was captured wrong
+
+Firefox 157 over cleartext to `http://pybrws.127.0.0.1.nip.io:4443`:
+
+    GET / HTTP/1.1
+    Host: pybrws.127.0.0.1.nip.io:4443
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:157.0) Gecko/20100101 Firefox/157.0
+    Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    Accept-Language: en-US,en;q=0.9
+    Accept-Encoding: gzip, deflate
+    Connection: keep-alive
+    Upgrade-Insecure-Requests: 1
+    Priority: u=0, i
+
+Three guesses in the profile were wrong, and the two interesting ones are not
+about HTTP/1.1 at all:
+
+- `Accept-Encoding` is `gzip, deflate`, without `br` or `zstd`. Firefox offers
+  those two only over TLS.
+- There are **no `Sec-Fetch-*` headers**. Fetch metadata goes only to
+  trustworthy origins, and a hostname resolving to 127.0.0.1 is not one.
+- `Priority: u=0, i` is sent, and here it directly follows
+  `Upgrade-Insecure-Requests`.
+
+So a cleartext capture cannot serve as the reference for an HTTPS client. Over
+TLS the header list should regain `br, zstd` and the `Sec-Fetch-*` block, and
+their position relative to `Priority` is still unknown.
+
+`tools/catch_hello.py` cannot produce the right capture by construction: it
+reads raw bytes and never completes a handshake, so an HTTPS request stays
+encrypted. Added `tools/catch_request.py`, which serves a generated
+self-signed certificate and dumps the decrypted request. ALPN is selectable,
+so it can force HTTP/1.1 or capture the HTTP/2 preamble.
+
+Two things the smoke test caught before a browser was ever involved: on
+Windows a client that closes without close_notify raises `ConnectionResetError`
+rather than returning empty, and a client that closes immediately after
+sending can have its request discarded by the RST. The first needed a fix in
+the tool; the second was an artifact of the test, since a browser holds the
+connection open waiting for a response.
+
+**H1_HEADERS stays unconfirmed** until a capture over TLS exists.
