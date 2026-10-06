@@ -369,3 +369,38 @@ move would have been to spend hours debugging working code.
 site, serves HTTP/1.1 only, and this client speaks HTTP/2 exclusively. A real
 Firefox falls back. That is a fingerprint-visible difference and a reason to
 implement HTTP/1.1.
+
+---
+
+## 2026-10-06 — HTTP/1.1
+
+Added because bot.incolumitas.com, a purpose-built bot detection test site,
+offers only http/1.1 over ALPN. A client that speaks solely HTTP/2 cannot
+reach it, while Firefox falls back. `pybrws.client.get()` now dispatches on
+the negotiated ALPN, so both paths are covered.
+
+Result: `https://bot.incolumitas.com/` returns 200, HTTP/1.1, 44650 bytes
+after gzip decoding.
+
+**Header order and capitalisation differ from HTTP/2**, which is why the
+profile carries a separate list rather than reusing the h2 one with different
+casing. From the plaintext capture: `Connection: keep-alive` sits between
+`Accept-Encoding` and `Upgrade-Insecure-Requests`, and there is no `te` header.
+
+**Open: the tail of H1_HEADERS is unconfirmed.** The capture it came from was
+truncated at 400 characters, so everything from `Sec-Fetch-Site` onward is a
+guess, including whether `Priority` is sent at all over HTTP/1.1. Re-capture
+with tools/catch_hello.py and a plaintext navigation before trusting it.
+
+**Bug found and fixed:** the chunked terminator. After the zero-length chunk
+come optional trailer fields and a single CRLF, not a double one. Waiting for
+four bytes where two arrive hangs until the socket times out. Caught because
+the real server used chunked encoding and the unit tests had not covered it
+yet; there are now four chunked tests, including trailers and chunk
+extensions.
+
+**peet.ws is throttling this address.** Requests time out and `tools/verify.py`
+fails. httpx fails against the same host while the TLS handshake still
+succeeds, so this is not a regression. Backing off; it is a free
+donation-supported service and this session has hit it hard. Verification
+against it should be occasional, not part of a loop.

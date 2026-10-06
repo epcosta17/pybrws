@@ -4,6 +4,7 @@ import json
 import unittest
 import zlib
 
+from pybrws.message import ContentEncodingError
 from pybrws.http2 import (
     FLAG_END_HEADERS,
     FLAG_END_STREAM,
@@ -172,7 +173,7 @@ class TestDecompress(unittest.TestCase):
         self.assertEqual(decompress(zstd.compress(b"payload"), "zstd"), b"payload")
 
     def test_unknown_encoding(self):
-        with self.assertRaises(Http2Error):
+        with self.assertRaises(ContentEncodingError):
             decompress(b"x", "exotic")
 
 

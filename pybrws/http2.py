@@ -7,12 +7,10 @@ fingerprint a server sees. HPACK encoding is delegated to `hpack`.
 
 from __future__ import annotations
 
-import zlib
-from dataclasses import dataclass, field
-
 from hpack import Decoder, Encoder
 
 from .handshake import Connection
+from .message import ContentEncodingError, Response, decompress
 from .profiles import firefox157
 
 PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
@@ -46,41 +44,6 @@ def frame(frame_type: int, flags: int, stream_id: int, payload: bytes = b"") -> 
         + stream_id.to_bytes(4, "big")
         + payload
     )
-
-
-def decompress(body: bytes, encoding: str) -> bytes:
-    encoding = encoding.strip().lower()
-    if encoding in ("", "identity"):
-        return body
-    if encoding == "gzip":
-        return zlib.decompress(body, wbits=47)
-    if encoding == "deflate":
-        return zlib.decompress(body, wbits=-15)
-    if encoding == "br":
-        import brotli
-
-        return brotli.decompress(body)
-    if encoding == "zstd":
-        from compression import zstd
-
-        return zstd.decompress(body)
-    raise Http2Error("unsupported content-encoding " + encoding)
-
-
-@dataclass
-class Response:
-    status: int
-    headers: list[tuple[str, str]] = field(default_factory=list)
-    body: bytes = b""
-
-    def header(self, name: str) -> str | None:
-        for key, value in self.headers:
-            if key.lower() == name:
-                return value
-        return None
-
-    def text(self, errors: str = "replace") -> str:
-        return self.body.decode("utf-8", errors)
 
 
 class Http2Connection:
@@ -206,7 +169,6 @@ class Http2Connection:
             elif not name.startswith(":"):
                 headers.append((name, value))
 
-        response = Response(status=status, headers=headers)
-        encoding = response.header("content-encoding") or ""
-        response.body = decompress(bytes(body), encoding)
+        response = Response(status=status, headers=headers, http_version="h2")
+        response.body = decompress(bytes(body), response.header("content-encoding") or "")
         return response

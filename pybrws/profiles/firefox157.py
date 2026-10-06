@@ -129,3 +129,28 @@ H2_NAVIGATION_HEADERS = [
     ("priority", "u=0, i"),
     ("te", "trailers"),
 ]
+
+
+# --- HTTP/1.1 -------------------------------------------------------------
+# Order and capitalisation are the fingerprint at this layer. The first ten
+# entries are measured from a Firefox 157 plaintext request captured with
+# tools/catch_hello.py. Everything from Sec-Fetch-Site onward is UNCONFIRMED:
+# that capture was truncated. Re-capture before trusting the tail.
+#
+# Note the ordering differs from HTTP/2: Connection sits between
+# Accept-Encoding and Upgrade-Insecure-Requests, and there is no `te` header.
+
+H1_HEADERS = [
+    ("Host", "{authority}"),
+    ("User-Agent", USER_AGENT),
+    ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+    ("Accept-Language", "en-US,en;q=0.9"),
+    ("Accept-Encoding", "gzip, deflate, br, zstd"),
+    ("Connection", "keep-alive"),
+    ("Upgrade-Insecure-Requests", "1"),
+    ("Sec-Fetch-Dest", "document"),
+    ("Sec-Fetch-Mode", "navigate"),
+    ("Sec-Fetch-Site", "none"),       # value unconfirmed
+    ("Sec-Fetch-User", "?1"),         # unconfirmed
+    ("Priority", "u=0, i"),           # unconfirmed
+]
