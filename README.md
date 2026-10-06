@@ -49,7 +49,7 @@ phase 4 requires `h2`.
 
 All commands assume the project virtualenv is active:
 
-    .venv\Scriptsctivate        # Windows
+    .venv\Scripts\activate        # Windows
     source .venv/bin/activate     # macOS, Linux
 
 Capture a ClientHello (see `fixtures/README.md` for the hostname requirement):
