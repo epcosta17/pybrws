@@ -77,8 +77,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help="print the response head before the body")
     parser.add_argument("-I", "--head-only", action="store_true",
                         help="print the response head and not the body")
-    parser.add_argument("-L", "--location", action="store_true",
-                        help="follow redirects")
+    # curl needs -L; a browser always follows, and this tool imitates a
+    # browser. --no-location restores curl's behaviour.
+    parser.add_argument("-L", "--location", action="store_true", default=True,
+                        help="follow redirects (the default)")
+    parser.add_argument("--no-location", dest="location", action="store_false",
+                        help="return the redirect instead of following it")
     parser.add_argument("--max-redirs", type=int, default=5, metavar="N")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="describe the request on stderr")

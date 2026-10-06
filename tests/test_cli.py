@@ -76,6 +76,10 @@ class TestParser(unittest.TestCase):
         self.assertEqual(args.url, "https://a.test/")
         self.assertEqual(args.request, "GET")
         self.assertEqual(args.profile, "firefox157")
+        self.assertTrue(args.location, "a browser follows redirects by default")
+
+    def test_no_location_opts_out(self):
+        args = build_parser().parse_args(["--no-location", "https://a.test/"])
         self.assertFalse(args.location)
 
     def test_repeatable_headers(self):

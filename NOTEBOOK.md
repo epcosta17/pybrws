@@ -593,3 +593,42 @@ navigation, since the request's initiator origin does not change. Whether it
 does is measurable: teach tools/catch_request.py to answer the first request
 with a 308 and capture the second. Until that capture exists, the current
 behaviour stays.
+
+---
+
+## 2026-10-06 — A harness, after the third anecdote
+
+"It works now, oddly right after curl errored." Measured instead, five
+interleaved rounds against glassdoor.com:
+
+    pybrws : 403, 308, 403, 403, 403
+    httpx  : 403, 403, 403, 403, 403
+
+A roughly one-in-five pass rate makes an occasional success expected without
+any cause, so curl had nothing to do with it. But the comparison is not empty
+either: this client sometimes passes where the plain one never does. The
+protection scores rather than decides, the fingerprint moves the score, and
+this address's reputation has been dragging it down all session.
+
+That is three separate occasions now where a single observation suggested
+something that measurement did not support. Built `tools/ab_test.py`:
+interleaved rounds, pass rates rather than verdicts, a control host forced
+into every run, and every sample appended to a JSONL log with timestamps so a
+change next week reads as a change.
+
+**The harness had the same bug as the anecdotes.** Its first version counted
+any non-403 as served, so glassdoor scored 3/3 while actually returning a 308
+that led to a block one hop later. Both clients now follow redirects, because
+the question is whether the page arrives. The reading changed from
+"pybrws passes" to "1/3, flapping", which is the truth.
+
+    host                pybrws                 httpx         reading
+    www.crunchbase.com  3/3 served             3/3 served    control
+    www.etsy.com        0/3 served             0/3 served    no difference
+    www.glassdoor.com   1/3 served flapping    0/3 served    better, not deterministic
+    www.zillow.com      3/3 served             0/3 served    passes, baseline blocked
+
+**CLI default changed.** `-L` is now on, with `--no-location` to opt out. curl
+requires the flag; a browser always follows and never shows a 308. This tool
+imitates a browser, so following is the coherent default. The library keeps
+`follow_redirects=0`, where an explicit caller should decide.

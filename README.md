@@ -118,3 +118,8 @@ this project replaces.
 Compare the live fingerprint against the reference capture:
 
     python tools/verify.py
+
+Track how targets respond over time, against a plain client:
+
+    python tools/ab_test.py
+    python tools/ab_test.py --history
