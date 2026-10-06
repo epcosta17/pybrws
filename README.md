@@ -34,7 +34,7 @@ and the source of NSS, Firefox and OpenSSL.
 
 | Phase | Scope | Status |
 |-------|-------|--------|
-| 0 | ClientHello parser and differ | in progress |
+| 0 | ClientHello parser and differ | done |
 | 1 | Reference capture of real Firefox | pending |
 | 2 | ClientHello emitter | pending |
 | 3 | Full handshake (`cryptography` for primitives) | pending |
@@ -46,6 +46,11 @@ Phases 0 through 2 are standard library only. Phase 3 requires `cryptography`,
 phase 4 requires `h2`.
 
 ## Usage
+
+All commands assume the project virtualenv is active:
+
+    .venv\Scriptsctivate        # Windows
+    source .venv/bin/activate     # macOS, Linux
 
 Capture a ClientHello (see `fixtures/README.md` for the hostname requirement):
 
