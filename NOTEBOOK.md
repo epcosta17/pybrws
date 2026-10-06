@@ -534,3 +534,62 @@ No caller was modified. Only an environment variable and a trusted CA.
 toward the caller. The fingerprinted hop is the outbound one, so the inner
 protocol does not matter, but it does mean the caller cannot exercise
 HTTP/2-specific behaviour through it.
+
+---
+
+## 2026-10-06 — A finding that did not replicate
+
+While following a redirect on glassdoor.com.mx, `/index.htm` fetched directly
+returned 200 while the same URL reached through the redirect returned 403.
+The suspected cause was the known fidelity gap: this client keeps sending
+`Sec-Fetch-Site: none` on the second hop, which claims the user typed the URL
+even though a request to the same host just preceded it.
+
+Four header combinations, three interleaved rounds:
+
+| Case | Rounds | |
+|---|---|---|
+| A  site=none, no referer | 200, 403, 403 | unstable |
+| B  site=same-origin, no referer | 403, 403, 403 | blocked |
+| C  site=same-origin, + referer | 200, 200, 200 | served |
+| D  site=none, + referer | 403, 403, 200 | unstable |
+
+B against C looked decisive: identical requests differing in one header, one
+deterministically blocked and the other deterministically served. The obvious
+reading was a consistency check, with `Sec-Fetch-Site: same-origin` and a
+missing `Referer` forming a combination no browser produces.
+
+**Five more interleaved rounds dissolved it.**
+
+    B  same-origin, no referer : 403, 200, 200, 403, 403
+    C  same-origin, + referer  : 403, 403, 200, 403, 403
+
+No signal. The site scores requests rather than deciding, the score for this
+address has been degrading all session, and n=3 was noise shaped like a
+result. Had the first run been written up, it would have been a confident,
+well-argued, wrong blog post.
+
+**The headline result was re-checked with the same discipline** and survives.
+Four interleaved rounds per host, crunchbase.com added as a negative control
+so that "pybrws always gets 200" would show up:
+
+| Host | pybrws | httpx |
+|---|---|---|
+| www.zillow.com | 200, 200, 200, 200 | 403, 403, 403, 403 |
+| www.ticketmaster.com | 200, 200, 200, 200 | 403, 403, 403, 403 |
+| www.crunchbase.com | 200, 200, 200, 200 | 200, 200, 200, 200 |
+
+glassdoor has been removed from the README table. It is no longer a usable
+instrument from this address.
+
+**What measuring this properly would need:** a deterministic target rather
+than a scored one, a fresh address per sample so reputation cannot drift, a
+control case inside every round, and enough rounds that a three-sample streak
+cannot pass for a result.
+
+**And the code change this started from was never justified.** Firefox may
+well keep `Sec-Fetch-Site: none` through a redirect on a user-typed
+navigation, since the request's initiator origin does not change. Whether it
+does is measurable: teach tools/catch_request.py to answer the first request
+with a 308 and capture the second. Until that capture exists, the current
+behaviour stays.

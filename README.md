@@ -5,20 +5,24 @@ to a real browser's.
 
 ## Does it work
 
-Measured against sites that serve a plain Python client a block page, one GET
-each, repeated twice with identical results. `httpx` is a mature HTTP/2 client
-over the stdlib TLS stack; `pybrws` differs from it only in protocol
-fingerprint.
+Measured against sites that serve a plain Python client a block page. Four
+interleaved rounds per host, with crunchbase.com as a negative control that
+serves both clients. `httpx` is a mature HTTP/2 client over the stdlib TLS
+stack; `pybrws` differs from it only in protocol fingerprint.
 
 | Host | Protection | httpx | pybrws |
 |---|---|---|---|
 | www.zillow.com | CloudFront | 403, 5.7 KB block page | **200, 433 KB real page** |
 | www.ticketmaster.com | - | 403, 20 bytes | **200, 562 KB real page** |
 | www.indeed.com | Cloudflare | 403, 25 KB block page | 302 redirect |
-| www.glassdoor.com | Cloudflare | 403 | 308, then **200, 684 KB** when followed |
 | www.g2.com | Cloudflare | 403 | 403 |
 | www.etsy.com | DataDome | 403 | 403 |
-| www.crunchbase.com | Cloudflare | 200 | 200 |
+| www.crunchbase.com | Cloudflare | 200 | 200 (control) |
+
+zillow, ticketmaster and the control are 4 of 4 in every round. glassdoor was
+in this table and has been removed: its score for this address degraded over
+the session until the result stopped replicating, which makes it an
+unreliable instrument rather than a result.
 
 Four of the six discriminating targets stop blocking. Two do not: a Cloudflare
 site at a stricter setting and a DataDome site, both of which want signals this
