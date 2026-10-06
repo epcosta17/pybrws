@@ -18,10 +18,11 @@ Rng = Callable[[int], bytes]
 class Context:
     """Per-connection state handed to a profile's payload generators."""
 
-    __slots__ = ("hostname", "_rng")
+    __slots__ = ("hostname", "key_exchange", "_rng")
 
-    def __init__(self, hostname: str, rng: Rng) -> None:
+    def __init__(self, hostname: str, rng: Rng, key_exchange=None) -> None:
         self.hostname = hostname
+        self.key_exchange = key_exchange
         self._rng = rng
 
     def random(self, n: int) -> bytes:
@@ -47,6 +48,7 @@ def build_client_hello(
     *,
     profile=firefox157,
     rng: Rng | None = None,
+    key_exchange=None,
 ) -> bytes:
     """Build a complete TLS record containing a ClientHello.
 
@@ -54,11 +56,13 @@ def build_client_hello(
         hostname: the name to put in the `server_name` extension.
         profile: a module describing the client to imitate.
         rng: returns n random bytes; defaults to `os.urandom`.
+        key_exchange: supplies the key_share entries. A profile creates its
+            own when this is None; pass one to keep the private keys.
 
     Returns:
         The record, ready to write to a socket.
     """
-    ctx = Context(hostname, rng or os.urandom)
+    ctx = Context(hostname, rng or os.urandom, key_exchange)
 
     ciphers = b"".join(u16(suite) for suite in profile.CIPHER_SUITES)
 

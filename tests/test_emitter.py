@@ -13,14 +13,22 @@ REFERENCE = Path(__file__).resolve().parent.parent / "fixtures" / "reference-fir
 REFERENCE_HOSTNAME = "pybrws.127.0.0.1.nip.io"
 
 
+class ReplayKeyExchange:
+    """Returns a capture's own key_share entries instead of fresh keys."""
+
+    def __init__(self, hello):
+        entries = _Reader(_Reader(hello.extension(51).data).vector(2))
+        self.shares = []
+        while entries.remaining:
+            group = entries.uint(2)
+            self.shares.append((group, entries.vector(2)))
+
+    def client_shares(self):
+        return self.shares
+
+
 def replay_script(hello) -> list[bytes]:
     """Per-connection material from a capture, in the order the emitter reads it."""
-    entries = _Reader(_Reader(hello.extension(51).data).vector(2))
-    keys = []
-    while entries.remaining:
-        entries.uint(2)
-        keys.append(entries.vector(2))
-
     ech = _Reader(hello.extension(65037).data)
     ech.uint(1)
     ech.uint(2)
@@ -32,7 +40,6 @@ def replay_script(hello) -> list[bytes]:
     return [
         hello.random,
         hello.session_id,
-        *keys,
         bytes([firefox157.ECH_AEAD_IDS.index(aead_id)]),
         bytes([config_id]),
         enc,
@@ -62,7 +69,10 @@ class TestEmitter(unittest.TestCase):
                 raise AssertionError(f"emitter asked for {n} bytes, script holds {len(chunk)}")
             return chunk
 
-        self.assertEqual(build_client_hello(REFERENCE_HOSTNAME, rng=replay), self.raw)
+        built = build_client_hello(
+            REFERENCE_HOSTNAME, rng=replay, key_exchange=ReplayKeyExchange(self.golden)
+        )
+        self.assertEqual(built, self.raw)
         self.assertFalse(queue, "emitter consumed less randomness than the capture holds")
 
     def test_consecutive_builds_vary_only_where_firefox_does(self):

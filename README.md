@@ -27,11 +27,11 @@ and the source of NSS, Firefox and OpenSSL.
 
 - Target: Firefox 157 with default settings. Nothing is disabled, so the
   ClientHello carries a post-quantum `key_share`.
-- Emitting that `key_share` is a matter of producing the right bytes and needs
-  no ML-KEM. Completing a handshake where the server *selects*
-  `X25519MLKEM768` does, and is deferred. Firefox also offers `x25519` and
-  `secp256r1`, so servers without post-quantum support negotiate a classical
-  group.
+- `X25519MLKEM768` is implemented, not deferred. It turned out to be
+  mandatory: a server that supports it rejects a malformed hybrid share, and
+  rejects a ClientHello that advertises the group without offering a share by
+  demanding it in a HelloRetryRequest. Four of six major sites tested select
+  it.
 - **Certificates are not verified.** This is a laboratory client, not a secure
   one. Do not use it for anything real.
 - No renegotiation and no session resumption.
@@ -43,7 +43,7 @@ and the source of NSS, Firefox and OpenSSL.
 | 0 | ClientHello parser and differ | done |
 | 1 | Reference capture of real Firefox | done |
 | 2 | ClientHello emitter | done |
-| 3 | Full handshake (`cryptography` for primitives) | next |
+| 3 | Full handshake (`cryptography` for primitives) | key exchange done, key schedule next |
 | 4 | HTTP/2 frames, SETTINGS and header order (`h2`) | pending |
 | 5 | curl-style CLI | pending |
 | 6 | CONNECT proxy sidecar for other languages | pending |

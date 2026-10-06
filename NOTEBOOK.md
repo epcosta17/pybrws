@@ -166,3 +166,50 @@ Bronze follows from silver: identical bytes imply an identical JA4.
 
 **Next:** phase 3. The ClientHello is now correct but inert; nothing has been
 sent to a real server yet.
+
+---
+
+## 2026-10-06 — Phase 3, key exchange
+
+First contact with real servers. Six hosts, ClientHello sent over plain TCP,
+ServerHello parsed by hand.
+
+**Finding 1: a malformed key share is fatal, and only to the servers that
+matter.** With random bytes in place of real keys, `tls.peet.ws` and
+`github.com` completed fine while `www.cloudflare.com` and `example.com`
+returned `decode_error` and `www.google.com` returned `illegal_parameter`. The
+split is not arbitrary: the first two selected x25519, where any 32 bytes is a
+valid input, and the rest tried to use the post-quantum share.
+
+**Finding 2: post-quantum is mandatory for this fingerprint.** Dropping the
+X25519MLKEM768 entry from `key_share` while leaving the group in
+`supported_groups` made Cloudflare, Google and example.com answer with a
+HelloRetryRequest demanding 0x11ec. Removing it from `supported_groups` too
+would change the fingerprint, so there is no way to impersonate Firefox 157
+without implementing ML-KEM-768.
+
+**Finding 3: byte order in the hybrid share, measured not looked up.** Sending
+`ML-KEM || X25519` produced a ServerHello; `X25519 || ML-KEM` produced
+`decode_error` from Cloudflare and `illegal_parameter` from Google. The server
+share is 1120 bytes: 1088 of ML-KEM ciphertext plus 32 of X25519.
+
+**Finding 4: no new dependency.** `cryptography` 50.0.2 on OpenSSL 4.0.3
+exposes `MLKEM768PrivateKey` with `generate`, `public_bytes_raw` and
+`decapsulate`.
+
+**Live result**, with real keys for all three groups:
+
+| Host | Selected group | Shared secret |
+|---|---|---|
+| www.cloudflare.com | X25519MLKEM768 | 64 B |
+| www.google.com | X25519MLKEM768 | 64 B |
+| example.com | X25519MLKEM768 | 64 B |
+| www.amazon.com | X25519MLKEM768 | 64 B |
+| tls.peet.ws | x25519 | 32 B |
+| github.com | x25519 | 32 B |
+
+The concatenation order of the two shared secrets is assumed to match the
+order of the public keys. That is unverified: nothing checks it until the
+server's Finished verifies against our transcript.
+
+**Next:** record layer, then the key schedule.

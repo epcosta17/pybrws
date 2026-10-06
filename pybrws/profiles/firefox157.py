@@ -6,6 +6,7 @@ Payloads that vary per connection are produced by the functions at the bottom.
 
 from __future__ import annotations
 
+from ..keyexchange import KeyExchange
 from ..wire import u8, u16, vector
 
 NAME = "firefox157"
@@ -46,9 +47,18 @@ def server_name(ctx) -> bytes:
 
 
 def key_share(ctx) -> bytes:
-    entries = b"".join(
-        u16(group) + vector(ctx.random(size), 2) for group, size in KEY_SHARE_GROUPS
-    )
+    if ctx.key_exchange is None:
+        ctx.key_exchange = KeyExchange([group for group, _ in KEY_SHARE_GROUPS])
+    entries = b""
+    for (group, size), (offered, share) in zip(
+        KEY_SHARE_GROUPS, ctx.key_exchange.client_shares()
+    ):
+        if offered != group or len(share) != size:
+            raise ValueError(
+                f"key_share for 0x{group:04x}: expected {size} bytes from "
+                f"0x{offered:04x}, got {len(share)}"
+            )
+        entries += u16(group) + vector(share, 2)
     return vector(entries, 2)
 
 
