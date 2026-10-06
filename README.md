@@ -24,8 +24,13 @@ and the source of NSS, Firefox and OpenSSL.
 
 ## Scope, v1
 
-- Target: Firefox with post-quantum key agreement disabled via `about:config`.
-  `X25519MLKEM768` support is future work.
+- Target: Firefox 157 with default settings. Nothing is disabled, so the
+  ClientHello carries a post-quantum `key_share`.
+- Emitting that `key_share` is a matter of producing the right bytes and needs
+  no ML-KEM. Completing a handshake where the server *selects*
+  `X25519MLKEM768` does, and is deferred. Firefox also offers `x25519` and
+  `secp256r1`, so servers without post-quantum support negotiate a classical
+  group.
 - **Certificates are not verified.** This is a laboratory client, not a secure
   one. Do not use it for anything real.
 - No renegotiation and no session resumption.

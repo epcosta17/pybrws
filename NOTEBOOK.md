@@ -43,3 +43,50 @@ GREASE values (0 differences, correct), GREASE present vs absent (reported).
 
 **Next:** phase 1, capture real Firefox. Still unanswered: is Firefox's
 ClientHello stable across connections?
+
+---
+
+## 2026-10-06 — Phase 1, first real capture
+
+Firefox 157.0 on Windows, default settings, against
+`https://pybrws.127.0.0.1.nip.io:4443`. 1901 bytes, one record, no trailing
+bytes. The parser handled it unchanged.
+
+**Firefox sends no GREASE.** Neither in the cipher list (15 suites) nor among
+the 17 extension types. The GREASE normalisation in the differ is therefore
+inert for this target; it stays for Chrome comparisons.
+
+**Extension order as sent:**
+
+    0 server_name, 23 extended_master_secret, 65281 renegotiation_info,
+    10 supported_groups, 11 ec_point_formats, 35 session_ticket, 16 alpn,
+    5 status_request, 34 delegated_credentials,
+    18 signed_certificate_timestamp, 51 key_share, 43 supported_versions,
+    13 signature_algorithms, 45 psk_key_exchange_modes, 28 record_size_limit,
+    27 compress_certificate, 65037 encrypted_client_hello
+
+`delegated_credentials` and `record_size_limit` are present,
+`application_settings` is absent: NSS, not BoringSSL.
+
+**key_share carries three offers**, 1327 bytes total:
+
+    X25519MLKEM768   1216
+    x25519             32
+    secp256r1          65
+
+`supported_groups` lists X25519MLKEM768, x25519, secp256r1, secp384r1,
+secp521r1. ALPN is `h2, http/1.1`.
+
+**ECH is greased.** No HTTPS DNS record exists for the target, so the 282-byte
+`encrypted_client_hello` is a decoy Firefox sends by default. Hypothesis: its
+payload is random per connection and must join `VOLATILE_EXTENSIONS`, or every
+comparison between two Firefox captures reports 282 bytes of noise. Unconfirmed
+until repeated captures exist.
+
+**SNI measured:** capturing against the bare IP produced 1869 bytes and no
+`server_name`; against the nip.io hostname, 1901 bytes with a 28-byte payload.
+The 32-byte delta is the extension plus its header, exactly as predicted.
+
+**Next:** five consecutive captures, then diff them. Expected to vary: `random`,
+`session_id`, `key_share` payload, `encrypted_client_hello` payload. Anything
+else, especially extension order, changes what "correct" means.
