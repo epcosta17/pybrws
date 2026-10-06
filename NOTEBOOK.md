@@ -90,3 +90,48 @@ The 32-byte delta is the extension plus its header, exactly as predicted.
 **Next:** five consecutive captures, then diff them. Expected to vary: `random`,
 `session_id`, `key_share` payload, `encrypted_client_hello` payload. Anything
 else, especially extension order, changes what "correct" means.
+
+---
+
+## 2026-10-06 — Five captures: what varies
+
+Five consecutive captures, same conditions. All 1901 bytes.
+
+**Extension order is identical across all five.** Firefox does not shuffle it,
+unlike Chrome. The target is a fixed sequence, which makes byte-identity a
+well-defined goal.
+
+Cipher list identical. Every extension payload constant except two:
+
+| Field | Behaviour |
+|---|---|
+| `random` | varies, 32B |
+| `session_id` | varies, 32B |
+| `key_share` | payload varies, length stable at 1327B |
+| `encrypted_client_hello` | payload varies, length stable at 282B |
+
+The ECH hypothesis holds, so 65037 joins `VOLATILE_EXTENSIONS`. With that, the
+differ reports zero differences between any two captures of the same browser,
+which is the property the emitter will be tested against.
+
+**Inside the greased ECH**, decoded across the five captures:
+
+| Field | Value |
+|---|---|
+| type | 0 (outer), constant |
+| kdf_id | HKDF-SHA256, constant |
+| aead_id | **varies**: AES-128-GCM or ChaCha20-Poly1305 |
+| config_id | **varies**: 0x2a, 0x87, 0x94, 0xc4, 0x6f |
+| enc | 32 bytes, constant length |
+| payload | 240 bytes, constant length |
+
+So the earlier conclusion needs refining: Firefox sends no RFC 8701 GREASE in
+the cipher list or extension list, but it does grease ECH, and that decoy has
+randomised fields inside it.
+
+This matters for the emitter. Hardcoding one `aead_id` and one `config_id`
+produces a client that is individually correct but distinguishable over many
+connections, since a real Firefox varies both. Same failure mode as emitting a
+fixed GREASE value.
+
+**Next:** phase 2, the emitter.

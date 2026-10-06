@@ -10,9 +10,10 @@ from .model import ClientHello, extension_name, is_grease
 # structural, their content is not.
 VOLATILE_EXTENSIONS = frozenset(
     {
-        35,  # session_ticket
-        41,  # pre_shared_key
-        51,  # key_share
+        35,     # session_ticket
+        41,     # pre_shared_key
+        51,     # key_share
+        65037,  # encrypted_client_hello, greased: randomised per connection
     }
 )
 

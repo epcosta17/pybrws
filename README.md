@@ -40,8 +40,8 @@ and the source of NSS, Firefox and OpenSSL.
 | Phase | Scope | Status |
 |-------|-------|--------|
 | 0 | ClientHello parser and differ | done |
-| 1 | Reference capture of real Firefox | pending |
-| 2 | ClientHello emitter | pending |
+| 1 | Reference capture of real Firefox | done |
+| 2 | ClientHello emitter | next |
 | 3 | Full handshake (`cryptography` for primitives) | pending |
 | 4 | HTTP/2 frames, SETTINGS and header order (`h2`) | pending |
 | 5 | curl-style CLI | pending |
