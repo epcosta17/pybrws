@@ -450,3 +450,39 @@ the tool; the second was an artifact of the test, since a browser holds the
 connection open waiting for a response.
 
 **H1_HEADERS stays unconfirmed** until a capture over TLS exists.
+
+---
+
+## 2026-10-06 — HTTP/1.1 reference, captured over TLS
+
+Firefox 157 navigation to `https://pybrws.127.0.0.1.nip.io:4443`, decrypted by
+tools/catch_request.py. Two speculative connections failed with
+bad_certificate before the warning page appeared; the third carried the
+request.
+
+    GET / HTTP/1.1
+    Host: pybrws.127.0.0.1.nip.io:4443
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:157.0) Gecko/20100101 Firefox/157.0
+    Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    Accept-Language: en-US,en;q=0.9
+    Accept-Encoding: gzip, deflate, br, zstd
+    Connection: keep-alive
+    Upgrade-Insecure-Requests: 1
+    Sec-Fetch-Dest: document
+    Sec-Fetch-Mode: navigate
+    Sec-Fetch-Site: none
+    Sec-Fetch-User: ?1
+    Priority: u=0, i
+
+`br, zstd` and the Sec-Fetch block are both back, which confirms the earlier
+reading: their absence was a property of the cleartext origin, not of
+HTTP/1.1. The header order guessed from the truncated capture turned out to
+be right, and `Priority` does sit last, after the Sec-Fetch block.
+
+The relationship to HTTP/2 is clean: the same sequence, plus `Host` at the
+front and `Connection` after `Accept-Encoding`, minus `te`.
+
+`build_request()` now reproduces the capture byte for byte, 462 bytes, and a
+test asserts it. A second test asserts the fixture contains `br, zstd` and a
+Sec-Fetch header, so that replacing it with a cleartext capture fails loudly
+rather than silently degrading the profile.

@@ -2,6 +2,7 @@
 
 import unittest
 import zlib
+from pathlib import Path
 
 from pybrws.client import UnsupportedUrl, get
 from pybrws.http1 import Http1Connection, Http1Error
@@ -131,6 +132,29 @@ class TestResponseParsing(unittest.TestCase):
         raw = response_bytes("HTTP/1.1 200 OK", [("Content-Length", "99")], b"short")
         with self.assertRaises(Http1Error):
             self.fetch(raw)
+
+
+class TestMatchesTheReferenceCapture(unittest.TestCase):
+    """The built request must equal a real Firefox navigation, byte for byte."""
+
+    REFERENCE = (
+        Path(__file__).resolve().parent.parent
+        / "fixtures"
+        / "reference-firefox-157-h1.txt"
+    )
+    AUTHORITY = "pybrws.127.0.0.1.nip.io:4443"
+
+    def test_byte_identical(self):
+        expected = self.REFERENCE.read_bytes()
+        built = Http1Connection(FakeTls()).build_request("GET", "/", self.AUTHORITY)
+        self.assertEqual(built, expected)
+
+    def test_reference_is_a_tls_capture(self):
+        # br and zstd only appear when the origin is trustworthy, so their
+        # presence proves the reference was not captured over cleartext.
+        text = self.REFERENCE.read_text()
+        self.assertIn("br, zstd", text)
+        self.assertIn("Sec-Fetch-Dest", text)
 
 
 class TestClientUrlHandling(unittest.TestCase):

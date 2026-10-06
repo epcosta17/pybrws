@@ -71,7 +71,7 @@ and the source of NSS, Firefox and OpenSSL.
 | 2 | ClientHello emitter | done |
 | 3 | Full handshake (`cryptography` for primitives) | done |
 | 4 | HTTP/2 frames, SETTINGS and header order | done |
-| 4b | HTTP/1.1, for hosts that do not offer h2 | done, header tail unconfirmed |
+| 4b | HTTP/1.1, for hosts that do not offer h2 | done |
 | 5 | curl-style CLI | next |
 | 6 | CONNECT proxy sidecar for other languages | pending |
 
