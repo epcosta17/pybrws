@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pybrws.client import UnsupportedUrl, get
 from pybrws.http1 import Http1Connection, Http1Error
+from pybrws.message import Response
 from pybrws.profiles import firefox157
 
 
@@ -155,6 +156,50 @@ class TestMatchesTheReferenceCapture(unittest.TestCase):
         text = self.REFERENCE.read_text()
         self.assertIn("br, zstd", text)
         self.assertIn("Sec-Fetch-Dest", text)
+
+
+class TestRedirectBudget(unittest.TestCase):
+    """follow_redirects=0 must return the redirect, not raise."""
+
+    def setUp(self):
+        import pybrws.client as client
+
+        self.client = client
+        self.calls = []
+
+        def fake_fetch_once(url, **kwargs):
+            self.calls.append(url)
+            hop = len(self.calls)
+            if hop <= self.depth:
+                return Response(302, [("Location", "/hop%d" % hop)])
+            return Response(200, [], b"done")
+
+        self.original = client.fetch_once
+        client.fetch_once = fake_fetch_once
+        self.addCleanup(setattr, client, "fetch_once", self.original)
+        self.depth = 0
+
+    def test_zero_returns_the_redirect_itself(self):
+        self.depth = 3
+        response = self.client.get("https://a.test/", follow_redirects=0)
+        self.assertEqual(response.status, 302)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_follows_up_to_the_budget(self):
+        self.depth = 2
+        response = self.client.get("https://a.test/", follow_redirects=5)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(len(response.history), 2)
+
+    def test_raises_when_the_budget_runs_out(self):
+        self.depth = 9
+        with self.assertRaises(self.client.TooManyRedirects):
+            self.client.get("https://a.test/", follow_redirects=2)
+
+    def test_relative_locations_are_resolved(self):
+        self.depth = 1
+        self.client.get("https://a.test/deep/page", follow_redirects=2)
+        self.assertEqual(self.calls[1], "https://a.test/hop1")
 
 
 class TestClientUrlHandling(unittest.TestCase):

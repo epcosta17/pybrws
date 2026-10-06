@@ -73,24 +73,29 @@ def get(url: str, *, profile=firefox157, timeout: float = 20.0, headers=None,
         profile: the client to imitate.
         timeout: socket timeout in seconds.
         headers: overrides the profile's request headers.
-        follow_redirects: how many redirects to follow, 0 to return the first
-            response as it arrives.
+        follow_redirects: how many redirects to follow. 0 returns the
+            redirect itself, as curl does without -L.
 
     Returns:
         The final response, with the body decompressed.
 
     Raises:
-        TooManyRedirects: if the limit is reached while still redirecting.
+        TooManyRedirects: only when following was requested and the budget ran
+            out while the server was still redirecting.
     """
     seen = []
-    for _ in range(follow_redirects + 1):
+    for hop in range(follow_redirects + 1):
         response = fetch_once(url, profile=profile, timeout=timeout, headers=headers)
+        response.history = list(seen)
         location = response.header("location")
         if response.status not in REDIRECT_STATUSES or not location:
-            response.history = seen
             return response
+        if hop == follow_redirects:
+            if follow_redirects == 0:
+                return response
+            raise TooManyRedirects(
+                "still redirecting after " + str(follow_redirects)
+                + " hops, last " + repr(urljoin(url, location))
+            )
         seen.append(response)
         url = urljoin(url, location)
-    raise TooManyRedirects(
-        "still redirecting after " + str(follow_redirects) + " hops, last " + repr(url)
-    )
