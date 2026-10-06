@@ -8,3 +8,4 @@ venv/
 *.pcap
 fixtures/*.hex
 !fixtures/.gitkeep
+!fixtures/reference-*.hex

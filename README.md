@@ -16,9 +16,10 @@ and the source of NSS, Firefox and OpenSSL.
 
 ## Completion criteria
 
-- [ ] **Bronze** — JA4 identical to real Firefox
-- [ ] **Silver** — ClientHello byte-identical, excluding `random` and the
-      `key_share` public key, which vary per connection
+- [x] **Bronze** — JA4 identical to real Firefox
+- [x] **Silver** — ClientHello byte-identical, excluding `random` and the
+      `key_share` public key, which vary per connection. Verified stronger:
+      replaying a capture's own random material reproduces all 1901 bytes
 - [ ] **Gold** — byte-identical plus matching HTTP/2 fingerprint and header
       order, verified against `tls.peet.ws/api/all`
 
@@ -41,8 +42,8 @@ and the source of NSS, Firefox and OpenSSL.
 |-------|-------|--------|
 | 0 | ClientHello parser and differ | done |
 | 1 | Reference capture of real Firefox | done |
-| 2 | ClientHello emitter | next |
-| 3 | Full handshake (`cryptography` for primitives) | pending |
+| 2 | ClientHello emitter | done |
+| 3 | Full handshake (`cryptography` for primitives) | next |
 | 4 | HTTP/2 frames, SETTINGS and header order (`h2`) | pending |
 | 5 | curl-style CLI | pending |
 | 6 | CONNECT proxy sidecar for other languages | pending |

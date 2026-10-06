@@ -135,3 +135,34 @@ connections, since a real Firefox varies both. Same failure mode as emitting a
 fixed GREASE value.
 
 **Next:** phase 2, the emitter.
+
+---
+
+## 2026-10-06 — Phase 2, emitter
+
+`build_client_hello()` produces 1901 bytes that the differ finds identical to
+the reference capture.
+
+**Verified byte-for-byte, not just structurally.** The emitter takes an `rng`
+callable. Feeding it the capture's own per-connection material in consumption
+order — `random`, `session_id`, the three key shares, the ECH aead selector,
+config_id, enc and payload — reproduces the reference file exactly, all 1901
+bytes, with the script fully consumed and nothing left over. The leftover check
+matters: it proves the emitter reads exactly as much randomness as Firefox
+spends, in the same places.
+
+Bronze follows from silver: identical bytes imply an identical JA4.
+
+**Design notes:**
+- `wire.py` holds the primitive encoders so the profile and the emitter can
+  both use them without a circular import.
+- A profile is a Python module, not a data file. Four of the seventeen
+  extensions need generation logic rather than constants, which a JSON schema
+  could only express by inventing a mini-language.
+- Every length is computed, none are hardcoded. Changing the hostname shifts
+  the total by exactly the delta, which is asserted.
+- `aead_id` is drawn per connection. A test builds 64 hellos and asserts both
+  values appear, so a future refactor cannot silently freeze it.
+
+**Next:** phase 3. The ClientHello is now correct but inert; nothing has been
+sent to a real server yet.
