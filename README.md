@@ -73,10 +73,13 @@ library in 3.14.
 Two things are tied to the machine the references were captured on, which was
 Windows:
 
-- **`tools/verify.py` checks `tcpip.p0f`** against a Windows Firefox capture.
-  On any other operating system that one check fails while the other
-  seventeen pass. The TCP stack is below the socket, so it is not something
-  this client controls.
+- **`tools/verify.py` checks `tcpip.p0f`** against a capture taken from
+  Windows on one network. That one check fails on another operating system,
+  and also on the same machine behind a VPN or a carrier NAT, since what it
+  measures is whichever TCP stack last touched the packet. Observed during
+  development: the egress address changed and the signature went from
+  Windows to Linux while the other seventeen checks kept passing. It is
+  below the socket, so it is not something this client controls.
 - **The profile says Windows.** Running it on a Mac leaves the TCP/IP layer
   saying macOS while every layer above says Windows, which is the
   cross-layer inconsistency this project is about. Either know it is there,

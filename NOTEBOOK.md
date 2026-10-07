@@ -1466,3 +1466,28 @@ completes a handshake, so Python's TLS server issues Firefox a ticket.
 Running `tools/catch_hello.py` afterwards on the same host and port captures
 the raw bytes of the next hello, which will offer that ticket. Two runs, no
 new code.
+
+---
+
+## 2026-10-07 — The TCP check earns its keep
+
+`tools/verify.py` dropped to 17 of 18 straight after the resumption work,
+which looked like a regression and was not:
+
+    expected  4:117+?:0:1400:65535,8:mss,nop,ws,nop,nop,sok:df,id+:0
+    got       4:54+?:0:1400:65535,9:mss,sok,ts,nop,ws:df,id+:0
+
+TTL 54 with `mss,sok,ts,nop,ws` is a Linux stack. This machine is Windows
+and has not changed. The exit address had: one address earlier in the
+project, another now, with no proxy variables set. So something on
+the path is terminating TCP, a VPN or a carrier NAT, and the signature the
+server sees belongs to that box.
+
+Every TLS and HTTP check still passed. The one that moved is the one below
+the socket, which is the only layer this client does not produce.
+
+Two things to keep. The check is tied to a network as well as to a machine,
+which the README said less precisely before. And a failing check that fails
+for the right reason is worth more than a passing one: left out, the client
+would have looked unchanged while presenting a different operating system to
+every server it talked to.
