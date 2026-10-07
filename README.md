@@ -95,6 +95,7 @@ and the source of NSS, Firefox and OpenSSL.
 | 5 | curl-style CLI | done |
 | 6 | Proxy sidecar for other languages | done |
 | 7 | Outbound proxies, HTTP CONNECT and SOCKS5 | done |
+| 8 | Sessions: cookie jar and connection reuse | done, cookie slot unmeasured |
 
 Phases 0 through 2 are standard library only.
 
@@ -114,6 +115,13 @@ Capture a ClientHello (see `fixtures/README.md` for the hostname requirement):
 Run the tests:
 
     python -m unittest discover -s tests -t . -v
+
+Keep cookies and connections across requests:
+
+    from pybrws.session import Session
+    with Session() as s:
+        s.get("https://example.com/login")
+        s.get("https://example.com/account")   # carries the cookies, reuses the connection
 
 Fetch a URL:
 

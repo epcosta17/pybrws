@@ -156,3 +156,16 @@ H1_HEADERS = [
     ("Sec-Fetch-User", "?1"),
     ("Priority", "u=0, i"),
 ]
+
+
+# --- Cookies --------------------------------------------------------------
+# UNMEASURED. The Cookie header's slot in the order is a fingerprint like any
+# other, and no capture of this browser carrying a cookie exists yet. Take one
+# with `tools/catch_request.py --set-cookie` and correct these.
+#
+# Also unmeasured: whether Firefox splits several cookies into separate
+# `cookie` headers over HTTP/2, which HPACK makes worthwhile and which the
+# single-header form here does not reproduce.
+
+H2_COOKIE_BEFORE = "upgrade-insecure-requests"
+H1_COOKIE_BEFORE = "Upgrade-Insecure-Requests"

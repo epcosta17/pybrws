@@ -808,3 +808,51 @@ rather than merely degraded here.
 
 `tools/isolate.py` keeps the crossed design available, since the single-arm
 comparison is the easier thing to reach for and the wrong one.
+
+---
+
+## 2026-10-06 — Cookies and sessions
+
+`CookieJar` follows RFC 6265: default path from the request, domain widening
+only to a suffix of the response host, Max-Age beating Expires, Secure
+withheld from insecure requests, and the send order longest-path-first then
+oldest-first. A replacement keeps the original creation time, or an update
+would silently reorder the header.
+
+`Session` holds the jar, a connection pool keyed by host, port and proxy, and
+the per-request defaults. Verified live: two requests to zillow, cookies
+collected and the second served off the pooled connection.
+
+**Connection reuse needed a retry path.** The second request to peet.ws over
+a pooled connection died with GOAWAY, code 0: the server closes after one
+response and the pool handed out a corpse. Retrying is correct here and the
+retry list did not include the HTTP-level errors, only the socket ones. Now
+it covers `Http1Error` and `Http2Error` too, guarded on the connection having
+been reused, so the same failure on a fresh connection still propagates
+rather than being retried into a loop.
+
+Reuse is not only about speed. A browser carries many requests over one
+connection; a client that performs a fresh handshake for every request has a
+rhythm of its own no matter how right the bytes are.
+
+**The Cookie header's slot is unmeasured and marked as such.** It currently
+goes before `upgrade-insecure-requests`, which is a guess. Verified through
+peet.ws that the placement works and changes neither the JA4 nor the Akamai
+fingerprint, but that only shows the mechanism, not the position.
+
+`tools/catch_request.py --set-cookie` now answers the first request with two
+Set-Cookie headers and a self-reloading page, then captures the reload, which
+carries the Cookie header. That is the only way to learn the slot from the
+browser itself.
+
+Building it turned up a real bug in the tool: the reply was being sent after
+the `with tls:` block had already closed the socket, so `sendall` raised and
+was swallowed by a bare `except OSError: pass`. The capture still looked like
+it worked, because the second request arrived from a client that had been
+told the cookie by hand. Against a browser it would have hung forever with no
+error. The reply now happens inside the block, and the server waits for the
+peer to hang up before moving on.
+
+Also unmeasured: whether Firefox splits several cookies into separate
+`cookie` headers over HTTP/2. HPACK makes that worthwhile and the single
+header emitted here would not reproduce it.

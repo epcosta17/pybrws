@@ -10,6 +10,11 @@ capture is not a valid reference for an HTTPS client.
 
 Then open https://pybrws.127.0.0.1.nip.io:4443 and accept the certificate
 warning. Use --alpn h2 to capture the HTTP/2 preamble instead.
+
+With --set-cookie the first request is answered with a Set-Cookie and a page
+that reloads itself, and the request captured is the second one, which
+carries the Cookie header. That is the only way to learn which slot the
+header occupies, since the order is part of the fingerprint.
 """
 
 from __future__ import annotations
@@ -83,8 +88,30 @@ def self_signed(hostname: str, directory: Path) -> tuple[Path, Path]:
     return cert_path, key_path
 
 
+CRLF = chr(13) + chr(10)
+
+RELOADING_PAGE = (
+    b"<!doctype html><title>pybrws</title>"
+    b"<meta http-equiv=refresh content=1>"
+    b"<p>cookie set, reloading to capture the request that carries it"
+)
+
+
+def cookie_response() -> bytes:
+    lines = [
+        "HTTP/1.1 200 OK",
+        "Content-Type: text/html; charset=utf-8",
+        "Set-Cookie: pybrws_probe=1; Path=/",
+        "Set-Cookie: pybrws_second=2; Path=/",
+        "Content-Length: " + str(len(RELOADING_PAGE)),
+        "Connection: close",
+    ]
+    head = CRLF.join(lines) + CRLF + CRLF
+    return head.encode("latin-1") + RELOADING_PAGE
+
+
 def capture(host: str, port: int, hostname: str, alpn: str, wait: float,
-            quiet_after: float) -> tuple[bytes, str | None]:
+            quiet_after: float, set_cookie: bool = False) -> tuple[bytes, str | None]:
     with tempfile.TemporaryDirectory() as tmp:
         cert_path, key_path = self_signed(hostname, Path(tmp))
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -118,6 +145,8 @@ def capture(host: str, port: int, hostname: str, alpn: str, wait: float,
                     raw.close()
                     continue
 
+                # Everything that touches the connection, including the reply,
+                # has to happen before this block closes it.
                 with tls:
                     negotiated = tls.selected_alpn_protocol()
                     tls.settimeout(quiet_after)
@@ -135,13 +164,34 @@ def capture(host: str, port: int, hostname: str, alpn: str, wait: float,
                             break
                         chunks.append(chunk)
 
-                data = b"".join(chunks)
-                if data:
+                    data = b"".join(chunks)
+                    if not data:
+                        print("  attempt %d from port %d: handshake only, no request"
+                              % (attempt, peer[1]))
+                        continue
+
+                    has_cookie = any(
+                        line.lower().startswith(b"cookie:")
+                        for line in data.split(CRLF.encode())
+                    )
+                    if set_cookie and not has_cookie:
+                        print("  attempt %d from port %d: %d bytes, no Cookie "
+                              "yet; answering and waiting for the reload"
+                              % (attempt, peer[1], len(data)))
+                        try:
+                            tls.sendall(cookie_response())
+                            # Let the peer read it and hang up. Closing straight
+                            # after the write discards the response.
+                            tls.settimeout(3.0)
+                            while tls.recv(4096):
+                                pass
+                        except OSError:
+                            pass
+                        continue
+
                     print("  attempt %d from port %d: %d bytes"
                           % (attempt, peer[1], len(data)))
                     return data, negotiated
-                print("  attempt %d from port %d: handshake only, no request"
-                      % (attempt, peer[1]))
         finally:
             listener.close()
 
@@ -158,12 +208,15 @@ def main() -> int:
     parser.add_argument("--hostname", default="pybrws.127.0.0.1.nip.io",
                         help="name in the certificate, must match the URL")
     parser.add_argument("--alpn", default="http/1.1", choices=["http/1.1", "h2"])
+    parser.add_argument("--set-cookie", action="store_true",
+                        help="answer the first request with a Set-Cookie and "
+                             "capture the reload, which carries Cookie")
     parser.add_argument("--wait", type=float, default=120.0)
     parser.add_argument("--quiet-after", type=float, default=1.0)
     args = parser.parse_args()
 
     data, negotiated = capture(args.host, args.port, args.hostname, args.alpn,
-                               args.wait, args.quiet_after)
+                               args.wait, args.quiet_after, args.set_cookie)
 
     Path(args.out).write_bytes(data)
     print("negotiated ALPN: %r" % negotiated)
