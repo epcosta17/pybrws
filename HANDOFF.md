@@ -11,7 +11,8 @@ is byte-identical to Firefox 157 on Windows. It exists to find out what makes
 a request look automated, by building the thing and measuring it.
 
 Working: ClientHello, TLS 1.3 handshake including `X25519MLKEM768`, HTTP/2,
-HTTP/1.1, HelloRetryRequest, certificate verification, cookies, sessions with connection reuse,
+HTTP/1.1, HelloRetryRequest, certificate verification, session
+resumption, cookies, sessions with connection reuse,
 outbound HTTP CONNECT and SOCKS5 proxies, a CLI, a MITM proxy that lends the
 fingerprint to other languages, request bodies and header merging.
 
@@ -62,9 +63,11 @@ enough HTTP/2 to decode a browser's HEADERS frame. Nothing in the profile is
 inferred any more.
 
 Unmeasured, and marked: the pattern of later WINDOW_UPDATE frames, which
-Firefox batches and this client does not; and where a browser puts the
-cookie extension in the ClientHello it sends after a HelloRetryRequest,
-which no capture here covers.
+Firefox batches and this client does not; where a browser puts the cookie
+extension in the ClientHello after a HelloRetryRequest; and **the resumed
+ClientHello**, which carries a pre_shared_key and therefore a second JA4.
+That one matters: resuming is now the default for a Session, so most
+requests after the first send a fingerprint no capture covers.
 
 ## Known gaps, roughly by value
 
@@ -75,7 +78,7 @@ which no capture here covers.
 2. **TLS 1.2 is advertised and not implemented**, because Firefox advertises
    it and removing it would change the fingerprint. httpbin.org declines TLS
    1.3 and so is unreachable.
-3. Session resumption, HTTP/3, streaming responses, concurrency.
+3. HTTP/3, streaming responses, concurrency.
 
 ## Things that cost time here
 

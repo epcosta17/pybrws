@@ -94,12 +94,16 @@ def finished_verify_data(
 class KeySchedule:
     """Walks the three stages of the TLS 1.3 secret derivation."""
 
-    def __init__(self, suite: CipherSuite) -> None:
+    def __init__(self, suite: CipherSuite, psk: bytes | None = None) -> None:
         self.suite = suite
         zeros = bytes(suite.hash_size)
-        self.early_secret = hkdf_extract(suite, zeros, zeros)
+        # A resumed handshake seeds the schedule with the pre-shared key
+        # where a fresh one uses zeros. Everything downstream follows.
+        self.psk = psk
+        self.early_secret = hkdf_extract(suite, zeros, psk if psk else zeros)
         self.handshake_secret: bytes | None = None
         self.master_secret: bytes | None = None
+        self.resumption_secret: bytes | None = None
 
     def handshake(self, shared_secret: bytes, transcript: bytes) -> tuple[bytes, bytes]:
         """Derive the client and server handshake traffic secrets.
@@ -131,3 +135,51 @@ class KeySchedule:
             derive_secret(suite, self.master_secret, b"c ap traffic", transcript),
             derive_secret(suite, self.master_secret, b"s ap traffic", transcript),
         )
+
+    def resumption(self, transcript: bytes) -> bytes:
+        """The resumption secret, once the client's Finished is in the transcript."""
+        if self.master_secret is None:
+            raise ValueError("application secrets have not been derived yet")
+        self.resumption_secret = resumption_master_secret(
+            self.suite, self.master_secret, transcript
+        )
+        return self.resumption_secret
+
+
+def resumption_master_secret(
+    suite: CipherSuite, master_secret: bytes, transcript: bytes
+) -> bytes:
+    """The secret tickets are derived from.
+
+    `transcript` runs from ClientHello through the client's Finished.
+    """
+    return derive_secret(suite, master_secret, b"res master", transcript)
+
+
+def resumption_psk(suite: CipherSuite, resumption_secret: bytes, nonce: bytes) -> bytes:
+    """The pre-shared key one ticket stands for.
+
+    Each ticket carries its own nonce, so a server handing out several from
+    one connection gives a different key for each.
+    """
+    return hkdf_expand_label(suite, resumption_secret, b"resumption", nonce,
+                             suite.hash_size)
+
+
+def binder_key(suite: CipherSuite, psk: bytes) -> bytes:
+    """The key that signs a ClientHello offering this PSK."""
+    early = hkdf_extract(suite, bytes(suite.hash_size), psk)
+    return derive_secret(suite, early, b"res binder", b"")
+
+
+def psk_binder(suite: CipherSuite, psk: bytes, truncated_hello: bytes) -> bytes:
+    """The binder for a ClientHello, over everything before the binders.
+
+    The hello signs itself up to the point the signature goes, which is why
+    the length fields have to be written before the value that fills them.
+    """
+    key = hkdf_expand_label(suite, binder_key(suite, psk), b"finished", b"",
+                            suite.hash_size)
+    ctx = hmac.HMAC(key, suite.digest())
+    ctx.update(transcript_hash(suite, truncated_hello))
+    return ctx.finalize()

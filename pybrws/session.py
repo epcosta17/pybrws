@@ -12,6 +12,7 @@ from urllib.parse import urljoin, urlsplit
 from .client import REDIRECT_STATUSES, TooManyRedirects, UnsupportedUrl
 from . import headers as header_tools
 from .cookies import CookieJar
+from .tickets import TicketStore
 from .handshake import connect
 from .http1 import Http1Connection, Http1Error
 from .http2 import Http2Connection, Http2Error
@@ -74,6 +75,7 @@ class Session:
         self.verify = verify
         self.trust_store = trust_store
         self.cookies = CookieJar()
+        self.tickets = TicketStore()
         self._pool: dict[tuple, tuple] = {}
 
     # -- connections -------------------------------------------------------
@@ -86,7 +88,7 @@ class Session:
         tls = connect(host, port, profile=self.profile,
                       timeout=self.timeout if timeout is None else timeout,
                       proxy=self.proxy, verify=self.verify,
-                      trust_store=self.trust_store)
+                      trust_store=self.trust_store, tickets=self.tickets)
         if tls.alpn == "h2":
             http = Http2Connection(tls, profile=self.profile)
         else:

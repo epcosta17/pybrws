@@ -8,7 +8,7 @@ from __future__ import annotations
 import socket
 
 from . import certs
-from .emitter import build_client_hello, retry_hello
+from .emitter import build_client_hello, retry_hello, with_psk
 from . import keyexchange
 from .keyexchange import KeyExchange
 from .keyschedule import (
@@ -19,6 +19,7 @@ from .keyschedule import (
 )
 from .parser import _Reader
 from .profiles import firefox157
+from .tickets import parse_new_session_ticket
 from .proxies import open_socket
 from .records import APPLICATION_DATA, HANDSHAKE, Cipher, RecordLayer
 from .wire import u24, u8
@@ -36,6 +37,7 @@ EXT_SUPPORTED_VERSIONS = 43
 EXT_KEY_SHARE = 51
 EXT_ALPN = 16
 EXT_COOKIE = 44
+EXT_PRE_SHARED_KEY = 41
 
 MESSAGE_HASH = 0xFE
 
@@ -67,6 +69,7 @@ class ServerHello:
         self.selected_group: int | None = None
         self.peer_key_share: bytes = b""
         self.cookie: bytes | None = None
+        self.selected_psk: int | None = None
 
         extensions = _Reader(body.vector(2), "ServerHello extensions")
         while extensions.remaining:
@@ -80,6 +83,8 @@ class ServerHello:
                 self.peer_key_share = data[4:] if len(data) > 2 else b""
             elif ext_type == EXT_COOKIE:
                 self.cookie = data
+            elif ext_type == EXT_PRE_SHARED_KEY:
+                self.selected_psk = int.from_bytes(data[:2], "big")
 
     @property
     def is_hello_retry_request(self) -> bool:
@@ -154,11 +159,17 @@ def _retry(client_hello: bytes, hello: "ServerHello", raw_message: bytes,
 class Connection:
     """An established TLS 1.3 connection."""
 
-    def __init__(self, sock: socket.socket, records: RecordLayer, suite, alpn: str) -> None:
+    def __init__(self, sock: socket.socket, records: RecordLayer, suite, alpn: str,
+                 host: str = "", resumption_secret: bytes | None = None,
+                 tickets=None, resumed: bool = False) -> None:
         self.sock = sock
         self.records = records
         self.suite = suite
         self.alpn = alpn
+        self.host = host
+        self.resumption_secret = resumption_secret
+        self.tickets = tickets
+        self.resumed = resumed
 
     def send(self, data: bytes) -> None:
         self.records.write(APPLICATION_DATA, data)
@@ -170,8 +181,26 @@ class Connection:
             if content_type == APPLICATION_DATA:
                 return body
             if content_type == HANDSHAKE:
-                continue  # NewSessionTicket and friends
+                self._post_handshake(body)
+                continue
             raise HandshakeError("unexpected content type " + str(content_type))
+
+    def _post_handshake(self, body: bytes) -> None:
+        """Collect NewSessionTicket messages, which arrive after the handshake."""
+        if self.tickets is None or self.resumption_secret is None:
+            return
+        reader = _Reader(body, "post-handshake")
+        while reader.remaining >= 4:
+            msg_type = reader.uint(1)
+            message = reader.vector(3)
+            if msg_type != NEW_SESSION_TICKET:
+                continue
+            try:
+                ticket = parse_new_session_ticket(message, self.suite,
+                                                  self.resumption_secret)
+            except ValueError:
+                continue
+            self.tickets.add(self.host, ticket)
 
     def close(self) -> None:
         self.sock.close()
@@ -192,6 +221,7 @@ def connect(
     proxy=None,
     verify: bool = True,
     trust_store=None,
+    tickets=None,
 ) -> Connection:
     """Open a TLS 1.3 connection impersonating `profile`.
 
@@ -208,6 +238,9 @@ def connect(
             interceptable, which a proxy tested during development was
             doing.
         trust_store: anchors to trust instead of the system's.
+            tickets: a TicketStore. One is offered if it holds a ticket for
+            this host, and any the server issues are kept, so a second
+            connection resumes rather than starting over.
 
     Returns:
         A Connection ready to carry application data.
@@ -220,6 +253,13 @@ def connect(
     """
     key_exchange = KeyExchange([group for group, _ in profile.KEY_SHARE_GROUPS])
     client_hello = build_client_hello(host, profile=profile, key_exchange=key_exchange)
+
+    offered = tickets.take(host) if tickets is not None else None
+    if offered is not None:
+        # The binder is keyed by the hash of the suite the ticket came from,
+        # so a server choosing another suite simply will not select it.
+        client_hello = with_psk(client_hello, [offered],
+                                CIPHER_SUITES[offered.suite_id])
 
     sock = open_socket(host, port, proxy=proxy, timeout=timeout)
     records = RecordLayer(sock)
@@ -250,10 +290,15 @@ def connect(
         suite = suite_for(hello)
         transcript += message
 
+        resumed = offered is not None and hello.selected_psk == 0
+        if offered is not None and not resumed:
+            # Offered and declined. Not an error, but worth not pretending.
+            offered = None
+
         shared_secret = key_exchange.shared_secret(
             hello.selected_group, hello.peer_key_share
         )
-        schedule = KeySchedule(suite)
+        schedule = KeySchedule(suite, psk=offered.psk if resumed else None)
         client_hs_secret, server_hs_secret = schedule.handshake(
             shared_secret, bytes(transcript)
         )
@@ -303,7 +348,7 @@ def connect(
 
             transcript += message
 
-        if verify and leaf is None:
+        if verify and leaf is None and not resumed:
             raise HandshakeError("the server sent no certificate")
 
         client_verify = finished_verify_data(suite, client_hs_secret, bytes(transcript))
@@ -313,10 +358,15 @@ def connect(
         records.write(HANDSHAKE, client_finished)
 
         client_app_secret, server_app_secret = schedule.application(bytes(transcript))
+        transcript += client_finished
+        resumption_secret = schedule.resumption(bytes(transcript))
+
         records.read_cipher = Cipher(suite, server_app_secret)
         records.write_cipher = Cipher(suite, client_app_secret)
 
-        return Connection(sock, records, suite, alpn)
+        return Connection(sock, records, suite, alpn, host=host,
+                          resumption_secret=resumption_secret, tickets=tickets,
+                          resumed=resumed)
     except Exception:
         sock.close()
         raise

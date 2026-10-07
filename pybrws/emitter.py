@@ -14,6 +14,7 @@ CONTENT_TYPE_HANDSHAKE = 0x16
 RANDOM_SIZE = 32
 EXT_KEY_SHARE = 51
 EXT_COOKIE = 44
+EXT_PRE_SHARED_KEY = 41
 
 Rng = Callable[[int], bytes]
 
@@ -125,3 +126,42 @@ def retry_hello(original: bytes, group: int, share: bytes,
         rebuilt.append(Extension(EXT_COOKIE, cookie))
     hello.extensions = rebuilt
     return serialise(hello, int.from_bytes(original[1:3], "big"))
+
+
+def with_psk(original: bytes, tickets, suite) -> bytes:
+    """Add a pre_shared_key extension offering `tickets`.
+
+    The extension has to be last, and its binders are an HMAC over the
+    ClientHello that contains them: everything up to where the binders
+    begin. So the message is built once with the right lengths and empty
+    binders, hashed, and the binders written into the space already
+    reserved. RFC 8446 section 4.2.11.2.
+    """
+    from .keyschedule import psk_binder
+    from .parser import parse_client_hello
+
+    hello = parse_client_hello(original)
+    if any(e.type == EXT_PRE_SHARED_KEY for e in hello.extensions):
+        raise ValueError("this ClientHello already offers a pre-shared key")
+
+    identities = b"".join(
+        vector(t.identity, 2) + t.obfuscated_age().to_bytes(4, "big")
+        for t in tickets
+    )
+    placeholder = b"".join(vector(bytes(suite.hash_size), 1) for _ in tickets)
+    hello.extensions = list(hello.extensions) + [
+        Extension(EXT_PRE_SHARED_KEY, vector(identities, 2) + vector(placeholder, 2))
+    ]
+
+    record = serialise(hello, int.from_bytes(original[1:3], "big"))
+    message = record[5:]
+    # The binders, and the two-byte length in front of them, are the tail.
+    tail = 2 + len(placeholder)
+    truncated = message[:-tail]
+
+    binders = b"".join(
+        vector(psk_binder(suite, t.psk, truncated), 1) for t in tickets
+    )
+    if len(binders) != len(placeholder):
+        raise ValueError("binders did not fill the space reserved for them")
+    return record[:-len(binders)] + binders

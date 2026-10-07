@@ -1420,3 +1420,49 @@ same class of fault as the HPACK table size.
 
 **Unmeasured:** where a browser places the cookie extension in the second
 ClientHello. Ours goes last, which is legal. No capture covers it.
+
+---
+
+## 2026-10-07 — Session resumption
+
+A server hands out tickets after a handshake so the next one can skip
+proving its identity. Three servers of four accept ours:
+
+    tls.peet.ws          2 tickets   RESUMED
+    www.cloudflare.com   2 tickets   RESUMED
+    www.google.com       2 tickets   RESUMED
+    github.com           2 tickets   offered, declined
+
+github declining is its choice rather than a fault here: RFC 8446 requires a
+server to abort if a binder does not validate, so a silent decline means the
+binder was fine and the policy was not.
+
+**The part worth understanding is the binder.** The ClientHello signs
+itself: the binder is an HMAC over the same ClientHello that carries it, up
+to the point where the binder begins. So the message has to be built once
+with every length already correct and the binder space empty, hashed, and
+the result written into the space reserved for it. Build it in the obvious
+order and the lengths are wrong by exactly the size of the thing you have
+not computed yet.
+
+**And the finding that matters more than the feature.** A resumed
+ClientHello is a different fingerprint:
+
+    fresh    t13d1517h2_8daaf6152771_3cbfd9057e0d
+    resumed  t13d1518h2_8daaf6152771_5dff20295fdc
+
+Eighteen extensions instead of seventeen, and a different extension hash.
+That is correct in itself, since Firefox has two fingerprints for the same
+reason. But **there is no capture of Firefox resuming**, so the resumed hello
+is now the one part of this client that nothing verifies, and a Session
+resumes by default, which means most requests after the first send it.
+
+Shipping resumption without that capture trades a known gap, never looking
+like a returning visitor, for an unknown one. The trade is probably right,
+and it is still a trade.
+
+It is measurable with the tools already here. `tools/catch_request.py`
+completes a handshake, so Python's TLS server issues Firefox a ticket.
+Running `tools/catch_hello.py` afterwards on the same host and port captures
+the raw bytes of the next hello, which will offer that ticket. Two runs, no
+new code.
