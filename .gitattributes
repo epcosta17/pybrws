@@ -1,0 +1,13 @@
+# Captured HTTP requests are byte-exact references: a test asserts the bytes
+# this client produces equal them. Line-ending translation would rewrite the
+# CRLF that HTTP requires and break those tests on checkout, silently and
+# only on some platforms. Never touch them.
+fixtures/reference-*.txt -text
+fixtures/reference-*.hex -text
+fixtures/*.jsonl          -text
+
+# Source stays LF in the repository and is checked out natively.
+*.py      text eol=lf
+*.md      text eol=lf
+*.toml    text eol=lf
+*.json    text eol=lf
