@@ -159,13 +159,39 @@ H1_HEADERS = [
 
 
 # --- Cookies --------------------------------------------------------------
-# UNMEASURED. The Cookie header's slot in the order is a fingerprint like any
-# other, and no capture of this browser carrying a cookie exists yet. Take one
-# with `tools/catch_request.py --set-cookie` and correct these.
+# Partly measured. fixtures/reference-firefox-157-image.txt shows Firefox
+# carrying two cookies in a single `Cookie` header, so there is no crumbling
+# over HTTP/1.1, and the header sits after Connection and before the
+# Sec-Fetch block. Both anchors below are consistent with that.
 #
-# Also unmeasured: whether Firefox splits several cookies into separate
-# `cookie` headers over HTTP/2, which HPACK makes worthwhile and which the
-# single-header form here does not reproduce.
+# Still unmeasured: that capture is a subresource, which carries no
+# Upgrade-Insecure-Requests, so whether Cookie precedes or follows that header
+# on a navigation is unknown. Both land between Connection and Sec-Fetch-Dest,
+# so only their relative order is open.
+#
+# Also unmeasured: whether HTTP/2 crumbles cookies into separate headers,
+# which HPACK makes worthwhile and which this single-header form would not
+# reproduce.
 
 H2_COOKIE_BEFORE = "upgrade-insecure-requests"
 H1_COOKIE_BEFORE = "Upgrade-Insecure-Requests"
+
+
+# Measured from fixtures/reference-firefox-157-image.txt: Firefox fetching a
+# favicon from a page on the same origin. An image subresource differs from a
+# navigation in Accept, all three Sec-Fetch values and Priority, and it carries
+# a Referer that a typed-URL navigation does not.
+H1_IMAGE_HEADERS = [
+    ("Host", "{authority}"),
+    ("User-Agent", USER_AGENT),
+    ("Accept", "image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8,*/*;q=0.5"),
+    ("Accept-Language", "en-US,en;q=0.9"),
+    ("Accept-Encoding", "gzip, deflate, br, zstd"),
+    ("Connection", "keep-alive"),
+    ("Referer", "{referer}"),
+    ("Cookie", "{cookie}"),
+    ("Sec-Fetch-Dest", "image"),
+    ("Sec-Fetch-Mode", "no-cors"),
+    ("Sec-Fetch-Site", "same-origin"),
+    ("Priority", "u=6"),
+]

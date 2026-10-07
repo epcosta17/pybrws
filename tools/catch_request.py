@@ -97,6 +97,15 @@ RELOADING_PAGE = (
 )
 
 
+def not_found() -> bytes:
+    lines = [
+        "HTTP/1.1 404 Not Found",
+        "Content-Length: 0",
+        "Connection: close",
+    ]
+    return (CRLF.join(lines) + CRLF + CRLF).encode("latin-1")
+
+
 def cookie_response() -> bytes:
     lines = [
         "HTTP/1.1 200 OK",
@@ -111,7 +120,8 @@ def cookie_response() -> bytes:
 
 
 def capture(host: str, port: int, hostname: str, alpn: str, wait: float,
-            quiet_after: float, set_cookie: bool = False) -> tuple[bytes, str | None]:
+            quiet_after: float, set_cookie: bool = False,
+            want_document: bool = True) -> tuple[bytes, str | None]:
     with tempfile.TemporaryDirectory() as tmp:
         cert_path, key_path = self_signed(hostname, Path(tmp))
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -170,10 +180,33 @@ def capture(host: str, port: int, hostname: str, alpn: str, wait: float,
                               % (attempt, peer[1]))
                         continue
 
+                    lines = data.split(CRLF.encode())
                     has_cookie = any(
-                        line.lower().startswith(b"cookie:")
-                        for line in data.split(CRLF.encode())
+                        line.lower().startswith(b"cookie:") for line in lines
                     )
+                    # A browser fetches the favicon as soon as a page loads,
+                    # and that request arrives before the reload. Capturing it
+                    # yields a subresource, not the navigation being asked for.
+                    is_document = not any(
+                        line.lower().startswith(b"sec-fetch-dest: image")
+                        or line.lower().startswith(b"sec-fetch-dest: style")
+                        or line.lower().startswith(b"sec-fetch-dest: script")
+                        or line.lower().startswith(b"sec-fetch-dest: font")
+                        for line in lines
+                    )
+                    if want_document and not is_document:
+                        target = lines[0].split(b" ")[1].decode("latin-1", "replace")
+                        print("  attempt %d from port %d: subresource %s, "
+                              "answering and still waiting"
+                              % (attempt, peer[1], target))
+                        try:
+                            tls.sendall(not_found())
+                            tls.settimeout(3.0)
+                            while tls.recv(4096):
+                                pass
+                        except OSError:
+                            pass
+                        continue
                     if set_cookie and not has_cookie:
                         print("  attempt %d from port %d: %d bytes, no Cookie "
                               "yet; answering and waiting for the reload"
@@ -208,6 +241,9 @@ def main() -> int:
     parser.add_argument("--hostname", default="pybrws.127.0.0.1.nip.io",
                         help="name in the certificate, must match the URL")
     parser.add_argument("--alpn", default="http/1.1", choices=["http/1.1", "h2"])
+    parser.add_argument("--any-request", action="store_true",
+                        help="capture subresources too, instead of waiting "
+                             "for a document request")
     parser.add_argument("--set-cookie", action="store_true",
                         help="answer the first request with a Set-Cookie and "
                              "capture the reload, which carries Cookie")
@@ -216,7 +252,8 @@ def main() -> int:
     args = parser.parse_args()
 
     data, negotiated = capture(args.host, args.port, args.hostname, args.alpn,
-                               args.wait, args.quiet_after, args.set_cookie)
+                               args.wait, args.quiet_after, args.set_cookie,
+                               not args.any_request)
 
     Path(args.out).write_bytes(data)
     print("negotiated ALPN: %r" % negotiated)

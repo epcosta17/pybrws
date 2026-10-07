@@ -885,3 +885,50 @@ takes it up. Recorded in the README as a limitation rather than papered over.
 
 The example now uses httpbingo.org and is runnable: set a cookie, fetch it
 back over the same connection, and the response echoes it.
+
+---
+
+## 2026-10-06 — The cookie capture caught a favicon
+
+Asked for the navigation reload carrying a cookie, got this instead:
+
+    GET /favicon.ico HTTP/1.1
+    Host: pybrws.127.0.0.1.nip.io:4443
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:157.0) Gecko/20100101 Firefox/157.0
+    Accept: image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8,*/*;q=0.5
+    Accept-Language: en-US,en;q=0.9
+    Accept-Encoding: gzip, deflate, br, zstd
+    Connection: keep-alive
+    Referer: https://pybrws.127.0.0.1.nip.io:4443/
+    Cookie: pybrws_probe=1; pybrws_second=2
+    Sec-Fetch-Dest: image
+    Sec-Fetch-Mode: no-cors
+    Sec-Fetch-Site: same-origin
+    Priority: u=6
+
+A browser fetches the favicon the moment a page loads, and that request beat
+the reload to the listener. The tool now answers subresources with a 404 and
+keeps waiting, recognising them by `Sec-Fetch-Dest`; `--any-request` turns
+that off.
+
+**What it settles.** Two cookies arrive in one `Cookie` header, so there is
+no crumbling over HTTP/1.1. The header sits after `Connection` and before the
+`Sec-Fetch` block, which both profile anchors already matched.
+
+**What it leaves open.** A subresource carries no
+`Upgrade-Insecure-Requests`, and that header occupies the same gap between
+`Connection` and `Sec-Fetch-Dest`. So the relative order of Cookie and
+Upgrade-Insecure-Requests on a navigation is still unknown. The uncertainty
+is now one pair rather than the whole slot.
+
+**What it gave for free.** A measured header set for an image subresource,
+which is one of the four request types the project was missing. Against a
+navigation it differs in `Accept`, all three `Sec-Fetch` values and
+`Priority: u=6` rather than `u=0, i`, and it carries a `Referer` that a
+typed-URL navigation does not. Stored as `H1_IMAGE_HEADERS` and as its own
+fixture.
+
+The `Referer` and `Sec-Fetch-Site: same-origin` pairing is the combination
+guessed at during the glassdoor experiment, here observed rather than
+assumed. That experiment found no effect; this says nothing about effect,
+only that the pairing is what the browser actually sends.
