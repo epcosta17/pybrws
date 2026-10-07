@@ -239,15 +239,22 @@ def capture(host: str, port: int, hostname: str, alpn: str, wait: float,
                     is_post = lines[0].split(b" ")[0].upper() == b"POST"
                     if want_post and not is_post:
                         target = lines[0].split(b" ")[1].decode("latin-1", "replace")
-                        print("  attempt %d from port %d: %s %s, answering with "
-                              "the page that triggers the POST"
+                        # Only a document request gets the trigger page; a
+                        # favicon asking for it is noise, and answering it
+                        # with the page invites a second submission.
+                        page = None if not is_document else {
+                            "form": FORM_PAGE,
+                            "form-click": CLICK_PAGE,
+                            "fetch": FETCH_PAGE,
+                        }[want_post]
+                        print("  attempt %d from port %d: %s %s, answering "
+                              "with %s"
                               % (attempt, peer[1],
-                                 lines[0].split(b" ")[0].decode(), target))
+                                 lines[0].split(b" ")[0].decode(), target,
+                                 "the page that triggers the POST" if page
+                                 else "404"))
                         try:
-                            page = {"form": FORM_PAGE,
-                                    "form-click": CLICK_PAGE,
-                                    "fetch": FETCH_PAGE}[want_post]
-                            tls.sendall(page_response(page))
+                            tls.sendall(page_response(page) if page else not_found())
                             tls.settimeout(3.0)
                             while tls.recv(4096):
                                 pass

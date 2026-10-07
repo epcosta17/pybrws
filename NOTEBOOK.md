@@ -1235,3 +1235,35 @@ The HTTP/2 variants are derived from the HTTP/1.1 ones by the rule the
 navigation captures confirmed: drop Host and Connection, lowercase, append
 `te`. Marked inferred, with a test asserting the derivation rather than the
 result.
+
+---
+
+## 2026-10-07 — The click settles it
+
+Captured with `--post form-click`:
+
+    Sec-Fetch-Site: same-origin
+    Sec-Fetch-User: ?1
+    Priority: u=0, i
+
+A form submitted by a click carries `Sec-Fetch-User: ?1`, in the same slot it
+occupies in a navigation. One submitted by script does not. Every other byte
+is identical, so the hypothesis from the previous entry was right, and is now
+measured instead of argued.
+
+That makes a form POST two header sets rather than one, and the right one
+depends on what is being imitated. `kind="form"` sends the clicked set, since
+a client filling in a login is standing in for a person pressing a button;
+`kind="form-script"` is there for a page submitting on their behalf. Three
+sets in total with `xhr`, all three verified on the wire against peet.ws with
+the Akamai fingerprint unchanged.
+
+Worth noting what the question was worth. The original note asserted a
+mechanism from a single absence, and challenging it cost one capture and
+turned a guess into a measurement **and** found a second header set that
+would otherwise have been missing. The same challenge applied to the
+glassdoor reading deleted it instead. Both outcomes are the point.
+
+A wart fixed on the way: the capture tool was answering the favicon request
+with the page that triggers the POST, which is harmless here only because
+the favicon does not run scripts. Subresources now get a 404.

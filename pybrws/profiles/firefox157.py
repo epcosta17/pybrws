@@ -6,6 +6,7 @@ Payloads that vary per connection are produced by the functions at the bottom.
 
 from __future__ import annotations
 
+from .. import headers as header_tools
 from ..keyexchange import KeyExchange
 from ..wire import u8, u16, vector
 
@@ -184,14 +185,14 @@ H1_COOKIE_BEFORE = "Upgrade-Insecure-Requests"
 # Connection for the form. Content-Length always follows Content-Type and
 # precedes Origin.
 #
-# Observed: neither POST carries `Sec-Fetch-User`, while both navigation
-# captures do. The form capture was submitted by script, and the Fetch
-# Metadata spec sends that header only for a user-activated navigation, so
-# the submission method is one explanation. That it is the right one is
-# UNVERIFIED: Firefox may simply never send it on a form POST. Settle it with
-# `tools/catch_request.py --post form-click`, which waits for a real click.
+# Measured, and it settles the question the previous entry left open: a form
+# submitted by a click carries `Sec-Fetch-User: ?1` and one submitted by
+# script does not. Same bytes otherwise. So a form POST is two header sets,
+# and which one is right depends on what is being imitated: a person
+# pressing a button, or a page submitting on their behalf.
+# fixtures/reference-firefox-157-post-click.txt is the clicked one.
 
-H1_POST_FORM_HEADERS = [
+H1_POST_FORM_SCRIPT_HEADERS = [
     ("Host", "{authority}"),
     ("User-Agent", USER_AGENT),
     ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
@@ -240,5 +241,11 @@ def _as_http2(headers):
             if name.lower() not in dropped] + [("te", "trailers")]
 
 
+# A click adds one header; everything else is identical.
+H1_POST_FORM_HEADERS = header_tools.insert_before(
+    H1_POST_FORM_SCRIPT_HEADERS, "Sec-Fetch-User", "?1", "Priority"
+)
+
+H2_POST_FORM_SCRIPT_HEADERS = _as_http2(H1_POST_FORM_SCRIPT_HEADERS)
 H2_POST_FORM_HEADERS = _as_http2(H1_POST_FORM_HEADERS)
 H2_POST_XHR_HEADERS = _as_http2(H1_POST_XHR_HEADERS)

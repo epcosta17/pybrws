@@ -54,7 +54,8 @@ capture it with `tools/catch_hello.py` or `tools/catch_request.py` first.
 Measured, with a fixture and a byte-identity test: the ClientHello, the
 HTTP/2 SETTINGS, WINDOW_UPDATE, stream id, HEADERS flags and priority, the
 header order and values for a navigation, for a navigation carrying cookies,
-for an image subresource, for a form POST and for a `fetch` POST.
+for an image subresource, for a `fetch` POST, and for a form POST both
+submitted by script and submitted by a click.
 
 Inferred, and marked in the code: the Cookie header's slot over HTTP/2,
 deduced from the HTTP/1.1 order.
@@ -64,8 +65,7 @@ rule the navigation captures confirmed.
 
 Unmeasured, and marked: whether HTTP/2 crumbles cookies into separate
 headers; the pattern of later WINDOW_UPDATE frames, which Firefox batches and
-this client does not; and `Sec-Fetch-User` on a form POST, which the capture
-missed because the submit was triggered by script rather than a click.
+this client does not.
 
 ## Known gaps, roughly by value
 

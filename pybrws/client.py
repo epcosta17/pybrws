@@ -31,6 +31,9 @@ def header_set(profile, method: str, kind: str, http2: bool):
         return profile.H2_NAVIGATION_HEADERS if http2 else profile.H1_HEADERS
     if kind == "form":
         return profile.H2_POST_FORM_HEADERS if http2 else profile.H1_POST_FORM_HEADERS
+    if kind == "form-script":
+        return (profile.H2_POST_FORM_SCRIPT_HEADERS if http2
+                else profile.H1_POST_FORM_SCRIPT_HEADERS)
     return profile.H2_POST_XHR_HEADERS if http2 else profile.H1_POST_XHR_HEADERS
 
 
@@ -99,8 +102,9 @@ def request(url: str, *, method: str = "GET", profile=firefox157,
             redirect itself, as curl does without -L.
         proxy: a proxy URL or Proxy, applied to every hop.
         kind: for a request with a body, which header set to send. "xhr" is
-            what `fetch` produces and what an API client wants; "form" is
-            what submitting a form produces.
+            what `fetch` produces and what an API client wants; "form" is a
+            person pressing a submit button; "form-script" is a page
+            submitting on their behalf, which omits Sec-Fetch-User.
         referer: the page a browser would have come from. Defaults to the
             target's own origin, since every captured POST carries one.
 

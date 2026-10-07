@@ -28,11 +28,11 @@ def build(headers, body, content_type):
     )
 
 
-class TestFormPost(unittest.TestCase):
+class TestScriptedFormPost(unittest.TestCase):
     REFERENCE = FIXTURES / "reference-firefox-157-post-form.txt"
 
     def test_byte_identical(self):
-        built = build(firefox157.H1_POST_FORM_HEADERS, b"field=value",
+        built = build(firefox157.H1_POST_FORM_SCRIPT_HEADERS, b"field=value",
                       "application/x-www-form-urlencoded")
         self.assertEqual(built, self.REFERENCE.read_bytes())
 
@@ -64,7 +64,7 @@ class TestXhrPost(unittest.TestCase):
 
 class TestTheTwoDiffer(unittest.TestCase):
     def setUp(self):
-        self.form = dict(firefox157.H1_POST_FORM_HEADERS)
+        self.form = dict(firefox157.H1_POST_FORM_SCRIPT_HEADERS)
         self.xhr = dict(firefox157.H1_POST_XHR_HEADERS)
 
     def test_accept(self):
@@ -92,6 +92,7 @@ class TestTheTwoDiffer(unittest.TestCase):
 
     def test_content_length_follows_content_type_in_both(self):
         for headers in (firefox157.H1_POST_FORM_HEADERS,
+                        firefox157.H1_POST_FORM_SCRIPT_HEADERS,
                         firefox157.H1_POST_XHR_HEADERS):
             names = [name for name, _ in headers]
             self.assertEqual(names[names.index("Content-Type") + 1], "Content-Length")
@@ -121,3 +122,28 @@ class TestDerivedHttp2Sets(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestClickedFormPost(unittest.TestCase):
+    """A click adds Sec-Fetch-User; a scripted submit does not."""
+
+    REFERENCE = FIXTURES / "reference-firefox-157-post-click.txt"
+
+    def test_byte_identical(self):
+        built = build(firefox157.H1_POST_FORM_HEADERS, b"field=value",
+                      "application/x-www-form-urlencoded")
+        self.assertEqual(built, self.REFERENCE.read_bytes())
+
+    def test_sec_fetch_user_sits_between_site_and_priority(self):
+        text = self.REFERENCE.read_text()
+        self.assertLess(text.index("Sec-Fetch-Site:"), text.index("Sec-Fetch-User:"))
+        self.assertLess(text.index("Sec-Fetch-User:"), text.index("Priority:"))
+
+    def test_the_two_form_sets_differ_by_exactly_that_header(self):
+        clicked = [h for h in firefox157.H1_POST_FORM_HEADERS
+                   if h[0] != "Sec-Fetch-User"]
+        self.assertEqual(clicked, list(firefox157.H1_POST_FORM_SCRIPT_HEADERS))
+
+    def test_the_scripted_capture_lacks_it(self):
+        scripted = (FIXTURES / "reference-firefox-157-post-form.txt").read_text()
+        self.assertNotIn("Sec-Fetch-User", scripted)
