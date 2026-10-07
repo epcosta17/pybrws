@@ -126,9 +126,10 @@ and the source of NSS, Firefox and OpenSSL.
   rejects a ClientHello that advertises the group without offering a share by
   demanding it in a HelloRetryRequest. Four of six major sites tested select
   it.
-- **Certificates are not verified.** This is a laboratory client, not a secure
-  one. Do not use it for anything real. One of two working free proxies tested
-  turned out to be intercepting, which this would have caught.
+- **Certificates are verified**, chain and CertificateVerify signature, with
+  `verify=False` or the CLI's `-k` to opt out. It was off for most of this
+  project's life, and one of two working free proxies tested during that time
+  turned out to be intercepting and replacing the fingerprint undetected.
 - **TLS 1.2 is advertised but not implemented.** The profile offers it because
   Firefox does, and removing it would change the fingerprint, so a server that
   declines TLS 1.3 is refused rather than downgraded to. httpbin.org is one.

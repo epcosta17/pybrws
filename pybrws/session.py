@@ -65,11 +65,14 @@ class Session:
     """Keeps cookies and connections across requests."""
 
     def __init__(self, *, profile=firefox157, proxy=None, timeout: float = 20.0,
-                 follow_redirects: int = 5) -> None:
+                 follow_redirects: int = 5, verify: bool = True,
+                 trust_store=None) -> None:
         self.profile = profile
         self.proxy = proxy
         self.timeout = timeout
         self.follow_redirects = follow_redirects
+        self.verify = verify
+        self.trust_store = trust_store
         self.cookies = CookieJar()
         self._pool: dict[tuple, tuple] = {}
 
@@ -82,7 +85,8 @@ class Session:
     def _open(self, host: str, port: int, timeout: float | None = None):
         tls = connect(host, port, profile=self.profile,
                       timeout=self.timeout if timeout is None else timeout,
-                      proxy=self.proxy)
+                      proxy=self.proxy, verify=self.verify,
+                      trust_store=self.trust_store)
         if tls.alpn == "h2":
             http = Http2Connection(tls, profile=self.profile)
         else:

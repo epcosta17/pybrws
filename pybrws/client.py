@@ -39,7 +39,8 @@ def header_set(profile, method: str, kind: str, http2: bool):
 
 def fetch_once(url: str, *, method: str = "GET", profile=firefox157,
                timeout: float = 20.0, headers=None, body: bytes = b"",
-               proxy=None, kind: str = "xhr", context=None) -> Response:
+               proxy=None, kind: str = "xhr", context=None,
+               verify: bool = True, trust_store=None) -> Response:
     """Fetch one URL without following redirects.
 
     The server picks the protocol through ALPN; both branches are implemented,
@@ -70,7 +71,7 @@ def fetch_once(url: str, *, method: str = "GET", profile=firefox157,
         path += "?" + parts.query
 
     with connect(host, port, profile=profile, timeout=timeout,
-                 proxy=proxy) as tls:
+                 proxy=proxy, verify=verify, trust_store=trust_store) as tls:
         http2 = tls.alpn == "h2"
         http = (Http2Connection(tls, profile=profile) if http2
                 else Http1Connection(tls, profile=profile))
@@ -85,7 +86,8 @@ def fetch_once(url: str, *, method: str = "GET", profile=firefox157,
 def request(url: str, *, method: str = "GET", profile=firefox157,
             timeout: float = 20.0, headers=None, data=None, json=None,
             follow_redirects: int = 0, proxy=None, kind: str = "xhr",
-            referer: str | None = None) -> Response:
+            referer: str | None = None, verify: bool = True,
+            trust_store=None) -> Response:
     """Send one request, optionally following redirects.
 
     Args:
@@ -107,6 +109,9 @@ def request(url: str, *, method: str = "GET", profile=firefox157,
             submitting on their behalf, which omits Sec-Fetch-User.
         referer: the page a browser would have come from. Defaults to the
             target's own origin, since every captured POST carries one.
+        verify: check the server's certificate. Off makes the connection
+            interceptable without any sign of it.
+        trust_store: anchors to trust instead of the system's.
 
     Returns:
         The final response, with the body decompressed.
@@ -127,7 +132,8 @@ def request(url: str, *, method: str = "GET", profile=firefox157,
     for hop in range(follow_redirects + 1):
         response = fetch_once(url, method=method, profile=profile,
                               timeout=timeout, headers=headers, body=body,
-                              proxy=proxy, kind=kind, context=context)
+                              proxy=proxy, kind=kind, context=context,
+                              verify=verify, trust_store=trust_store)
         response.history = list(seen)
         location = response.header("location")
         if response.status not in REDIRECT_STATUSES or not location:

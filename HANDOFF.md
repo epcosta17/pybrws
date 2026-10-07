@@ -11,9 +11,9 @@ is byte-identical to Firefox 157 on Windows. It exists to find out what makes
 a request look automated, by building the thing and measuring it.
 
 Working: ClientHello, TLS 1.3 handshake including `X25519MLKEM768`, HTTP/2,
-HTTP/1.1, cookies, sessions with connection reuse, outbound HTTP CONNECT and
-SOCKS5 proxies, a CLI, a MITM proxy that lends the fingerprint to other
-languages, request bodies and header merging.
+HTTP/1.1, certificate verification, cookies, sessions with connection reuse,
+outbound HTTP CONNECT and SOCKS5 proxies, a CLI, a MITM proxy that lends the
+fingerprint to other languages, request bodies and header merging.
 
     .venv/bin/python -m unittest discover -s tests -t . -v   # 244 tests
     .venv/bin/python tools/verify.py                         # 18 live checks
@@ -70,15 +70,12 @@ Firefox batches and this client does not.
    implementation, which is exactly the thing worth distrusting. Chrome would
    validate or break it, and Chrome shuffles its extension order, which
    Firefox does not.
-2. **Certificate verification is off.** One of two working free proxies
-   tested turned out to be intercepting and replacing the fingerprint
-   undetected. Needs chain validation and RFC 8879 decompression.
-3. **TLS 1.2 is advertised and not implemented**, because Firefox advertises
+2. **TLS 1.2 is advertised and not implemented**, because Firefox advertises
    it and removing it would change the fingerprint. httpbin.org declines TLS
    1.3 and so is unreachable.
-4. **HelloRetryRequest raises.** A server asking for a group we offered no
+3. **HelloRetryRequest raises.** A server asking for a group we offered no
    share for will fail.
-5. Session resumption, HTTP/3, streaming responses, concurrency.
+4. Session resumption, HTTP/3, streaming responses, concurrency.
 
 ## Things that cost time here
 

@@ -1334,3 +1334,42 @@ meta-refresh, so that request is a reload and not a navigation. Not modelled,
 and worth knowing before someone reads the fixture as a plain navigation.
 
 Nothing in the profile is inferred any more.
+
+---
+
+## 2026-10-07 — Certificates are verified now
+
+On by default, with `verify=False` and the CLI's `-k` to opt out. Three
+pieces: RFC 8879 decompression, which until now was accepted and ignored;
+chain validation; and the CertificateVerify signature, which is the part
+that proves the peer holds the key rather than merely owning a copy of
+someone else's chain.
+
+Path validation goes to `cryptography.x509.verification`. Writing it by hand
+would mean reimplementing name constraints and policy handling, which is the
+category of code that is wrong in ways nobody notices until it matters.
+
+**Checked in both directions, because "it did not break anything" is not
+evidence that a check works.** Six live hosts verify. A well-formed leaf from
+a local CA the system does not trust is rejected with "candidates exhausted",
+and the same leaf with that CA explicitly trusted is accepted. A hostname
+mismatch is rejected. A tampered transcript fails the signature.
+
+`rsa_pkcs1` is refused rather than accepted: TLS 1.3 forbids it for
+CertificateVerify, and quietly allowing it would hide a server doing the
+wrong thing.
+
+One rough edge worth recording. The first rejection test used the capture
+tool's self-signed certificate and failed with "invalid extension" rather
+than anything about trust, which would have passed as a success while
+proving nothing about untrusted issuers. Re-running against a well-formed
+leaf from an untrusted CA produced the right reason. A test that passes for
+the wrong reason is worse than one that fails.
+
+Also: the Windows trust store holds at least one certificate `cryptography`
+declines to parse. Skipping it is right; failing the whole store over it is
+not, so the loader now drops unparseable anchors instead.
+
+This closes the caveat that has been in the README since phase 3, and the
+incident that justified it: a free proxy terminated and re-originated the
+TLS, replacing the fingerprint, and nothing noticed.

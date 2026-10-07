@@ -10,6 +10,7 @@ from . import profiles
 from . import headers as header_tools
 from .client import TooManyRedirects, UnsupportedUrl, request
 from .message import Response
+from .certs import CertificateError
 from .proxies import ProxyError
 from .records import TlsAlert
 
@@ -78,6 +79,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-x", "--proxy", metavar="URL",
                         help="http://, socks5:// or socks5h://, with optional "
                              "user:pass@")
+    parser.add_argument("-k", "--insecure", action="store_true",
+                        help="skip certificate verification, as curl's -k does")
     parser.add_argument("--profile", default="firefox157", metavar="NAME")
     parser.add_argument("--timeout", type=float, default=20.0, metavar="SECONDS")
     return parser
@@ -106,8 +109,10 @@ def main(argv: list[str] | None = None) -> int:
             timeout=args.timeout,
             follow_redirects=args.max_redirs if args.location else 0,
             proxy=args.proxy,
+            verify=not args.insecure,
         )
-    except (UnsupportedUrl, TooManyRedirects, TlsAlert, ProxyError) as exc:
+    except (UnsupportedUrl, TooManyRedirects, TlsAlert, ProxyError,
+            CertificateError) as exc:
         raise SystemExit(type(exc).__name__ + ": " + str(exc))
     except OSError as exc:
         raise SystemExit("connection failed: " + str(exc))

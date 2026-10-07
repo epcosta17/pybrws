@@ -7,9 +7,15 @@ from __future__ import annotations
 
 import socket
 
+from . import certs
 from .emitter import build_client_hello
 from .keyexchange import KeyExchange
-from .keyschedule import CIPHER_SUITES, KeySchedule, finished_verify_data
+from .keyschedule import (
+    CIPHER_SUITES,
+    KeySchedule,
+    finished_verify_data,
+    transcript_hash,
+)
 from .parser import _Reader
 from .profiles import firefox157
 from .proxies import open_socket
@@ -134,6 +140,8 @@ def connect(
     profile=firefox157,
     timeout: float = 15.0,
     proxy=None,
+    verify: bool = True,
+    trust_store=None,
 ) -> Connection:
     """Open a TLS 1.3 connection impersonating `profile`.
 
@@ -145,6 +153,11 @@ def connect(
         proxy: a proxy URL or Proxy, or None for a direct connection. The
             handshake is identical either way; only the egress address and
             the TCP/IP signature change.
+        verify: check the certificate chain and the CertificateVerify
+            signature. Turning this off makes the connection trivially
+            interceptable, which a proxy tested during development was
+            doing.
+        trust_store: anchors to trust instead of the system's.
 
     Returns:
         A Connection ready to carry application data.
@@ -152,6 +165,7 @@ def connect(
     Raises:
         HandshakeError: on protocol failures, including an unverifiable
             server Finished.
+        CertificateError: if the chain or the signature does not check out.
         TlsAlert: if the server rejects the handshake.
     """
     key_exchange = KeyExchange([group for group, _ in profile.KEY_SHARE_GROUPS])
@@ -193,6 +207,7 @@ def connect(
         records.read_cipher = Cipher(suite, server_hs_secret)
 
         alpn = ""
+        leaf = None
         while True:
             message = handshake_reader.next_message()
             msg_type = message[0]
@@ -211,14 +226,32 @@ def connect(
                     data = extensions.vector(2)
                     if ext_type == EXT_ALPN:
                         alpn = data[3:].decode("ascii", "replace")
-            elif msg_type not in (
-                CERTIFICATE,
-                COMPRESSED_CERTIFICATE,
-                CERTIFICATE_VERIFY,
-            ):
+            elif msg_type in (CERTIFICATE, COMPRESSED_CERTIFICATE):
+                if verify:
+                    body = message[4:]
+                    if msg_type == COMPRESSED_CERTIFICATE:
+                        body = certs.decompress_certificate(body)
+                    leaf = certs.verify_chain(certs.parse_certificate(body),
+                                              host, trust_store)
+            elif msg_type == CERTIFICATE_VERIFY:
+                if verify:
+                    if leaf is None:
+                        raise HandshakeError(
+                            "CertificateVerify arrived before any certificate"
+                        )
+                    # Signed over the transcript as it stood before this
+                    # message, which is why the check happens here and not
+                    # after the append below.
+                    body = _Reader(message[4:], "CertificateVerify")
+                    certs.verify_signature(leaf, body.uint(2), body.vector(2),
+                                           transcript_hash(suite, bytes(transcript)))
+            else:
                 raise HandshakeError("unexpected handshake message 0x%02x" % msg_type)
 
             transcript += message
+
+        if verify and leaf is None:
+            raise HandshakeError("the server sent no certificate")
 
         client_verify = finished_verify_data(suite, client_hs_secret, bytes(transcript))
         client_finished = u8(FINISHED) + u24(len(client_verify)) + client_verify
