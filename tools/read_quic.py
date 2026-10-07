@@ -32,8 +32,8 @@ from pybrws.hexio import hexdump, save_hex  # noqa: E402
 from pybrws.model import extension_name  # noqa: E402
 from pybrws.parser import parse_client_hello  # noqa: E402
 from pybrws.quic import (QuicError, client_hello_from_datagrams,  # noqa: E402
-                         parameter_name, parse_long_header,
-                         parse_transport_parameters)
+                         is_grease_parameter, parameter_name,
+                         parse_long_header, parse_transport_parameters)
 
 EXT_SERVER_NAME = 0
 EXT_QUIC_TRANSPORT_PARAMETERS = 57
@@ -256,6 +256,71 @@ def report(raw: bytes) -> None:
                                        value.hex() or "(empty)"))
 
 
+def compare(hellos) -> None:
+    """Report what is the same and what differs across several hellos.
+
+    This is the question a single capture cannot answer. If the extension
+    order is stable there is an order to imitate; if it is shuffled per
+    connection then the order is not the fingerprint and the set is. Chrome
+    shuffles and Firefox does not on TCP, but a browser's QUIC stack need not
+    be the same code -- Firefox's is neqo, not NSS.
+    """
+    parsed = [parse_client_hello(raw) for raw in hellos]
+    orders = {}
+    for hello, raw in zip(parsed, hellos):
+        orders.setdefault(tuple(hello.extension_types()), []).append(
+            server_name_of(hello))
+
+    print("extension order across %d connections: %d distinct"
+          % (len(parsed), len(orders)))
+    for index, (order, names) in enumerate(orders.items(), 1):
+        print("  order %d, seen on %d: %s" % (index, len(names),
+                                              ", ".join(n or "?" for n in names)))
+        print("    " + " ".join(str(t) for t in order))
+    if len(orders) == 1:
+        print("  -> stable. There is an order to imitate.")
+    else:
+        print("  -> not stable. The order is drawn per connection, so the set")
+        print("     is the fingerprint and the order is noise to reproduce")
+        print("     only in distribution.")
+
+    print()
+    print("transport parameters across the same connections:")
+    sets = {}
+    for hello in parsed:
+        try:
+            params = parse_transport_parameters(
+                hello.extension(EXT_QUIC_TRANSPORT_PARAMETERS).data)
+        except Exception:
+            continue
+        sets.setdefault(tuple(i for i, _ in params), []).append(
+            server_name_of(hello))
+    print("  %d distinct id sequences" % len(sets))
+    for order, names in sets.items():
+        print("    %s" % " ".join(parameter_name(i) for i in order))
+        print("      on %d: %s" % (len(names),
+                                   ", ".join(n or "?" for n in names)))
+
+    greased = [
+        [i for i, _ in parse_transport_parameters(
+            hello.extension(EXT_QUIC_TRANSPORT_PARAMETERS).data)
+         if is_grease_parameter(i)]
+        for hello in parsed
+        if any(e.type == EXT_QUIC_TRANSPORT_PARAMETERS for e in hello.extensions)
+    ]
+    flat = [i for row in greased for i in row]
+    if flat:
+        print()
+        print("  grease-pattern ids seen: %s"
+              % ", ".join(hex(i) for i in sorted(set(flat))))
+        if len(set(flat)) == 1:
+            print("  -> one value every time, so it is a constant to copy,")
+            print("     not a value drawn per connection.")
+        else:
+            print("  -> it varies, so it is drawn per connection and has to")
+            print("     be generated rather than copied.")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("capture", type=Path, help="a .pcap or .pcapng file")
@@ -263,6 +328,10 @@ def main() -> int:
                         help="UDP destination port, or 0 for every port")
     parser.add_argument("--host", help="keep the connection whose SNI is this")
     parser.add_argument("--out", type=Path, help="where to write the hello")
+    parser.add_argument("--all", action="store_true",
+                        help="compare every recovered hello: whether the "
+                             "extension order is stable across connections, "
+                             "and which parameters vary")
     parser.add_argument("--dump", action="store_true")
     args = parser.parse_args()
 
@@ -290,10 +359,28 @@ def main() -> int:
         if args.host and name == args.host:
             chosen, marker = raw, "   <- chosen"
         print("  recovered %d bytes, sni %s%s" % (len(raw), name, marker))
+
+    if args.all:
+        print()
+        compare(recovered)
+        if args.out is None:
+            return 0
+
+    if chosen is None and args.host:
+        # Falling back to another connection would write a fixture for a
+        # server nobody asked about, which is worse than writing nothing:
+        # the file says Firefox and the measurement says some other host.
+        print()
+        print("no connection carried sni %r. Nothing written." % args.host)
+        print("Captured names are listed above; --all compares all of them.")
+        return 1
     if chosen is None:
-        if args.host:
-            print("no connection carried sni %r; taking the largest" % args.host)
-        chosen = max(recovered, key=len)
+        if len(recovered) > 1:
+            print()
+            print("several connections and no --host, so nothing is written.")
+            print("Pass --host to pick one, or --all to compare them.")
+            return 1
+        chosen = recovered[0]
 
     print()
     report(chosen)

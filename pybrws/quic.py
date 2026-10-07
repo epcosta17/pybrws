@@ -358,6 +358,7 @@ def client_hello_from_datagrams(datagrams) -> bytes:
 # own choosing, so the list is a fingerprint in the same way an extension
 # list is -- and one nothing on TCP has an equivalent of.
 TRANSPORT_PARAMETERS: dict[int, str] = {
+    # RFC 9000 section 18.2.
     0x00: "original_destination_connection_id",
     0x01: "max_idle_timeout",
     0x02: "stateless_reset_token",
@@ -375,9 +376,25 @@ TRANSPORT_PARAMETERS: dict[int, str] = {
     0x0E: "active_connection_id_limit",
     0x0F: "initial_source_connection_id",
     0x10: "retry_source_connection_id",
-    0x11: "version_information",          # RFC 9368
-    0x20: "max_datagram_frame_size",      # RFC 9221
-    0x2AB2: "grease_quic_bit",            # RFC 9287
+    # Registered later. Taken from the IANA registry rather than from reading
+    # a packet and guessing: min_ack_delay in particular is 0xff04de1b, and
+    # an earlier draft codepoint for it looks a lot like one Firefox sends.
+    0x11: "version_information",
+    0x1D: "reset_stream_at",
+    0x20: "max_datagram_frame_size",
+    0x3E: "initial_max_path_id",
+    0x173E: "discard",
+    0x219E: "scone_supported",
+    0x26AB: "google handshake message",
+    0x2AB2: "grease_quic_bit",
+    0x3127: "initial_rtt",
+    0x3128: "google_connection_options",
+    0x3129: "user_agent",
+    0x4752: "google_version",
+    0xFF73DB: "version_information_draft",
+    0x219BBCD0: "google_debug_1",
+    0xFF04DE1B: "min_ack_delay",
+    0x4143434213370002: "bdp_frame",
 }
 
 # RFC 9000 section 18.1: ids of this form are reserved to be ignored, which

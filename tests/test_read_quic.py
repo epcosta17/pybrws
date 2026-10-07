@@ -197,6 +197,67 @@ class TestFiltering(CaptureCase):
         hello = parse_client_hello(self.recover(path))
         self.assertEqual(read_quic.server_name_of(hello), "pybrws.test")
 
+class TestTheChooser(CaptureCase):
+    """What happens when --host names a connection that is not there.
+
+    This started as a silent fallback to the largest hello, which on a real
+    capture picked a different server and wrote the fixture anyway: a file
+    labelled for one host holding a measurement of another. Writing nothing
+    is strictly better.
+    """
+
+    def capture_of_two(self) -> Path:
+        other, _ = client_first_flight(server_name="other.test", padded=True)
+        frames = []
+        for first, second in zip(self.datagrams, other):
+            frames.append(ethernet(ipv4(udp(first))))
+            frames.append(ethernet(ipv4(udp(second))))
+        return self.write(pcapng(frames), ".pcapng")
+
+    def run_tool(self, *arguments) -> tuple[int, str]:
+        import subprocess
+
+        tool = Path(__file__).resolve().parent.parent / "tools" / "read_quic.py"
+        finished = subprocess.run([sys.executable, str(tool), *arguments],
+                                  capture_output=True, text=True)
+        return finished.returncode, finished.stdout + finished.stderr
+
+    def test_an_absent_host_writes_nothing_and_fails(self):
+        capture = self.capture_of_two()
+        target = capture.with_suffix(".hex")
+        self.addCleanup(target.unlink, missing_ok=True)
+        code, output = self.run_tool(str(capture), "--host", "absent.test",
+                                     "--out", str(target))
+        self.assertEqual(code, 1)
+        self.assertFalse(target.exists(), "no fixture for a host not captured")
+        self.assertIn("Nothing written", output)
+
+    def test_several_connections_without_a_host_writes_nothing(self):
+        capture = self.capture_of_two()
+        target = capture.with_suffix(".hex")
+        self.addCleanup(target.unlink, missing_ok=True)
+        code, _ = self.run_tool(str(capture), "--out", str(target))
+        self.assertEqual(code, 1)
+        self.assertFalse(target.exists())
+
+    def test_the_named_host_is_written(self):
+        capture = self.capture_of_two()
+        target = capture.with_suffix(".hex")
+        self.addCleanup(target.unlink, missing_ok=True)
+        code, _ = self.run_tool(str(capture), "--host", "pybrws.test",
+                                "--out", str(target))
+        self.assertEqual(code, 0)
+        from pybrws.hexio import load_hex
+        self.assertEqual(load_hex(target), self.expected)
+
+    def test_one_connection_needs_no_host(self):
+        capture = self.write(pcapng(self.frames), ".pcapng")
+        target = capture.with_suffix(".hex")
+        self.addCleanup(target.unlink, missing_ok=True)
+        code, _ = self.run_tool(str(capture), "--out", str(target))
+        self.assertEqual(code, 0)
+        self.assertTrue(target.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
