@@ -271,10 +271,12 @@ FIREFOX_QUIC_ORDERS = [
     (0, 13, 45, 28, 65281, 43, 51, 5, 27, 10, 23, 34, 16, 57, 65037),
 ]
 
-# What was talking to bing.com in the same capture, with Google transport
-# parameters and eleven extensions. Here to document the hazard: reading it
-# as the same client made Firefox's order look less structured than it is.
-EDGE_QUIC_ORDER = (45, 10, 0, 16, 27, 17613, 65037, 51, 43, 13, 57)
+# Chrome, which was running alongside Firefox during the capture: eleven
+# extensions, Google transport parameters, and a 218-byte ECH against
+# Firefox's 282. Here to document the hazard, which bit twice: reading it as
+# the same client made Firefox's order look less structured than it is, and
+# made a constant GREASE id look as though it varied.
+CHROME_QUIC_ORDER = (45, 10, 0, 16, 27, 17613, 65037, 51, 43, 13, 57)
 
 NSS_MARKERS = (65281, 34, 5, 23, 28)
 
@@ -304,7 +306,7 @@ class TestTheCaptureItself(unittest.TestCase):
 
     def test_the_other_client_is_distinguishable(self):
         firefox = frozenset(FIREFOX_QUIC_ORDERS[0])
-        other = frozenset(EDGE_QUIC_ORDER)
+        other = frozenset(CHROME_QUIC_ORDER)
         self.assertNotEqual(firefox, other)
         for marker in NSS_MARKERS:
             self.assertIn(marker, firefox)

@@ -2090,3 +2090,49 @@ one.
 Not concluded. It needs the bytes looked at, and the ECH extension length
 compared against the 282 of a greased one, which is exactly what the new
 per-connection line prints.
+
+## 2026-10-07 — Two corrections, both from the same mistake
+
+The per-connection columns settled the open question and overturned two
+things written an hour earlier. Both errors were the same error.
+
+**The GREASE transport parameter is constant.** I wrote that Firefox draws it
+per connection "with an eight-byte one observed". It does not: `0xff02de1a`
+appears in all six Firefox connections. The eight-byte one,
+`0x3ce1db6c726e52b5`, belongs to the other client in the capture. I had
+mixed the two again, in exactly the way I had just finished fixing the tool
+to prevent, one report earlier.
+
+And a constant is interesting in its own right. A value that never changes is
+not greasing anything, and this one carries the varint 1000, which is a
+plausible `min_ack_delay`. The registered codepoint for that is 0xff04de1b,
+one of a family of `0xff0?de1?` draft codepoints, so 0xff02de1a is most
+likely an old draft of it that satisfies the 31N+27 reserved pattern by
+coincidence. The tool still prints it as GREASE because the formula says so.
+Not identified, and labelled as not identified.
+
+**The real-ECH hypothesis was wrong.** `cloudflare-ech.com` sends three
+transport parameters where the others send fourteen, and I guessed that the
+host publishes a real ECH config, so what was captured was a decoy outer
+hello with the working parameters encrypted inside. Its ECH extension is 282
+bytes -- the same greased length as every other connection in the capture.
+No real ECH anywhere. The guess was plausible, fitted the evidence I had, and
+was simply wrong, which is the argument for printing the column rather than
+reasoning about what it would contain.
+
+So the three parameters needed another explanation, and the one that holds is
+that there is nothing to explain about the *decoding*: it is real. Three
+parameters measure about 26 bytes on the wire against 86 for fourteen, a
+difference of 60. `www.cloudflare.com` and `cloudflare-ech.com` have server
+names of equal length and hellos of 1900 and 1840 bytes. Sixty, predicted
+from the parameter count alone and matching the observed hello sizes, is
+independent of the decoder that produced the count.
+
+What Firefox is doing differently with that one host remains unknown. It is
+one connection in six and nothing rests on it.
+
+**And the other client is Chrome, not Edge.** I attributed the bing.com
+connection to Edge on the grounds that it was a Windows machine. Ernesto had
+Chrome open at the time. The attribution did not matter to any measurement,
+but it was stated with more confidence than it was held with, which is the
+habit worth not having.

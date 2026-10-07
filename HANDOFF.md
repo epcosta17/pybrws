@@ -136,24 +136,35 @@ the suite from the binder length rather than naming it.
      storing one, and no test may assert a single order.
    - **Three cipher suites**, `0x1301 0x1303 0x1302`, against fifteen on TCP,
      since QUIC forbids TLS 1.2. The cheapest tell on the protocol.
-   - **Transport parameters are not sorted.** `reset_stream_at` (0x1d) and
-     the GREASE id come before `max_datagram_frame_size` (0x20). aioquic
-     sorts; Firefox does not. The GREASE id is drawn per connection, with an
-     eight-byte one observed, so it is generated rather than copied.
+   - **Fourteen transport parameters, not sorted.** `reset_stream_at` (0x1d)
+     and `0xff02de1a` come before `max_datagram_frame_size` (0x20). aioquic
+     sorts its own; Firefox does not.
+   - **`0xff02de1a` is constant**, in all six connections, carrying the
+     varint 1000. It satisfies the 31N+27 reserved pattern, so the tool
+     labels it GREASE, but a value that never changes is not greasing and
+     1000 is a plausible `min_ack_delay` -- whose registered codepoint is
+     0xff04de1b, one of a family of `0xff0?de1?` draft codepoints. Treated as
+     a constant to copy. Not identified.
 
-   Open: `cloudflare-ech.com` has Firefox's exact set and pinned tail but
-   three transport parameters where the others send fourteen, which is not a
-   working set. The suspicion is a real-ECH outer hello -- a decoy with the
-   working parameters encrypted inside -- which would mean a QUIC profile has
-   two cases. It needs the bytes looked at; `--all` now prints the ECH
-   extension length per connection, which is what would distinguish a real
-   ECH from the greased 282.
+   Measured and unexplained: `cloudflare-ech.com` has Firefox's exact set and
+   pinned tail but **three** transport parameters where the other five send
+   fourteen -- `max_ack_delay`, `initial_source_connection_id`,
+   `version_information` and nothing else, which carries no flow control
+   credit at all. It is not a decoder fault and not a real-ECH outer hello:
+   its ECH extension is 282 bytes, the same greased length as every other
+   connection. The byte count corroborates it independently -- three
+   parameters measure about 26 bytes against 86 for fourteen, a difference of
+   60, and `www.cloudflare.com` and `cloudflare-ech.com` have equal-length
+   server names and hellos of 1900 and 1840 bytes. So it is real and the
+   trigger is unknown. One connection in six; nothing is built on it.
 
    **A capture of port 443 holds more than the browser under test.** The
-   first one mixed Firefox with something Chromium-shaped talking to
-   bing.com, eleven extensions and Google transport parameters, and reading
-   it as one client made the order look less structured than it is. `--all`
-   groups by extension set first for that reason.
+   first one had Chrome running alongside Firefox, and its connection to
+   bing.com -- eleven extensions, a 218-byte ECH against Firefox's 282, and
+   Google transport parameters -- read as the same client made Firefox's
+   order look less structured than it is, and made a constant GREASE id look
+   as though it varied. Both wrong readings came from the same mistake.
+   `--all` groups by extension set first for that reason.
 
    The intervention point for the write side is known. aioquic's
    `push_client_hello` hardcodes its own extension order, but it is called
