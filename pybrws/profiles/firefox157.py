@@ -184,9 +184,12 @@ H1_COOKIE_BEFORE = "Upgrade-Insecure-Requests"
 # Connection for the form. Content-Length always follows Content-Type and
 # precedes Origin.
 #
-# One artefact to know about: the form capture was submitted by script, so
-# Firefox omitted Sec-Fetch-User. A human clicking the button sends
-# `Sec-Fetch-User: ?1`, which this set therefore does not reproduce.
+# Observed: neither POST carries `Sec-Fetch-User`, while both navigation
+# captures do. The form capture was submitted by script, and the Fetch
+# Metadata spec sends that header only for a user-activated navigation, so
+# the submission method is one explanation. That it is the right one is
+# UNVERIFIED: Firefox may simply never send it on a form POST. Settle it with
+# `tools/catch_request.py --post form-click`, which waits for a real click.
 
 H1_POST_FORM_HEADERS = [
     ("Host", "{authority}"),

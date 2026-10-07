@@ -1219,11 +1219,17 @@ the wire order matches the captures and that the Akamai fingerprint is
 unchanged either way. Both sets reproduce their capture byte for byte and a
 test holds it.
 
-**One artefact, recorded rather than hidden.** The form capture was submitted
-by script, so Firefox omitted `Sec-Fetch-User`. A human clicking the button
-sends `Sec-Fetch-User: ?1`, so the form set is faithful to a scripted submit
-and not to a clicked one. Capturing the clicked version needs a page that
-waits for a real click.
+**One observation, and an explanation that was asserted rather than tested.**
+Neither POST carries `Sec-Fetch-User`, while both navigation captures do.
+That much is measured. The claim that the cause is the scripted submit, since
+Fetch Metadata sends the header only for a user-activated navigation, is a
+hypothesis: Firefox may simply never send it on a form POST, which fits the
+same evidence. Asserting the mechanism was the same move that produced the
+retracted glassdoor reading, on a smaller scale.
+
+`tools/catch_request.py --post form-click` now serves a page with a button
+and waits, so the two can be told apart. Until that capture exists the
+profile comment says observed, not explained.
 
 The HTTP/2 variants are derived from the HTTP/1.1 ones by the rule the
 navigation captures confirmed: drop Host and Connection, lowercase, append

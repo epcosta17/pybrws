@@ -115,6 +115,19 @@ FETCH_PAGE = (
 )
 
 
+CLICK_PAGE = (
+    b"<!doctype html><title>pybrws</title>"
+    b"<style>body{font:16px system-ui;padding:3rem}"
+    b"button{font:inherit;padding:.6rem 1.2rem}</style>"
+    b"<form method=post action=/submit "
+    b"enctype=application/x-www-form-urlencoded>"
+    b"<input type=hidden name=field value=value>"
+    b"<p>Click the button. Submitting by hand, rather than by script, is the "
+    b"difference being measured: only a user-activated navigation carries "
+    b"Sec-Fetch-User."
+    b"<p><button type=submit>Submit</button></form>"
+)
+
 def page_response(page: bytes) -> bytes:
     lines = [
         "HTTP/1.1 200 OK",
@@ -231,7 +244,9 @@ def capture(host: str, port: int, hostname: str, alpn: str, wait: float,
                               % (attempt, peer[1],
                                  lines[0].split(b" ")[0].decode(), target))
                         try:
-                            page = FORM_PAGE if want_post == "form" else FETCH_PAGE
+                            page = {"form": FORM_PAGE,
+                                    "form-click": CLICK_PAGE,
+                                    "fetch": FETCH_PAGE}[want_post]
                             tls.sendall(page_response(page))
                             tls.settimeout(3.0)
                             while tls.recv(4096):
@@ -286,10 +301,13 @@ def main() -> int:
     parser.add_argument("--hostname", default="pybrws.127.0.0.1.nip.io",
                         help="name in the certificate, must match the URL")
     parser.add_argument("--alpn", default="http/1.1", choices=["http/1.1", "h2"])
-    parser.add_argument("--post", choices=["form", "fetch"], dest="want_post",
+    parser.add_argument("--post", choices=["form", "form-click", "fetch"],
+                        dest="want_post",
                         help="answer with a page that posts, then capture that "
-                             "POST. A form sends a navigation, fetch sends an "
-                             "XHR, and the two carry different headers")
+                             "POST. `form` submits by script and `form-click` "
+                             "waits for a real click, which is the only way to "
+                             "tell whether Sec-Fetch-User depends on user "
+                             "activation here; `fetch` sends an XHR")
     parser.add_argument("--any-request", action="store_true",
                         help="capture subresources too, instead of waiting "
                              "for a document request")
