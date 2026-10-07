@@ -8,7 +8,8 @@ from __future__ import annotations
 import socket
 
 from . import certs
-from .emitter import build_client_hello
+from .emitter import build_client_hello, retry_hello
+from . import keyexchange
 from .keyexchange import KeyExchange
 from .keyschedule import (
     CIPHER_SUITES,
@@ -34,6 +35,9 @@ COMPRESSED_CERTIFICATE = 0x19  # RFC 8879, sent because we offer compress_certif
 EXT_SUPPORTED_VERSIONS = 43
 EXT_KEY_SHARE = 51
 EXT_ALPN = 16
+EXT_COOKIE = 44
+
+MESSAGE_HASH = 0xFE
 
 HELLO_RETRY_REQUEST_RANDOM = bytes.fromhex(
     "cf21ad74e59a6111be1d8c021e65b891c2a211167abb8c5e079e09e2c8a8339c"
@@ -62,6 +66,7 @@ class ServerHello:
         self.selected_version: int | None = None
         self.selected_group: int | None = None
         self.peer_key_share: bytes = b""
+        self.cookie: bytes | None = None
 
         extensions = _Reader(body.vector(2), "ServerHello extensions")
         while extensions.remaining:
@@ -71,7 +76,10 @@ class ServerHello:
                 self.selected_version = int.from_bytes(data[:2], "big")
             elif ext_type == EXT_KEY_SHARE:
                 self.selected_group = int.from_bytes(data[:2], "big")
-                self.peer_key_share = data[4:]
+                # A HelloRetryRequest names a group and sends no key with it.
+                self.peer_key_share = data[4:] if len(data) > 2 else b""
+            elif ext_type == EXT_COOKIE:
+                self.cookie = data
 
     @property
     def is_hello_retry_request(self) -> bool:
@@ -99,6 +107,48 @@ class _HandshakeReader:
                     "expected a handshake record, got content type " + str(content_type)
                 )
             self.buffer += body
+
+
+def suite_for(hello: "ServerHello"):
+    """The cipher suite a ServerHello or HelloRetryRequest selected."""
+    suite = CIPHER_SUITES.get(hello.cipher_suite)
+    if suite is None:
+        raise HandshakeError("unsupported cipher suite 0x%04x" % hello.cipher_suite)
+    return suite
+
+
+def _retry(client_hello: bytes, hello: "ServerHello", raw_message: bytes,
+           key_exchange: KeyExchange, suite):
+    """Answer a HelloRetryRequest.
+
+    Returns the second ClientHello, a key exchange for the group the server
+    asked for, and the rewritten transcript.
+    """
+    group = hello.selected_group
+    if group is None:
+        raise HandshakeError("HelloRetryRequest named no group")
+    if group in key_exchange.groups:
+        # The server already had a share for it, so asking again means it
+        # will ask forever.
+        raise HandshakeError(
+            "HelloRetryRequest asked for 0x%04x, which was already offered" % group
+        )
+    if not keyexchange.supported(group):
+        raise HandshakeError(
+            "HelloRetryRequest asked for 0x%04x, which this client cannot produce"
+            % group
+        )
+
+    retry_exchange = KeyExchange([group])
+    second = retry_hello(client_hello, group, retry_exchange.public_share(group),
+                         hello.cookie)
+
+    # RFC 8446 section 4.4.1: the first ClientHello is replaced in the
+    # transcript by a synthetic message carrying only its hash. Appending it
+    # as usual would make every later verification fail.
+    digest = transcript_hash(suite, client_hello[5:])
+    synthetic = u8(MESSAGE_HASH) + u24(len(digest)) + digest
+    return second, retry_exchange, bytearray(synthetic + raw_message)
 
 
 class Connection:
@@ -184,17 +234,20 @@ def connect(
         message = handshake_reader.next_message()
         hello = ServerHello(message)
         if hello.is_hello_retry_request:
-            raise HandshakeError(
-                "HelloRetryRequest for group 0x%04x is not implemented"
-                % (hello.selected_group or 0)
+            client_hello, key_exchange, transcript = _retry(
+                client_hello, hello, message, key_exchange, suite_for(hello)
             )
+            records.write(HANDSHAKE, client_hello[5:])
+            message = handshake_reader.next_message()
+            hello = ServerHello(message)
+            if hello.is_hello_retry_request:
+                raise HandshakeError("the server sent a second "
+                                     "HelloRetryRequest, which RFC 8446 forbids")
         if hello.selected_version != 0x0304:
             raise HandshakeError(
                 "server did not select TLS 1.3 (got %r)" % (hello.selected_version,)
             )
-        suite = CIPHER_SUITES.get(hello.cipher_suite)
-        if suite is None:
-            raise HandshakeError("unsupported cipher suite 0x%04x" % hello.cipher_suite)
+        suite = suite_for(hello)
         transcript += message
 
         shared_secret = key_exchange.shared_secret(

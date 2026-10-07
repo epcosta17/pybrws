@@ -13,7 +13,17 @@ from cryptography.hazmat.primitives.asymmetric import ec, mlkem, x25519
 
 X25519 = 0x001D
 SECP256R1 = 0x0017
+SECP384R1 = 0x0018
+SECP521R1 = 0x0019
 X25519MLKEM768 = 0x11EC
+
+# A HelloRetryRequest may ask for any group the ClientHello advertised, not
+# only the ones it sent a share for.
+CURVES = {
+    SECP256R1: ec.SECP256R1,
+    SECP384R1: ec.SECP384R1,
+    SECP521R1: ec.SECP521R1,
+}
 
 MLKEM768_PUBLIC_SIZE = 1184
 MLKEM768_CIPHERTEXT_SIZE = 1088
@@ -37,15 +47,15 @@ class KeyExchange:
                 self._x25519[group] = x25519.X25519PrivateKey.generate()
             if group == X25519MLKEM768:
                 self._mlkem[group] = mlkem.MLKEM768PrivateKey.generate()
-            if group == SECP256R1:
-                self._ec[group] = ec.generate_private_key(ec.SECP256R1())
-            if group not in (X25519, SECP256R1, X25519MLKEM768):
+            if group in CURVES:
+                self._ec[group] = ec.generate_private_key(CURVES[group]())
+            if group not in CURVES and group not in (X25519, X25519MLKEM768):
                 raise ValueError(f"unsupported group 0x{group:04x}")
 
     def public_share(self, group: int) -> bytes:
         if group == X25519:
             return self._x25519[group].public_key().public_bytes(*_RAW)
-        if group == SECP256R1:
+        if group in CURVES:
             return self._ec[group].public_key().public_bytes(*_POINT)
         if group == X25519MLKEM768:
             return (
@@ -63,8 +73,10 @@ class KeyExchange:
             peer = x25519.X25519PublicKey.from_public_bytes(peer_share)
             return self._x25519[group].exchange(peer)
 
-        if group == SECP256R1:
-            peer = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), peer_share)
+        if group in CURVES:
+            peer = ec.EllipticCurvePublicKey.from_encoded_point(
+                CURVES[group](), peer_share
+            )
             return self._ec[group].exchange(ec.ECDH(), peer)
 
         if group == X25519MLKEM768:
@@ -81,3 +93,8 @@ class KeyExchange:
             return mlkem_secret + self._x25519[group].exchange(peer)
 
         raise ValueError(f"unsupported group 0x{group:04x}")
+
+
+def supported(group: int) -> bool:
+    """Can a share be produced for this group?"""
+    return group in CURVES or group in (X25519, X25519MLKEM768)

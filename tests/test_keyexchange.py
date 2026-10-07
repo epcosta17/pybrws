@@ -31,8 +31,22 @@ class TestShareSizes(unittest.TestCase):
         mlkem.MLKEM768PublicKey.from_public_bytes(share[:-32])
 
     def test_rejects_unknown_group(self):
+        # 0x0100 is ffdhe2048, which the profile does not advertise and this
+        # client cannot produce. secp384r1 used to stand here and now works,
+        # because a HelloRetryRequest may ask for any advertised group.
         with self.assertRaises(ValueError):
-            KeyExchange([0x0018])
+            KeyExchange([0x0100])
+
+    def test_every_advertised_group_can_be_produced(self):
+        from pybrws.keyexchange import supported
+        from pybrws.parser import _Reader
+
+        payload = dict(firefox157.EXTENSIONS)[10]
+        groups = _Reader(_Reader(payload).vector(2))
+        advertised = [groups.uint(2) for _ in range(groups.remaining // 2)]
+        unsupported = [g for g in advertised if not supported(g)]
+        self.assertEqual(unsupported, [],
+                         "a retry can ask for any of these")
 
 
 class TestSharedSecret(unittest.TestCase):

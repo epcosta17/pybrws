@@ -1373,3 +1373,50 @@ not, so the loader now drops unparseable anchors instead.
 This closes the caveat that has been in the README since phase 3, and the
 incident that justified it: a free proxy terminated and re-originated the
 TLS, replacing the fingerprint, and nothing noticed.
+
+---
+
+## 2026-10-07 — HelloRetryRequest
+
+A server that wants a group the ClientHello advertised but sent no share for
+answers with a HelloRetryRequest instead of failing. Cloudflare, Google and
+example.com all did exactly that earlier in the project, when the
+post-quantum share was removed to see what happened; until now the client
+raised.
+
+Two parts of it are easy to get subtly wrong.
+
+**The second ClientHello must be identical to the first except for the
+key_share.** Re-emitting it from the profile would change the random, the
+session id and the greased ECH, which is three differences too many. So it
+is rebuilt from the original bytes: parse, swap one extension, re-serialise.
+A test asserts every other field and every other extension payload is
+untouched.
+
+**The transcript is rewritten, not appended to.** RFC 8446 section 4.4.1
+replaces the first ClientHello with a synthetic `message_hash` message
+carrying only its hash:
+
+    0xFE || 00 00 <hash length> || Hash(ClientHello1)
+
+Getting this wrong does not fail at the point of the mistake. It fails much
+later, when the server's Finished does not verify, with nothing pointing
+back at the cause.
+
+Which is also why the live test is worth more than it looks: provoking a
+real retry from Cloudflare, Google, example.com and peet.ws and completing
+all four means the rewrite is right, because the Finished check would
+otherwise reject it.
+
+**Two guards.** A retry naming a group that was already offered is refused
+rather than answered, since answering sends the same thing again and invites
+a loop. A second retry in one handshake is refused, which RFC 8446 forbids.
+
+The curve list needed widening on the way: the profile advertises secp384r1
+and secp521r1, and `KeyExchange` could not produce either, so a retry asking
+for one would have failed on our side. A test now asserts every advertised
+group can be produced, since advertising what cannot be delivered is the
+same class of fault as the HPACK table size.
+
+**Unmeasured:** where a browser places the cookie extension in the second
+ClientHello. Ours goes last, which is legal. No capture covers it.
