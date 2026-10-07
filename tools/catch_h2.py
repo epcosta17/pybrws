@@ -16,6 +16,7 @@ Then open https://pybrws.127.0.0.1.nip.io:4443 and accept the certificate.
 from __future__ import annotations
 
 import argparse
+import json
 import socket
 import ssl
 import sys
@@ -171,17 +172,43 @@ class Session:
     def run(self, deadline: float) -> bool:
         if self.read_exactly(len(PREFACE)) != PREFACE:
             raise ValueError("client did not send the HTTP/2 preface")
+        self.fingerprint = FRAME_FINGERPRINT
         self.tls.sendall(frame(SETTINGS, 0, 0, b""))
 
         while time.monotonic() < deadline:
             frame_type, flags, stream_id, payload = self.next_frame()
 
             if frame_type == SETTINGS and not flags & FLAG_ACK:
+                # Recorded, not merely acknowledged. The values and their
+                # order are half the HTTP/2 fingerprint, and this tool used
+                # to throw them away -- for Firefox they came from peet.ws
+                # instead, which hid the gap.
+                if self.fingerprint.get("settings") is None:
+                    self.fingerprint["settings"] = [
+                        [int.from_bytes(payload[i:i + 2], "big"),
+                         int.from_bytes(payload[i + 2:i + 6], "big")]
+                        for i in range(0, len(payload) - 5, 6)
+                    ]
                 self.tls.sendall(frame(SETTINGS, FLAG_ACK, 0))
+            elif frame_type == WINDOW_UPDATE and stream_id == 0:
+                self.fingerprint.setdefault("connection_window_update",
+                                            int.from_bytes(payload, "big"))
             elif frame_type == GOAWAY:
                 return False
             elif frame_type in (HEADERS, 0x09):
                 stream = self.streams.setdefault(stream_id, Stream())
+                if frame_type == HEADERS and "first_stream_id" not in self.fingerprint:
+                    self.fingerprint["first_stream_id"] = stream_id
+                    self.fingerprint["headers_flags"] = flags
+                    if flags & FLAG_PRIORITY and len(payload) >= 5:
+                        dependency = int.from_bytes(payload[:4], "big")
+                        self.fingerprint["headers_priority"] = {
+                            "exclusive": bool(dependency >> 31),
+                            "dependency": dependency & 0x7FFFFFFF,
+                            # The wire carries weight minus one, as RFC 7540
+                            # section 6.3 specifies; reported as sent.
+                            "weight": payload[4] + 1,
+                        }
                 block = payload[5:] if flags & FLAG_PRIORITY else payload
                 stream.block += block
                 if flags & FLAG_END_HEADERS:
@@ -209,6 +236,9 @@ class Session:
                 if self.handle_complete(stream_id, stream):
                     return True
         return False
+
+
+FRAME_FINGERPRINT: dict = {}
 
 
 def render(headers: list[tuple[str, str]], body: bytes) -> str:
@@ -279,6 +309,19 @@ def main() -> int:
 
     text = render(captured.captured, captured.captured_body)
     Path(args.out).write_text(text + "\n", encoding="utf-8")
+
+    # The frames go beside the headers rather than inside them: the headers
+    # file is a byte-exact reference and this is decoded structure.
+    frames = getattr(server, "fingerprint", None) if "server" in dir() else None
+    if frames is None:
+        frames = FRAME_FINGERPRINT
+    if frames:
+        sidecar = Path(args.out).with_suffix(".frames.json")
+        sidecar.write_text(json.dumps(frames, indent=2, sort_keys=True) + "\n",
+                           encoding="utf-8")
+        print("wrote " + str(sidecar))
+        for key in sorted(frames):
+            print("  %-26s %s" % (key, frames[key]))
     print("wrote %s" % args.out)
     print()
     print(text)

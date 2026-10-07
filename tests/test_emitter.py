@@ -1,5 +1,6 @@
 """Tests for pybrws.emitter against the reference capture."""
 
+import os
 import unittest
 from pathlib import Path
 
@@ -109,6 +110,123 @@ class TestEmitter(unittest.TestCase):
     def test_output_round_trips_through_the_parser(self):
         raw = build_client_hello(REFERENCE_HOSTNAME)
         self.assertEqual(parse_client_hello(raw).raw, raw)
+
+class TestGreaseDraws(unittest.TestCase):
+    """Per-connection GREASE, and which draws are shared.
+
+    Measured from six Chrome 155 captures: five independent values -- the
+    first cipher suite, the first and last extension, the first signature
+    algorithm, the first supported version -- and one shared between
+    supported_groups and key_share, identical in all six, which the protocol
+    requires since the key_share entry has to name a group that was offered.
+    """
+
+    def context(self, rng=None):
+        from pybrws.emitter import Context
+
+        return Context("a.test", rng or os.urandom)
+
+    def test_a_slot_asked_twice_gives_the_same_value(self):
+        ctx = self.context()
+        self.assertEqual(ctx.grease("groups"), ctx.grease("groups"))
+
+    def test_different_slots_are_independent_draws(self):
+        # Not a guarantee they differ -- sixteen values, so a collision is
+        # expected once in sixteen. Over enough contexts they must disagree
+        # at least once, which a shared value never would.
+        disagreed = False
+        for _ in range(200):
+            ctx = self.context()
+            if ctx.grease("cipher") != ctx.grease("versions"):
+                disagreed = True
+                break
+        self.assertTrue(disagreed, "the slots are not drawing independently")
+
+    def test_every_value_is_a_real_grease_value(self):
+        from pybrws.model import GREASE_VALUES
+
+        for index in range(100):
+            ctx = self.context()
+            self.assertIn(ctx.grease("slot%d" % index), GREASE_VALUES)
+
+    def test_two_connections_draw_differently(self):
+        values = {self.context().grease("cipher") for _ in range(200)}
+        self.assertGreater(len(values), 1, "the value is not per-connection")
+
+    def test_the_draw_covers_the_whole_space(self):
+        from pybrws.model import GREASE_VALUES
+
+        seen = {self.context().grease("cipher") for _ in range(4000)}
+        self.assertEqual(seen, set(GREASE_VALUES))
+
+    def test_a_fixed_rng_makes_it_replayable(self):
+        first = self.context(lambda n: b"\x07" * n).grease("cipher")
+        second = self.context(lambda n: b"\x07" * n).grease("cipher")
+        self.assertEqual(first, second)
+
+    def test_the_grease_table_is_indexable(self):
+        # GREASE_VALUES is a frozenset for membership tests and cannot be
+        # indexed, which only shows up when something tries to draw from it.
+        from pybrws.model import GREASE_DRAW, GREASE_VALUES
+
+        self.assertEqual(set(GREASE_DRAW), set(GREASE_VALUES))
+        self.assertEqual(len(GREASE_DRAW), 16)
+        self.assertEqual(GREASE_DRAW[0], 0x0A0A)
+
+
+class TestTheTwoKindsOfProfile(unittest.TestCase):
+    """A profile either stores an extension order or draws one."""
+
+    def test_a_stored_order_is_used_verbatim(self):
+        built = parse_client_hello(build_client_hello("a.test"))
+        self.assertEqual(built.extension_types(),
+                         [kind for kind, _ in firefox157.EXTENSIONS])
+
+    def test_a_drawing_profile_is_asked_per_extension(self):
+        from pybrws.emitter import Context, build_extensions
+
+        asked = []
+
+        class Drawer:
+            @staticmethod
+            def extension_order(ctx):
+                return [23, 18, 35]
+
+            @staticmethod
+            def payload_for(kind, ctx):
+                asked.append(kind)
+                return b""
+
+        out = build_extensions(Drawer, Context("a.test", os.urandom))
+        self.assertEqual(asked, [23, 18, 35])
+        # Three empty extensions: four bytes of header each.
+        self.assertEqual(len(out), 12)
+
+    def test_the_stored_path_is_still_taken_when_there_is_no_draw(self):
+        # The distinction is the measurement: a stored order is a stronger
+        # claim than a drawn one, and collapsing both into a draw would throw
+        # it away.
+        self.assertFalse(hasattr(firefox157, "extension_order"))
+        self.assertTrue(hasattr(firefox157, "EXTENSIONS"))
+
+    def test_a_callable_cipher_list_is_called(self):
+        calls = []
+
+        class Greased:
+            LEGACY_VERSION = firefox157.LEGACY_VERSION
+            RECORD_VERSION = firefox157.RECORD_VERSION
+            SESSION_ID_SIZE = firefox157.SESSION_ID_SIZE
+            COMPRESSION_METHODS = firefox157.COMPRESSION_METHODS
+            EXTENSIONS = []
+
+            @staticmethod
+            def CIPHER_SUITES(ctx):
+                calls.append(ctx)
+                return (0x0A0A, 0x1301)
+
+        built = parse_client_hello(build_client_hello("a.test", profile=Greased))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(list(built.cipher_suites), [0x0A0A, 0x1301])
 
 
 if __name__ == "__main__":

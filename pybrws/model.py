@@ -43,6 +43,14 @@ EXTENSION_NAMES: dict[int, str] = {
     45: "psk_key_exchange_modes",
     # transport
     57: "quic_transport_parameters",  # QUIC only, RFC 9001 section 8.2
+    # Chrome's private codepoints. All three are *unassigned* in the IANA
+    # registry, so these names come from the ecosystem and from the shape of
+    # the payload, not from a standard. Named rather than left as
+    # "unknown(51764)" because a reader comparing two Chrome captures needs to
+    # know which ones to expect.
+    17613: "application_settings",    # ALPS, Chrome's second codepoint for it
+    51764: "trust_anchors?",          # a list of 5-byte ids; constant per build
+    4832: "unknown_chrome_0x12e0",    # two constant bytes; purpose unknown
     # legacy and compatibility
     21: "padding",
     23: "extended_master_secret",
@@ -50,6 +58,12 @@ EXTENSION_NAMES: dict[int, str] = {
     34: "delegated_credentials",        # Firefox / NSS
     65281: "renegotiation_info",
 }
+
+
+# The same values as a sequence, for drawing one. The set above is for
+# membership tests; a frozenset cannot be indexed, which is the kind of
+# thing that only shows up when something tries.
+GREASE_DRAW: tuple[int, ...] = tuple(sorted(GREASE_VALUES))
 
 
 def extension_name(ext_type: int) -> str:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Callable, Sequence
 
-from .model import Extension
+from .model import Extension, GREASE_DRAW
 from .profiles import firefox157
 from .wire import u8, u16, u24, extension, vector
 
@@ -24,12 +24,13 @@ Rng = Callable[[int], bytes]
 class Context:
     """Per-connection state handed to a profile's payload generators."""
 
-    __slots__ = ("hostname", "key_exchange", "_rng")
+    __slots__ = ("hostname", "key_exchange", "_rng", "_grease")
 
     def __init__(self, hostname: str, rng: Rng, key_exchange=None) -> None:
         self.hostname = hostname
         self.key_exchange = key_exchange
         self._rng = rng
+        self._grease: dict[str, int] = {}
 
     def random(self, n: int) -> bytes:
         data = self._rng(n)
@@ -40,8 +41,45 @@ class Context:
     def choice(self, options: Sequence[int]) -> int:
         return options[self.random(1)[0] % len(options)]
 
+    def grease(self, slot: str) -> int:
+        """A GREASE value for `slot`, drawn once per connection.
+
+        Memoised by slot because the draws are not all independent. Chrome
+        puts a fresh value at the front of its cipher suites, its signature
+        algorithms, its supported versions, and at both ends of its extension
+        list -- five independent draws -- but `supported_groups` and
+        `key_share` share one, measured identical in all six captures, which
+        the protocol requires: the key_share entry has to name a group the
+        client offered.
+
+        So `ctx.grease("groups")` asked twice gives the same value, and
+        `ctx.grease("cipher")` is a different draw.
+        """
+        if slot not in self._grease:
+            self._grease[slot] = GREASE_DRAW[
+                self.random(1)[0] % len(GREASE_DRAW)]
+        return self._grease[slot]
+
 
 def build_extensions(profile, ctx: Context) -> bytes:
+    """The extensions block, in whatever order the profile says.
+
+    Two kinds of profile. One stores an ordered list, because its browser
+    sends the same order every time -- Firefox over TCP. The other draws an
+    order per connection and answers for one extension at a time, because its
+    browser shuffles: Chrome on every protocol, and Firefox over QUIC. A
+    profile of the second kind supplies `extension_order` and `payload_for`.
+
+    Keeping the stored kind is not backwards compatibility for its own sake:
+    a stored order is a stronger claim than a drawn one, and flattening both
+    into a draw would lose the distinction that was measured.
+    """
+    if hasattr(profile, "extension_order"):
+        out = bytearray()
+        for ext_type in profile.extension_order(ctx):
+            out += extension(ext_type, profile.payload_for(ext_type, ctx))
+        return bytes(out)
+
     out = bytearray()
     for ext_type, payload in profile.EXTENSIONS:
         data = payload(ctx) if callable(payload) else payload
@@ -70,7 +108,11 @@ def build_client_hello(
     """
     ctx = Context(hostname, rng or os.urandom, key_exchange)
 
-    ciphers = b"".join(u16(suite) for suite in profile.CIPHER_SUITES)
+    # A profile whose cipher list carries a per-connection GREASE value
+    # supplies a callable; one with a fixed list supplies the list.
+    suites = (profile.CIPHER_SUITES(ctx) if callable(profile.CIPHER_SUITES)
+              else profile.CIPHER_SUITES)
+    ciphers = b"".join(u16(suite) for suite in suites)
 
     body = (
         u16(profile.LEGACY_VERSION)
