@@ -66,24 +66,38 @@ Unmeasured, and marked: the pattern of later WINDOW_UPDATE frames, which
 Firefox batches and this client does not; and where a browser puts the cookie
 extension in the ClientHello after a HelloRetryRequest.
 
-**The resumed ClientHello** is half measured. Our own side is verified: it
-adds pre_shared_key and nothing else, keeps the relative order of the other
-seventeen extensions, puts the binder last as RFC 8446 4.2.11 requires, and a
-real server accepts it -- `resumed=True` against tls.peet.ws on rounds two and
-three, which a wrong binder would answer with decrypt_error rather than 200.
-It is a genuinely distinct identity: JA4 goes t13d1517h2 -> t13d1518h2, and
-the JA3, peetprint and JA4 hashes all change with it.
+**The resumed ClientHello** is measured, in
+`fixtures/reference-firefox-157-windows-{fresh,resumed}.hex`, both from one
+run of `tools/catch_resumed.py`. Both come back clean through the differ, and
+`tests/test_resumed.py` holds them.
 
-What is still missing is the *browser's* resumed hello to compare against.
-`tools/catch_resumed.py` captures it; it needs a browser, which is the only
-reason it has not been done. It runs TLS over memory BIOs so the handshake can
-complete -- a ticket has to be issued for the browser to come back with one --
-while the raw ClientHello bytes are still recorded, which a terminated
-handshake would otherwise consume. It is tested by driving it with pybrws
-itself, and it reports the fresh and resumed hellos side by side:
+It was worth taking. Firefox does not append `pre_shared_key`, it swaps
+`session_ticket` for it, so the extension count stays at seventeen. We were
+appending, which put us at eighteen -- `t13d1518h2` against the browser's
+`t13d1517h2`, a difference a server reads by counting rather than hashing.
 
-    python tools/catch_resumed.py --fresh fixtures/firefox-157-fresh.hex \
-                                  --resumed fixtures/firefox-157-resumed.hex
+One number in it is fitted rather than measured, and is marked in the profile
+and in a test: the greased ECH payload grows when a PSK is offered, by the
+pre_shared_key extension's wire size plus one. The payload stands in for an
+encrypted inner ClientHello which now carries a PSK itself, so the growth is
+expected; the leftover byte is not explained. A single capture cannot
+separate a constant from padding rounding up.
+
+**The capture that would settle it** is a resumed hello whose pre_shared_key
+is a different size. Two levers failed: `--alpn h2` changes the ticket but
+the tool only speaks HTTP/1.1, so the browser never reloads, and
+`SSLContext.set_ciphers` cannot pin a TLS 1.3 suite, which OpenSSL keeps
+behind `SSL_CTX_set_ciphersuites`. The cheapest remaining lever is a longer
+`--hostname`, which changes the hello's size without touching the ticket: if
+the residual stays at one it is a constant, if it tracks the hello it is
+padding.
+
+Note that the existing capture resumed under `TLS_AES_256_GCM_SHA384`, so its
+binder is 48 bytes and its pre_shared_key extension is sixteen longer than a
+SHA256 one. That is the server's doing, not the browser's. The test derives
+the suite from the binder length rather than naming it.
+
+    python tools/catch_resumed.py --fresh fixtures/one.hex --resumed fixtures/two.hex
 
 ## Known gaps, roughly by value
 

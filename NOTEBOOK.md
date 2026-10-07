@@ -1779,3 +1779,114 @@ extensions, resumed at 2,174 with 18, `added: pre_shared_key (41)`,
 measured locally.
 
 The browser capture itself is the one step that needs a person to click.
+
+## 2026-10-07 — Firefox swaps, we appended
+
+The browser capture landed, and it says we were wrong in a way worth
+understanding.
+
+Resuming, I had assumed, appends `pre_shared_key`. It is what the RFC
+describes and what our emitter did. Firefox does something else: it *swaps*.
+`session_ticket` comes out, `pre_shared_key` goes in at the end, and the
+extension count never moves.
+
+      fresh    17 extensions, 1901 bytes
+      resumed  17 extensions, 2472 bytes
+      added    pre_shared_key (41)
+      dropped  session_ticket (35)
+
+Seventeen both times. Ours was eighteen, and JA4 puts the extension count in
+the clear: `t13d1517h2` for the browser against `t13d1518h2` for us. No
+hashing required to tell those apart — a server can count. Of all the ways to
+be caught, that is the cheap one.
+
+It makes sense in hindsight. `session_ticket` is RFC 5077, the TLS 1.2
+resumption mechanism; offering it alongside a TLS 1.3 PSK is offering to
+resume twice by two different means. Firefox picks one. The RFC never says to
+drop it, so there was nothing to read — only something to measure.
+
+### A retraction
+
+I told Ernesto the capture showed Firefox reordering extensions. It does not.
+The check in my own tool was wrong:
+
+      moved = before != [kind for kind in after if kind in before]
+
+`before` is the fresh list, seventeen long. The comprehension filters the
+resumed list down to extensions that appear in `before`, which is sixteen,
+because one of the seventeen was dropped. Seventeen is not sixteen, so it
+reported a reordering. Any dropped extension would have. Comparing only the
+extensions present in both shows the order is untouched: `session_ticket`
+leaves position six, everything below slides up one, `pre_shared_key` goes
+last.
+
+A tool that reports a finding is a measuring instrument and wants the same
+suspicion as the thing it measures.
+
+### The ECH payload moves too
+
+One real difference survived the fix. The greased `encrypted_client_hello`
+payload went from 240 bytes fresh to 528 resumed. Ours stayed at 240, because
+`ECH_PAYLOAD_SIZE` is a constant.
+
+It is not arbitrary: the payload stands in for an encrypted inner
+ClientHello, and that inner hello now carries a `pre_shared_key` of its own,
+so it grows by roughly one. Roughly:
+
+      ech payload grew by         288
+      pre_shared_key on the wire  287
+      residual                      1
+
+One byte, unexplained. It could be a constant, or padding rounding up to a
+boundary, and one sample cannot tell those apart. I tried to get a second
+sample by varying the ticket's length, which would move the PSK size and so
+separate the two hypotheses. Two attempts, both dead ends: `--alpn h2`
+changes the ALPN stored in the ticket but the tool only speaks HTTP/1.1, so
+the browser has nothing to reload; and `SSLContext.set_ciphers` cannot pin a
+TLS 1.3 suite at all, because OpenSSL keeps those behind
+`SSL_CTX_set_ciphersuites`, which Python does not expose.
+
+So it is fitted to the one observation, on the grounds that a byte wrong
+beats 288 wrong, and it is labelled as fitted in `ech_growth_for_psk` and in
+a test that names it. That is the honest version of a guess: make it, write
+down that it is one, and leave the thing that would settle it in plain view.
+
+What would settle it: a capture where the pre_shared_key extension is a
+different size. The cheapest lever left is a longer SNI, which changes the
+hello's size without touching the ticket — if the residual stays 1, it is a
+constant; if it tracks the hello, it is padding.
+
+### Sixteen bytes that looked like a bug
+
+Writing the fixture test, our rebuilt hello came out sixteen bytes short of
+the capture's `pre_shared_key`. Sixteen is a suspicious number and I started
+looking for a length prefix I had miscounted.
+
+It was the binder: 48 bytes, not 32. The local server negotiated
+`TLS_AES_256_GCM_SHA384` with Firefox, so the binder is a SHA384 hash. That
+is a property of the server used for the capture, not of the browser, which
+is exactly the sort of thing that gets baked into a fixture and later read as
+inherent. The test now derives the suite from the binder's length instead of
+naming it, and says out loud that it is the server's doing.
+
+### Where it ended up
+
+Both captures now come back clean through the differ, and the resumed hello
+is 2472 bytes against the capture's 2472.
+
+      FRESH    identical as far as the differ is concerned
+      RESUMED  identical as far as the differ is concerned
+
+`tests/test_resumed.py`, thirteen tests, no network. Removing the
+`session_ticket` drop fails six; removing the ECH growth fails four.
+
+### One self-inflicted wound
+
+Running those mutation checks I reverted the profile with `git checkout
+pybrws/profiles/firefox157.py`, forgetting the ECH work in it was not
+committed. It went back to the repository's version and the change vanished.
+It came back from the patch script still sitting in the scratchpad, so the
+cost was a few minutes, but the lesson is cheaper to write down than to
+relearn: `git checkout` of a file is a delete, and a mutation test should be
+undone by restoring the copy you made, not by asking git for a version that
+predates your work.

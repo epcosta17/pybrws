@@ -40,6 +40,8 @@ from pybrws.hexio import hexdump, save_hex  # noqa: E402
 from pybrws.model import extension_name  # noqa: E402
 from pybrws.parser import parse_client_hello  # noqa: E402
 
+EXT_ENCRYPTED_CLIENT_HELLO = 65037
+
 CRLF = "\r\n"
 EXT_PRE_SHARED_KEY = 41
 RECORD_HEADER = 5
@@ -212,13 +214,31 @@ def report(fresh: bytes | None, resumed: bytes | None) -> None:
         after, _ = describe(resumed)
         added = [kind for kind in after if kind not in before]
         dropped = [kind for kind in before if kind not in after]
-        moved = before != [kind for kind in after if kind in before]
+        # Only the extensions present in both can be said to have moved;
+        # comparing the full fresh list against the filtered resumed one
+        # reports any *dropped* extension as a reordering.
+        shared_before = [kind for kind in before if kind in after]
+        shared_after = [kind for kind in after if kind in before]
+        moved = shared_before != shared_after
         print("fresh:   %d extensions, %d bytes" % (len(before), len(fresh)))
         print("resumed: %d extensions, %d bytes" % (len(after), len(resumed)))
         print("added:   " + (", ".join(label(k) for k in added) or "nothing"))
         print("dropped: " + (", ".join(label(k) for k in dropped) or "nothing"))
         print("the shared extensions kept their relative order: "
               + ("no" if moved else "yes"))
+        ech_before = next((e.data for e in parse_client_hello(fresh).extensions
+                           if e.type == EXT_ENCRYPTED_CLIENT_HELLO), None)
+        ech_after = next((e.data for e in parse_client_hello(resumed).extensions
+                          if e.type == EXT_ENCRYPTED_CLIENT_HELLO), None)
+        psk = next((e.data for e in parse_client_hello(resumed).extensions
+                    if e.type == EXT_PRE_SHARED_KEY), None)
+        if ech_before is not None and ech_after is not None and psk is not None:
+            grew = len(ech_after) - len(ech_before)
+            wire = len(psk) + 4
+            print("ech payload: %d fresh, %d resumed, grew by %d against a "
+                  "pre_shared_key of %d on the wire, residual %d"
+                  % (len(ech_before) - 42, len(ech_after) - 42, grew, wire,
+                     grew - wire))
         if resumed is not None and after and after[-1] != EXT_PRE_SHARED_KEY:
             print("WARNING: pre_shared_key is not last, which RFC 8446 4.2.11"
                   " requires; check the parse before trusting this capture")

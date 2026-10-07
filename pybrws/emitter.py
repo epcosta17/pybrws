@@ -15,6 +15,8 @@ RANDOM_SIZE = 32
 EXT_KEY_SHARE = 51
 EXT_COOKIE = 44
 EXT_PRE_SHARED_KEY = 41
+EXT_SESSION_TICKET = 35
+EXT_ENCRYPTED_CLIENT_HELLO = 65037
 
 Rng = Callable[[int], bytes]
 
@@ -128,7 +130,27 @@ def retry_hello(original: bytes, group: int, share: bytes,
     return serialise(hello, int.from_bytes(original[1:3], "big"))
 
 
-def with_psk(original: bytes, tickets, suite) -> bytes:
+def grow_ech(data: bytes, extra: int, rng: Callable[[int], bytes]) -> bytes:
+    """Return a greased ECH extension with `extra` more payload bytes.
+
+    The payload is random either way, so lengthening it is appending
+    more of the same; what matters is that the two length prefixes in
+    front of it stay correct.
+    """
+    enc_size = int.from_bytes(data[6:8], "big")
+    cut = 8 + enc_size
+    declared = int.from_bytes(data[cut:cut + 2], "big")
+    payload = data[cut + 2:]
+    if len(payload) != declared:
+        raise ValueError(
+            "encrypted_client_hello declares %d payload bytes but carries %d"
+            % (declared, len(payload))
+        )
+    return data[:cut] + vector(payload + rng(extra), 2)
+
+
+def with_psk(original: bytes, tickets, suite, *, profile=firefox157,
+             rng: Callable[[int], bytes] = os.urandom) -> bytes:
     """Add a pre_shared_key extension offering `tickets`.
 
     The extension has to be last, and its binders are an HMAC over the
@@ -136,6 +158,9 @@ def with_psk(original: bytes, tickets, suite) -> bytes:
     begin. So the message is built once with the right lengths and empty
     binders, hashed, and the binders written into the space already
     reserved. RFC 8446 section 4.2.11.2.
+
+    session_ticket is dropped on the way, which the RFC does not ask for but
+    the browser does.
     """
     from .keyschedule import psk_binder
     from .parser import parse_client_hello
@@ -149,9 +174,31 @@ def with_psk(original: bytes, tickets, suite) -> bytes:
         for t in tickets
     )
     placeholder = b"".join(vector(bytes(suite.hash_size), 1) for _ in tickets)
-    hello.extensions = list(hello.extensions) + [
-        Extension(EXT_PRE_SHARED_KEY, vector(identities, 2) + vector(placeholder, 2))
-    ]
+    # Measured: Firefox does not merely append the extension, it *swaps*
+    # session_ticket for it, so a resumed hello carries the same number of
+    # extensions as a fresh one. Appending without dropping would leave us at
+    # eighteen against its seventeen, which puts the extension count in JA4 at
+    # t13d1518h2 against the browser's t13d1517h2 -- a tell a server can read
+    # by counting, without hashing anything.
+    # fixtures/reference-firefox-157-windows-resumed.hex
+    kept = [e for e in hello.extensions if e.type != EXT_SESSION_TICKET]
+    psk = Extension(EXT_PRE_SHARED_KEY,
+                    vector(identities, 2) + vector(placeholder, 2))
+
+    # The greased ECH payload stands in for an encrypted inner ClientHello,
+    # which now carries a pre_shared_key of its own, so the browser's grows
+    # too. Leaving it alone would make the resumed hello hundreds of bytes
+    # shorter than the capture.
+    growth = getattr(profile, "ech_growth_for_psk", None)
+    if growth is not None:
+        extra = growth(len(psk.data) + 4)
+        kept = [
+            Extension(e.type, grow_ech(e.data, extra, rng))
+            if e.type == EXT_ENCRYPTED_CLIENT_HELLO else e
+            for e in kept
+        ]
+
+    hello.extensions = kept + [psk]
 
     record = serialise(hello, int.from_bytes(original[1:3], "big"))
     message = record[5:]

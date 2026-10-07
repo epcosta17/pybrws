@@ -3,7 +3,9 @@
 import time
 import unittest
 
-from pybrws.emitter import build_client_hello, with_psk
+from pybrws.emitter import (EXT_ENCRYPTED_CLIENT_HELLO,
+                            EXT_SESSION_TICKET,
+                            build_client_hello, with_psk)
 from pybrws.keyschedule import (
     CIPHER_SUITES,
     KeySchedule,
@@ -12,6 +14,7 @@ from pybrws.keyschedule import (
     resumption_psk,
 )
 from pybrws.parser import parse_client_hello
+from pybrws.profiles import firefox157
 from pybrws.tickets import AGE_MODULUS, Ticket, TicketStore, parse_new_session_ticket
 
 SUITE = CIPHER_SUITES[0x1301]
@@ -133,11 +136,51 @@ class TestPreSharedKeyOffer(unittest.TestCase):
         # RFC 8446 requires it, because the binder covers everything before.
         self.assertEqual(self.parsed.extension_types()[-1], EXT_PRE_SHARED_KEY)
 
-    def test_nothing_else_changed(self):
-        before = parse_client_hello(self.plain)
-        self.assertEqual(before.random, self.parsed.random)
-        self.assertEqual(before.extension_types(),
-                         self.parsed.extension_types()[:-1])
+    def test_session_ticket_is_swapped_for_the_pre_shared_key(self):
+        # Measured, not assumed. Firefox does not append pre_shared_key, it
+        # replaces session_ticket with it, so a resumed hello carries the same
+        # number of extensions as a fresh one. Appending would put our
+        # extension count at eighteen against the browser's seventeen, which
+        # shows up in JA4 as t13d1518h2 against t13d1517h2 -- readable by
+        # counting, without hashing anything.
+        # fixtures/reference-firefox-157-windows-resumed.hex
+        before = parse_client_hello(self.plain).extension_types()
+        after = self.parsed.extension_types()
+        self.assertIn(EXT_SESSION_TICKET, before)
+        self.assertNotIn(EXT_SESSION_TICKET, after)
+        self.assertEqual(len(before), len(after))
+
+    def test_the_other_extensions_keep_their_order(self):
+        before = [t for t in parse_client_hello(self.plain).extension_types()
+                  if t != EXT_SESSION_TICKET]
+        after = [t for t in self.parsed.extension_types()
+                 if t != EXT_PRE_SHARED_KEY]
+        self.assertEqual(before, after)
+
+    def test_the_random_is_untouched(self):
+        self.assertEqual(parse_client_hello(self.plain).random,
+                         self.parsed.random)
+
+    def test_the_greased_ech_payload_grows_with_the_pre_shared_key(self):
+        # The payload stands in for an encrypted inner ClientHello, which now
+        # carries a pre_shared_key of its own. Firefox's grew from 240 to 528
+        # bytes between the two captures; leaving ours at 240 would make the
+        # resumed hello 288 bytes shorter than the browser's.
+        plain = parse_client_hello(self.plain)
+        fresh = plain.extension(EXT_ENCRYPTED_CLIENT_HELLO).data
+        resumed = self.parsed.extension(EXT_ENCRYPTED_CLIENT_HELLO).data
+        psk_wire = len(self.parsed.extension(EXT_PRE_SHARED_KEY).data) + 4
+        self.assertEqual(len(resumed) - len(fresh),
+                         firefox157.ech_growth_for_psk(psk_wire))
+
+    def test_the_grown_ech_still_declares_its_own_length(self):
+        # Two length prefixes sit in front of the payload; getting either
+        # wrong makes the extension unparseable rather than merely wrong.
+        data = self.parsed.extension(EXT_ENCRYPTED_CLIENT_HELLO).data
+        enc_size = int.from_bytes(data[6:8], "big")
+        cut = 8 + enc_size
+        self.assertEqual(int.from_bytes(data[cut:cut + 2], "big"),
+                         len(data) - cut - 2)
 
     def test_the_binder_signs_the_hello_that_contains_it(self):
         tail = 2 + 1 + SUITE.hash_size

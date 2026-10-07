@@ -259,7 +259,8 @@ def connect(
         # The binder is keyed by the hash of the suite the ticket came from,
         # so a server choosing another suite simply will not select it.
         client_hello = with_psk(client_hello, [offered],
-                                CIPHER_SUITES[offered.suite_id])
+                                CIPHER_SUITES[offered.suite_id],
+                                profile=profile)
 
     sock = open_socket(host, port, proxy=proxy, timeout=timeout)
     records = RecordLayer(sock)

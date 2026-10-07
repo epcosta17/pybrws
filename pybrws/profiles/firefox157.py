@@ -41,6 +41,31 @@ ECH_AEAD_IDS = (0x0001, 0x0003)
 ECH_ENC_SIZE = 32
 ECH_PAYLOAD_SIZE = 240
 
+# Resuming lengthens the greased ECH payload. The payload stands in for an
+# encrypted inner ClientHello, and that inner hello now carries the
+# pre_shared_key extension, so it grows by about the size of one.
+#
+# Measured, once: the fresh capture carries a 282-byte ECH extension and the
+# resumed one 570, a difference of 288, against a pre_shared_key extension of
+# 287 bytes on the wire. One byte is left over and is not explained -- it could
+# be a constant, or it could be padding rounding up, which a single sample
+# cannot distinguish. Fitted to that one observation on the grounds that being
+# a byte wrong beats being 288 wrong, and marked here so the next capture is
+# known to be worth taking.
+#   fixtures/reference-firefox-157-windows-fresh.hex
+#   fixtures/reference-firefox-157-windows-resumed.hex
+ECH_PSK_GROWTH_RESIDUAL = 1
+
+
+def ech_growth_for_psk(psk_extension_size: int) -> int:
+    """How many bytes the greased ECH payload gains when a PSK is offered.
+
+    Args:
+        psk_extension_size: the pre_shared_key extension size on the wire,
+            its four-byte header included.
+    """
+    return psk_extension_size + ECH_PSK_GROWTH_RESIDUAL
+
 
 def server_name(ctx) -> bytes:
     host = ctx.hostname.encode("idna")
