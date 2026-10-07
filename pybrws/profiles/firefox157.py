@@ -172,6 +172,7 @@ H1_HEADERS = [
 # which HPACK makes worthwhile.
 
 H2_COOKIE_BEFORE = "upgrade-insecure-requests"
+H1_COOKIE_BEFORE = "Upgrade-Insecure-Requests"
 
 
 # Measured from fixtures/reference-firefox-157-post-form.txt and
