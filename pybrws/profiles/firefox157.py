@@ -174,35 +174,67 @@ H1_HEADERS = [
 H2_COOKIE_BEFORE = "upgrade-insecure-requests"
 
 
-# --- Request bodies -------------------------------------------------------
-# UNMEASURED, and currently wrong rather than merely absent. A POST sent by
-# this client carries the navigation header set with Content-Type bolted on,
-# which produces a combination no browser emits: a navigation never posts
-# JSON, an XHR never sends Sec-Fetch-User, and neither omits Origin.
+# Measured from fixtures/reference-firefox-157-post-form.txt and
+# fixtures/reference-firefox-157-post-fetch.txt.
 #
-# Two captures close it, and they are different header sets:
-#   tools/catch_request.py fixtures/reference-firefox-157-post-form.txt --post form
-#   tools/catch_request.py fixtures/reference-firefox-157-post-fetch.txt --post fetch
+# The two differ in more than Content-Type. Accept, Priority and all three
+# Sec-Fetch values change, Upgrade-Insecure-Requests appears only on the
+# navigation, and Referer moves: before Content-Type for fetch, after
+# Connection for the form. Content-Length always follows Content-Type and
+# precedes Origin.
 #
-# The TLS and HTTP/2 layers are unaffected: neither changes with the method.
-H1_COOKIE_BEFORE = "Upgrade-Insecure-Requests"
+# One artefact to know about: the form capture was submitted by script, so
+# Firefox omitted Sec-Fetch-User. A human clicking the button sends
+# `Sec-Fetch-User: ?1`, which this set therefore does not reproduce.
 
-
-# Measured from fixtures/reference-firefox-157-image.txt: Firefox fetching a
-# favicon from a page on the same origin. An image subresource differs from a
-# navigation in Accept, all three Sec-Fetch values and Priority, and it carries
-# a Referer that a typed-URL navigation does not.
-H1_IMAGE_HEADERS = [
+H1_POST_FORM_HEADERS = [
     ("Host", "{authority}"),
     ("User-Agent", USER_AGENT),
-    ("Accept", "image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8,*/*;q=0.5"),
+    ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
     ("Accept-Language", "en-US,en;q=0.9"),
     ("Accept-Encoding", "gzip, deflate, br, zstd"),
+    ("Content-Type", "{content_type}"),
+    ("Content-Length", "{content_length}"),
+    ("Origin", "{origin}"),
     ("Connection", "keep-alive"),
     ("Referer", "{referer}"),
-    ("Cookie", "{cookie}"),
-    ("Sec-Fetch-Dest", "image"),
-    ("Sec-Fetch-Mode", "no-cors"),
+    ("Upgrade-Insecure-Requests", "1"),
+    ("Sec-Fetch-Dest", "document"),
+    ("Sec-Fetch-Mode", "navigate"),
     ("Sec-Fetch-Site", "same-origin"),
-    ("Priority", "u=6"),
+    ("Priority", "u=0, i"),
 ]
+
+H1_POST_XHR_HEADERS = [
+    ("Host", "{authority}"),
+    ("User-Agent", USER_AGENT),
+    ("Accept", "*/*"),
+    ("Accept-Language", "en-US,en;q=0.9"),
+    ("Accept-Encoding", "gzip, deflate, br, zstd"),
+    ("Referer", "{referer}"),
+    ("Content-Type", "{content_type}"),
+    ("Content-Length", "{content_length}"),
+    ("Origin", "{origin}"),
+    ("Connection", "keep-alive"),
+    ("Sec-Fetch-Dest", "empty"),
+    ("Sec-Fetch-Mode", "cors"),
+    ("Sec-Fetch-Site", "same-origin"),
+    ("Priority", "u=4"),
+]
+
+
+def _as_http2(headers):
+    """Derive an HTTP/2 set from an HTTP/1.1 one.
+
+    INFERRED, not measured. The rule is the one the navigation captures
+    confirmed: drop Host and Connection, lowercase the names, append `te`.
+    Capturing it directly needs an HTTP/2 server, which the capture tool is
+    not.
+    """
+    dropped = {"host", "connection"}
+    return [(name.lower(), value) for name, value in headers
+            if name.lower() not in dropped] + [("te", "trailers")]
+
+
+H2_POST_FORM_HEADERS = _as_http2(H1_POST_FORM_HEADERS)
+H2_POST_XHR_HEADERS = _as_http2(H1_POST_XHR_HEADERS)

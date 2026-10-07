@@ -25,9 +25,18 @@ class TooManyRedirects(Exception):
 REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 
+def header_set(profile, method: str, kind: str, http2: bool):
+    """The profile's measured header list for this kind of request."""
+    if method.upper() in ("GET", "HEAD"):
+        return profile.H2_NAVIGATION_HEADERS if http2 else profile.H1_HEADERS
+    if kind == "form":
+        return profile.H2_POST_FORM_HEADERS if http2 else profile.H1_POST_FORM_HEADERS
+    return profile.H2_POST_XHR_HEADERS if http2 else profile.H1_POST_XHR_HEADERS
+
+
 def fetch_once(url: str, *, method: str = "GET", profile=firefox157,
                timeout: float = 20.0, headers=None, body: bytes = b"",
-               proxy=None) -> Response:
+               proxy=None, kind: str = "xhr", context=None) -> Response:
     """Fetch one URL without following redirects.
 
     The server picks the protocol through ALPN; both branches are implemented,
@@ -59,22 +68,21 @@ def fetch_once(url: str, *, method: str = "GET", profile=firefox157,
 
     with connect(host, port, profile=profile, timeout=timeout,
                  proxy=proxy) as tls:
-        if tls.alpn == "h2":
-            http = Http2Connection(tls, profile=profile)
-            base = profile.H2_NAVIGATION_HEADERS
-        else:
-            http = Http1Connection(tls, profile=profile)
-            base = profile.H1_HEADERS
+        http2 = tls.alpn == "h2"
+        http = (Http2Connection(tls, profile=profile) if http2
+                else Http1Connection(tls, profile=profile))
+        base = header_set(profile, method, kind, http2)
         response = http.request(method, path, authority,
                                 headers=header_tools.merge(base, headers),
-                                body=body)
+                                body=body, context=context)
     response.url = url
     return response
 
 
 def request(url: str, *, method: str = "GET", profile=firefox157,
             timeout: float = 20.0, headers=None, data=None, json=None,
-            follow_redirects: int = 0, proxy=None) -> Response:
+            follow_redirects: int = 0, proxy=None, kind: str = "xhr",
+            referer: str | None = None) -> Response:
     """Send one request, optionally following redirects.
 
     Args:
@@ -90,6 +98,11 @@ def request(url: str, *, method: str = "GET", profile=firefox157,
         follow_redirects: how many redirects to follow. 0 returns the
             redirect itself, as curl does without -L.
         proxy: a proxy URL or Proxy, applied to every hop.
+        kind: for a request with a body, which header set to send. "xhr" is
+            what `fetch` produces and what an API client wants; "form" is
+            what submitting a form produces.
+        referer: the page a browser would have come from. Defaults to the
+            target's own origin, since every captured POST carries one.
 
     Returns:
         The final response, with the body decompressed.
@@ -99,15 +112,18 @@ def request(url: str, *, method: str = "GET", profile=firefox157,
             out while the server was still redirecting.
     """
     body, content_type = encode_body(data, json)
-    if content_type and not header_tools.has(header_tools.as_pairs(headers),
-                                             "content-type"):
-        headers = header_tools.as_pairs(headers) + [("Content-Type", content_type)]
+    origin = "https://" + (urlsplit(url).netloc or "")
+    context = {
+        "origin": origin,
+        "referer": origin + "/" if referer is None else referer,
+        "content_type": content_type or "application/octet-stream",
+    }
 
     seen = []
     for hop in range(follow_redirects + 1):
         response = fetch_once(url, method=method, profile=profile,
                               timeout=timeout, headers=headers, body=body,
-                              proxy=proxy)
+                              proxy=proxy, kind=kind, context=context)
         response.history = list(seen)
         location = response.header("location")
         if response.status not in REDIRECT_STATUSES or not location:

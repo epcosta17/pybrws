@@ -77,3 +77,24 @@ def get(headers: Headers, name: str) -> str | None:
 
 def has(headers: Headers, name: str) -> bool:
     return get(headers, name) is not None
+
+
+def fill(headers: Headers, **context) -> list[tuple[str, str]]:
+    """Substitute {placeholders} in header values.
+
+    A placeholder resolving to nothing removes its header, which is how an
+    absent Referer disappears rather than being sent empty.
+    """
+    out = []
+    for name, value in headers:
+        for key, replacement in context.items():
+            token = "{" + key + "}"
+            if token not in value:
+                continue
+            if replacement in (None, ""):
+                value = None
+                break
+            value = value.replace(token, str(replacement))
+        if value is not None:
+            out.append((name, value))
+    return out

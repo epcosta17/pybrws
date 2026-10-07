@@ -102,23 +102,27 @@ class Http1Connection:
         self.reader = _StreamReader(tls)
 
     def build_request(self, method: str, path: str, authority: str, headers=None,
-                      body: bytes = b"") -> bytes:
+                      body: bytes = b"", context=None) -> bytes:
         if headers is None:
             headers = self.profile.H1_HEADERS
+        fields = {"authority": authority, "content_length": str(len(body))}
+        if context:
+            fields.update(context)
+        headers = header_tools.fill(headers, **fields)
         if body and not header_tools.has(headers, "content-length"):
-            # Slot unmeasured: no capture of this browser sending a body
-            # exists yet. A caller that cares can place it explicitly.
+            # Only reached when the header set carries no slot of its own.
             headers = list(headers) + [("Content-Length", str(len(body)))]
         lines = [method + " " + path + " HTTP/1.1"]
         for name, value in headers:
-            lines.append(name + ": " + value.replace("{authority}", authority))
+            lines.append(name + ": " + value)
         head = ("\r\n".join(lines) + "\r\n\r\n").encode("latin-1")
         return head + body
 
     def request(self, method: str, path: str, authority: str, *, headers=None,
-                body: bytes = b"") -> Response:
+                body: bytes = b"", context=None) -> Response:
         """Send one request and read its complete response."""
-        self.tls.send(self.build_request(method, path, authority, headers, body))
+        self.tls.send(self.build_request(method, path, authority, headers,
+                                         body, context))
         return self._read_response(method)
 
     def get(self, path: str, authority: str, *, headers=None) -> Response:

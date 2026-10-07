@@ -1189,3 +1189,43 @@ request with a page that submits a form or calls `fetch`, then capture the
 POST that follows. Two captures, because the two are different header sets.
 Smoke tested end to end against a scripted client; the browser captures are
 still to take.
+
+---
+
+## 2026-10-07 — Two POST header sets, measured
+
+Both captures taken. They differ in more than `Content-Type`, which is why
+one set would not have done:
+
+| | form | fetch |
+|---|---|---|
+| `Accept` | `text/html,...` | `*/*` |
+| `Referer` | after `Connection` | before `Content-Type` |
+| `Upgrade-Insecure-Requests` | present | absent |
+| `Sec-Fetch-Dest` / `Mode` | `document` / `navigate` | `empty` / `cors` |
+| `Priority` | `u=0, i` | `u=4` |
+
+`Content-Length` always follows `Content-Type` and precedes `Origin`, which
+settles the slot marked unknown an entry ago. Both carry `Origin`, whose
+absence was the loudest thing wrong with the old behaviour.
+
+The moving `Referer` is the one worth noting: nothing about the two requests
+suggests the header should change position, and no amount of reasoning would
+have produced it.
+
+`client.post` now sends the fetch set by default, since that is what an API
+client is, with `kind="form"` for the other. Verified against peet.ws that
+the wire order matches the captures and that the Akamai fingerprint is
+unchanged either way. Both sets reproduce their capture byte for byte and a
+test holds it.
+
+**One artefact, recorded rather than hidden.** The form capture was submitted
+by script, so Firefox omitted `Sec-Fetch-User`. A human clicking the button
+sends `Sec-Fetch-User: ?1`, so the form set is faithful to a scripted submit
+and not to a clicked one. Capturing the clicked version needs a page that
+waits for a real click.
+
+The HTTP/2 variants are derived from the HTTP/1.1 ones by the rule the
+navigation captures confirmed: drop Host and Connection, lowercase, append
+`te`. Marked inferred, with a test asserting the derivation rather than the
+result.

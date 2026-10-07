@@ -128,7 +128,7 @@ class Http2Connection:
             self._buffer += self.tls.recv()
 
     def request(self, method: str, path: str, authority: str, *, headers=None,
-                body: bytes = b"") -> Response:
+                body: bytes = b"", context=None) -> Response:
         """Send one request and read its complete response."""
         stream_id = self.next_stream_id
         self.next_stream_id += 2
@@ -142,6 +142,10 @@ class Http2Connection:
         }
         if headers is None:
             headers = self.profile.H2_NAVIGATION_HEADERS
+        fields = {"authority": authority, "content_length": str(len(body))}
+        if context:
+            fields.update(context)
+        headers = header_tools.fill(headers, **fields)
         if body and not header_tools.has(headers, "content-length"):
             headers = list(headers) + [("content-length", str(len(body)))]
         block = self._header_block(pseudo, headers)

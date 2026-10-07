@@ -54,34 +54,34 @@ capture it with `tools/catch_hello.py` or `tools/catch_request.py` first.
 Measured, with a fixture and a byte-identity test: the ClientHello, the
 HTTP/2 SETTINGS, WINDOW_UPDATE, stream id, HEADERS flags and priority, the
 header order and values for a navigation, for a navigation carrying cookies,
-and for an image subresource.
+for an image subresource, for a form POST and for a `fetch` POST.
 
 Inferred, and marked in the code: the Cookie header's slot over HTTP/2,
 deduced from the HTTP/1.1 order.
 
+Inferred too: the HTTP/2 POST sets, derived from the HTTP/1.1 ones by the
+rule the navigation captures confirmed.
+
 Unmeasured, and marked: whether HTTP/2 crumbles cookies into separate
-headers; the slot for `Content-Length`; the header set Firefox sends with a
-POST; the pattern of later WINDOW_UPDATE frames, which Firefox batches and
-this client does not.
+headers; the pattern of later WINDOW_UPDATE frames, which Firefox batches and
+this client does not; and `Sec-Fetch-User` on a form POST, which the capture
+missed because the submit was triggered by script rather than a click.
 
 ## Known gaps, roughly by value
 
-1. **The XHR/fetch header set.** The profile has navigation and image. An API
-   request sends different `Accept` and `Sec-Fetch-*`, and that is what a
-   scraper of JSON endpoints actually sends. One capture closes it.
-2. **A second profile.** `profiles/` is an abstraction with one
+1. **A second profile.** `profiles/` is an abstraction with one
    implementation, which is exactly the thing worth distrusting. Chrome would
    validate or break it, and Chrome shuffles its extension order, which
    Firefox does not.
-3. **Certificate verification is off.** One of two working free proxies
+2. **Certificate verification is off.** One of two working free proxies
    tested turned out to be intercepting and replacing the fingerprint
    undetected. Needs chain validation and RFC 8879 decompression.
-4. **TLS 1.2 is advertised and not implemented**, because Firefox advertises
+3. **TLS 1.2 is advertised and not implemented**, because Firefox advertises
    it and removing it would change the fingerprint. httpbin.org declines TLS
    1.3 and so is unreachable.
-5. **HelloRetryRequest raises.** A server asking for a group we offered no
+4. **HelloRetryRequest raises.** A server asking for a group we offered no
    share for will fail.
-6. Session resumption, HTTP/3, streaming responses, concurrency.
+5. Session resumption, HTTP/3, streaming responses, concurrency.
 
 ## Things that cost time here
 

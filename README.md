@@ -172,7 +172,8 @@ Run the tests:
 Send a request, with a body and headers of your own merged into the profile's:
 
     from pybrws.client import get, post
-    post("https://api.example.com/v1/items", json={"name": "x"})
+    post("https://api.example.com/v1/items", json={"name": "x"})   # fetch headers
+    post("https://example.com/login", data={"u": "x"}, kind="form")  # form headers
     get("https://example.com/", headers={"Accept-Language": "es-MX", "Priority": None})
 
 Keep cookies and connections across requests:
