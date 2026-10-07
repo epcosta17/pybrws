@@ -35,8 +35,11 @@ LOG = ROOT / "fixtures" / "ab-test-log.jsonl"
 DEFAULT_TARGETS = [
     "www.zillow.com",
     "www.ticketmaster.com",
+    "www.indeed.com",
     "www.g2.com",
     "www.etsy.com",
+    "https://www.etsy.com/?q=",
+    "https://www.etsy.com/c/jewelry",
     "www.crunchbase.com",
 ]
 CONTROL = "www.crunchbase.com"
@@ -47,17 +50,22 @@ CONTROL = "www.crunchbase.com"
 MAX_REDIRECTS = 5
 
 
-def via_pybrws(host: str, timeout: float) -> int:
-    return get("https://" + host + "/", timeout=timeout,
+def as_url(target: str) -> str:
+    """Accept either a bare host or a full URL, so paths can be compared."""
+    return target if "://" in target else "https://" + target + "/"
+
+
+def via_pybrws(target: str, timeout: float) -> int:
+    return get(as_url(target), timeout=timeout,
                follow_redirects=MAX_REDIRECTS).status
 
 
-def via_baseline(host: str, timeout: float) -> int:
+def via_baseline(target: str, timeout: float) -> int:
     import httpx
 
     with httpx.Client(timeout=timeout, http2=True, follow_redirects=True,
                       max_redirects=MAX_REDIRECTS) as client:
-        return client.get("https://" + host + "/").status_code
+        return client.get(as_url(target)).status_code
 
 
 CLIENTS = {"pybrws": via_pybrws, "httpx": via_baseline}
@@ -73,10 +81,10 @@ def run(targets: list[str], rounds: int, timeout: float, pause: float) -> list[d
     for round_no in range(rounds):
         # Interleaving matters: drift during a run then hits every cell, not
         # whichever client happens to be measured last.
-        for host in targets:
+        for target in targets:
             for name, call in CLIENTS.items():
                 try:
-                    status = call(host, timeout)
+                    status = call(target, timeout)
                     error = None
                 except Exception as exc:
                     status = None
@@ -86,7 +94,7 @@ def run(targets: list[str], rounds: int, timeout: float, pause: float) -> list[d
                         "run": started,
                         "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                         "round": round_no,
-                        "host": host,
+                        "host": target,
                         "client": name,
                         "status": status,
                         "error": error,

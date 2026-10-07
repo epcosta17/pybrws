@@ -5,33 +5,32 @@ to a real browser's.
 
 ## Does it work
 
-Measured against sites that serve a plain Python client a block page. Four
-interleaved rounds per host, with crunchbase.com as a negative control that
-serves both clients. `httpx` is a mature HTTP/2 client over the stdlib TLS
-stack; `pybrws` differs from it only in protocol fingerprint.
+`tools/ab_test.py`, four interleaved rounds per target, both clients
+following redirects, with crunchbase.com as a negative control. `httpx` is a
+mature HTTP/2 client over the stdlib TLS stack; `pybrws` differs from it only
+in protocol fingerprint.
 
-| Host | Protection | httpx | pybrws |
+| Target | Protection | httpx | pybrws |
 |---|---|---|---|
-| www.zillow.com | CloudFront | 403, 5.7 KB block page | **200, 433 KB real page** |
-| www.ticketmaster.com | - | 403, 20 bytes | **200, 562 KB real page** |
-| www.indeed.com | Cloudflare | 403, 25 KB block page | 302 redirect |
-| www.g2.com | Cloudflare | 403 | 403 |
-| www.etsy.com | DataDome | 403 | 403 |
-| www.crunchbase.com | Cloudflare | 200 | 200 (control) |
+| www.zillow.com | CloudFront | 0/4 served | **4/4 served** |
+| www.ticketmaster.com | - | 0/4 served | **4/4 served** |
+| www.indeed.com | Cloudflare | 0/4 served | **4/4 served** |
+| www.etsy.com/c/jewelry | DataDome | 0/4 served | **4/4 served** |
+| www.etsy.com/ | DataDome | 0/4 | 0/4 |
+| www.etsy.com/?q= | DataDome | 0/4 | 0/4 |
+| www.g2.com | Cloudflare | 0/4 | 0/4 |
+| www.crunchbase.com | Cloudflare | 4/4 | 4/4 (control) |
 
-zillow, ticketmaster and the control are 4 of 4 in every round. glassdoor was
-in this table and has been removed: its score for this address degraded over
-the session until the result stopped replicating, which makes it an
-unreliable instrument rather than a result.
-
-Four of the six discriminating targets stop blocking. Two do not: a Cloudflare
-site at a stricter setting and a DataDome site, both of which want signals this
-client cannot produce.
+Four of seven discriminating targets stop blocking, with no flapping in any
+cell. What still blocks is specific rather than general: on etsy the homepage
+and the search parameter `?q=` are refused while an ordinary category page is
+served, so the strictest rules sit on the endpoints worth scraping. g2 runs
+Cloudflare at a setting this client cannot satisfy.
 
 Caveats worth stating. A single client IP, so address reputation is an
-uncontrolled variable. No JavaScript challenge is solvable here by
-construction, so any site that issues one is out of reach regardless of
-fingerprint.
+uncontrolled variable, and it degrades over a session of cold requests. No
+JavaScript challenge is solvable here by construction, so any site that
+issues one is out of reach regardless of fingerprint.
 
 ## Clean-room rule
 

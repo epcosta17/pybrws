@@ -132,7 +132,7 @@ H2_NAVIGATION_HEADERS = [
 
 
 # --- HTTP/1.1 -------------------------------------------------------------
-# Order and capitalisation are the fingerprint at this layer. Measured from
+# Order and capitalization are the fingerprint at this layer. Measured from
 # fixtures/reference-firefox-157-h1.txt, a Firefox 157 navigation captured
 # over TLS with tools/catch_request.py.
 #

@@ -712,3 +712,52 @@ Sixteen tests, all offline: fake proxies on loopback that record what this
 client sends and replay scripted answers. One of them asserts that data sent
 immediately after a SOCKS5 reply is still readable, which only holds if the
 variable-length bound address was consumed exactly.
+
+---
+
+## 2026-10-06 — Re-measuring the results table, and two corrections
+
+The README table had gone stale: it predated redirect following and the
+HTTP/2 flow control fix, so indeed was recorded as "302 redirect" and etsy as
+a flat 403. Regenerated from `tools/ab_test.py`, four interleaved rounds,
+both clients following redirects, crunchbase as control. indeed is 4/4 served.
+
+**Correction: it is not "any query string".** The earlier entry concluded
+that etsy's rule was attached to the bare `/` path because `?dd_referrer=`
+and `?nonsense=` both passed. Measuring more parameters:
+
+| URL | Served |
+|---|---|
+| `/` | 0/4 |
+| `/?q=` | 0/4 |
+| `/?q=ring` | 0/4 |
+| `/?nonsense=` | 4/4 |
+| `/?dd_referrer=` | 4/4 |
+| `/c/jewelry` | 4/4 |
+
+`q` is etsy's search parameter. The protected endpoints are the homepage and
+search, the two most worth scraping; an ordinary category page is served. The
+earlier conclusion came from testing two parameters that both happened to be
+inert and generalising from them.
+
+**Free proxies, measured rather than argued.** 2753 addresses from two public
+SOCKS5 lists, 14 sampled:
+
+    2/14 usable
+    37.27.112.71:9050   exit 80.67.167.81   ja4 t13d1517h2_8daaf6152771_3cbfd9057e0d
+    199.58.185.9:4145   exit 199.58.185.9   ja4 t13d7310_613d769af9d7_4837e640254d
+
+The second is not this client's fingerprint. That proxy terminated the TLS
+and re-originated it with its own stack: a transparent MITM, able to read
+everything that passed through it. **Half of the working free proxies
+silently destroyed the thing this project exists to produce**, and did so
+undetected because certificate verification is off.
+
+That caveat has been in the README since phase 3 as a laboratory decision.
+This is what it costs, measured. Verifying certificates would have caught it
+immediately, which moves it up the list from "nice for production" to "the
+defence against the proxies you do not control".
+
+Free proxy lists are unusable for measurement for a second reason anyway:
+their addresses are already burned, so a run through them measures the
+proxy's reputation rather than this client's fingerprint.
