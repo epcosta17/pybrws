@@ -26,6 +26,8 @@ GOAWAY = 0x07
 WINDOW_UPDATE = 0x08
 CONTINUATION = 0x09
 
+SETTING_HEADER_TABLE_SIZE = 0x01
+
 FLAG_END_STREAM = 0x01
 FLAG_ACK = 0x01
 FLAG_END_HEADERS = 0x04
@@ -56,6 +58,12 @@ class Http2Connection:
         self.profile = profile
         self.encoder = Encoder()
         self.decoder = Decoder()
+        # The profile advertises a HEADER_TABLE_SIZE, which tells the peer how
+        # large a dynamic table our decoder will accept. Announcing a size the
+        # decoder cannot honour makes a conforming server break us.
+        advertised = dict(profile.H2_SETTINGS).get(SETTING_HEADER_TABLE_SIZE)
+        if advertised:
+            self.decoder.max_allowed_table_size = advertised
         self.next_stream_id = profile.H2_FIRST_STREAM_ID
         self._buffer = bytearray()
         self._send_preamble()
@@ -120,6 +128,14 @@ class Http2Connection:
         self.tls.send(frame(HEADERS, flags, stream_id, payload))
         return self._read_response(stream_id)
 
+    def _apply_settings(self, payload: bytes) -> None:
+        """Honour the peer's HEADER_TABLE_SIZE, which bounds our encoder."""
+        for offset in range(0, len(payload) - 5, 6):
+            identifier = int.from_bytes(payload[offset:offset + 2], "big")
+            value = int.from_bytes(payload[offset + 2:offset + 6], "big")
+            if identifier == SETTING_HEADER_TABLE_SIZE:
+                self.encoder.header_table_size = value
+
     def _read_response(self, stream_id: int) -> Response:
         header_block = bytearray()
         body = bytearray()
@@ -129,6 +145,7 @@ class Http2Connection:
             frame_type, flags, frame_stream, payload = self._next_frame()
 
             if frame_type == SETTINGS and not flags & FLAG_ACK:
+                self._apply_settings(payload)
                 self.tls.send(frame(SETTINGS, FLAG_ACK, 0))
             elif frame_type == PING and not flags & FLAG_ACK:
                 self.tls.send(frame(PING, FLAG_ACK, 0, payload))

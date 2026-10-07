@@ -856,3 +856,32 @@ peer to hang up before moving on.
 Also unmeasured: whether Firefox splits several cookies into separate
 `cookie` headers over HTTP/2. HPACK makes that worthwhile and the single
 header emitted here would not reproduce it.
+
+---
+
+## 2026-10-06 — A fake README example turns up two real bugs
+
+The session example in the README used `example.com/login`, which does not
+exist. Looking for a real endpoint that sets and echoes cookies broke the
+client twice:
+
+**`httpbingo.org`: `Encoder exceeded max allowable table size`.** The profile
+advertises `HEADER_TABLE_SIZE = 65536` in SETTINGS, which is Firefox's value
+and tells the peer how large a dynamic table our decoder will accept. The
+`hpack` decoder was left at its 4096 default, so a server that took the
+advertisement at its word broke us. Copying a browser's SETTINGS values
+without honouring them is its own kind of inconsistency: the numbers were
+right for the fingerprint and wrong for the implementation.
+
+Fixed in both directions. The decoder now accepts what the profile
+advertises, and the peer's own `HEADER_TABLE_SIZE` is applied to our encoder,
+which was never read before.
+
+**`httpbin.org`: `server did not select TLS 1.3`.** That server negotiates
+TLS 1.2. The ClientHello offers both versions because Firefox does, and
+dropping 1.2 would change the fingerprint, so the honest position is that
+this client advertises a version it cannot speak and fails when a server
+takes it up. Recorded in the README as a limitation rather than papered over.
+
+The example now uses httpbingo.org and is runnable: set a cookie, fetch it
+back over the same connection, and the response echoes it.

@@ -95,6 +95,28 @@ class TestPreamble(unittest.TestCase):
             Http2Connection(FakeTls(alpn="http/1.1"))
 
 
+class TestHpackTableSizes(unittest.TestCase):
+    """What the profile advertises, the codec has to be able to honour."""
+
+    def test_decoder_accepts_the_size_the_profile_advertises(self):
+        conn = Http2Connection(FakeTls(), profile=firefox157)
+        advertised = dict(firefox157.H2_SETTINGS)[0x01]
+        self.assertEqual(conn.decoder.max_allowed_table_size, advertised)
+        self.assertGreater(advertised, 4096, "the default would make this vacuous")
+
+    def test_peer_header_table_size_bounds_our_encoder(self):
+        conn = Http2Connection(FakeTls(), profile=firefox157)
+        payload = (0x01).to_bytes(2, "big") + (512).to_bytes(4, "big")
+        conn._apply_settings(payload)
+        self.assertEqual(conn.encoder.header_table_size, 512)
+
+    def test_other_settings_are_ignored(self):
+        conn = Http2Connection(FakeTls(), profile=firefox157)
+        before = conn.encoder.header_table_size
+        conn._apply_settings((0x04).to_bytes(2, "big") + (99).to_bytes(4, "big"))
+        self.assertEqual(conn.encoder.header_table_size, before)
+
+
 class TestRequestFraming(unittest.TestCase):
     def setUp(self):
         self.tls = FakeTls()
