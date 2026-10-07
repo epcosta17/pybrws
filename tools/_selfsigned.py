@@ -18,10 +18,23 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
 
+# The subject common name is capped at 64 characters and is not what anything
+# validates against any more: a browser reads the subjectAltName. Putting the
+# hostname here as well meant a long name failed to build a certificate at all,
+# which is a problem when varying the hostname's length is the measurement.
+SUBJECT_COMMON_NAME = "pybrws capture"
+
+
 def build(hostname: str, directory: Path) -> tuple[Path, Path]:
-    """Write a certificate and key for `hostname`, returning their paths."""
+    """Write a certificate and key for `hostname`, returning their paths.
+
+    `hostname` goes in the subjectAltName only, so it may be any length a DNS
+    name may be.
+    """
     key = ec.generate_private_key(ec.SECP256R1())
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, hostname)])
+    name = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, SUBJECT_COMMON_NAME)
+    ])
     now = datetime.datetime.now(datetime.timezone.utc)
     certificate = (
         x509.CertificateBuilder()
