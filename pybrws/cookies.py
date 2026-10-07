@@ -8,6 +8,7 @@ attribute only restricts cross-site subrequests.
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
@@ -117,26 +118,33 @@ class CookieJar:
 
     def __init__(self) -> None:
         self._cookies: dict[tuple[str, str, str], Cookie] = {}
+        # Shared between the workers of a Fetcher, so every path that
+        # touches the mapping takes the lock.
+        self._lock = threading.Lock()
 
     def __len__(self) -> int:
-        return len(self._cookies)
+        with self._lock:
+            return len(self._cookies)
 
     def __iter__(self):
-        return iter(list(self._cookies.values()))
+        with self._lock:
+            return iter(list(self._cookies.values()))
 
     def clear(self) -> None:
-        self._cookies.clear()
+        with self._lock:
+            self._cookies.clear()
 
     def set(self, cookie: Cookie) -> None:
-        if cookie.expired():
-            self._cookies.pop(cookie.key, None)
-            return
-        existing = self._cookies.get(cookie.key)
-        if existing is not None:
-            # A replacement keeps the original creation time, which decides
-            # ordering in the Cookie header.
-            cookie.created = existing.created
-        self._cookies[cookie.key] = cookie
+        with self._lock:
+            if cookie.expired():
+                self._cookies.pop(cookie.key, None)
+                return
+            existing = self._cookies.get(cookie.key)
+            if existing is not None:
+                # A replacement keeps the original creation time, which
+                # decides ordering in the Cookie header.
+                cookie.created = existing.created
+            self._cookies[cookie.key] = cookie
 
     def absorb(self, headers, request_host: str, request_path: str) -> int:
         """Store every Set-Cookie in a response. Returns how many were kept."""
@@ -154,9 +162,13 @@ class CookieJar:
         host = host.lower()
         now = time.time()
         found = []
-        for cookie in list(self._cookies.values()):
+        with self._lock:
+            candidates = list(self._cookies.values())
+            for cookie in candidates:
+                if cookie.expired(now):
+                    self._cookies.pop(cookie.key, None)
+        for cookie in candidates:
             if cookie.expired(now):
-                del self._cookies[cookie.key]
                 continue
             if cookie.secure and not secure:
                 continue

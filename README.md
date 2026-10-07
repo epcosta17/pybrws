@@ -180,6 +180,15 @@ Send a request, with a body and headers of your own merged into the profile's:
     post("https://example.com/login", data={"u": "x"}, kind="form")  # a clicked form
     get("https://example.com/", headers={"Accept-Language": "es-MX", "Priority": None})
 
+Fetch many URLs across several connections:
+
+    from pybrws.pool import Fetcher
+    with Fetcher(concurrency=8) as fetcher:
+        for result in fetcher.fetch_all(urls):
+            print(result.status, result.url)
+    # errors come back as results rather than stopping the batch;
+    # the cookie jar and the ticket store are shared across workers
+
 Put several requests on one connection at once:
 
     from pybrws.handshake import connect

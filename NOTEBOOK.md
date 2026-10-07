@@ -1531,3 +1531,31 @@ A GOAWAY now fails only the streams above the peer's last_stream_id, rather
 than the whole connection, since the ones below it will still be answered.
 A RST_STREAM fails its own stream and leaves the rest alone. Neither was
 expressible while one request owned the reader.
+
+---
+
+## 2026-10-07 — Concurrency across connections
+
+`Fetcher` runs requests over a thread pool. The design question was what to
+share.
+
+A Session owns connections and a single-threaded frame pump, so it cannot be
+shared; each worker gets its own. The cookie jar and the ticket store are
+shared deliberately. Giving every worker its own jar would mean a site that
+sets a session cookie hands out one per thread, which is both wrong and
+conspicuous: four workers with four sessions on one site is not what a
+browser looks like. The jar needed a lock for that, which it did not have.
+
+    one at a time, 4 urls    5.0s   0.8/s
+    4 workers, 12 urls       3.5s   3.4/s
+    8 workers, 12 urls       2.4s   4.9/s
+
+Errors are returned rather than raised. A batch of a thousand should not
+stop because one host refused a connection, so `fetch` returns a `Result`
+carrying either a response or the exception.
+
+**Retries deliberately exclude 403.** A rate limit or a 5xx is worth
+repeating; a block is an answer, and repeating it only burns the address
+faster. That distinction came out of the measurement work rather than from
+general principle: 429 and 403 mean different things and the harness had to
+learn that too.

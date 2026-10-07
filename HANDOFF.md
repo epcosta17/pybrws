@@ -12,7 +12,7 @@ a request look automated, by building the thing and measuring it.
 
 Working: ClientHello, TLS 1.3 handshake including `X25519MLKEM768`, HTTP/2,
 HTTP/1.1, HelloRetryRequest, certificate verification, session
-resumption, HTTP/2 multiplexing, cookies, sessions with connection reuse,
+resumption, HTTP/2 multiplexing, a concurrent fetcher, cookies, sessions with connection reuse,
 outbound HTTP CONNECT and SOCKS5 proxies, a CLI, a MITM proxy that lends the
 fingerprint to other languages, request bodies and header merging.
 
@@ -78,9 +78,9 @@ requests after the first send a fingerprint no capture covers.
 2. **TLS 1.2 is advertised and not implemented**, because Firefox advertises
    it and removing it would change the fingerprint. httpbin.org declines TLS
    1.3 and so is unreachable.
-3. HTTP/3, streaming responses, and concurrency across hosts.
-   Multiplexing within one connection is done; what is missing is running
-   several connections at once, which needs threads or asyncio.
+3. HTTP/3 and streaming responses. Concurrency is done, as multiplexing
+   within a connection and a thread pool across them; what is missing is an
+   asyncio path, if one is ever wanted.
 
 ## Things that cost time here
 
