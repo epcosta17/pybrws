@@ -55,6 +55,7 @@ PAGE = (
 )
 
 captured: list[bytes] = []
+requests: list[list[tuple[str, str]]] = []
 
 
 def record_client_hellos() -> None:
@@ -94,6 +95,13 @@ class Responder(QuicConnectionProtocol):
 
         for http_event in self._http.handle_event(event):
             if isinstance(http_event, HeadersReceived):
+                # The request is a fingerprint too: QPACK rather than HPACK,
+                # and the pseudo-header order is the client's own choice.
+                requests.append([
+                    (name.decode("ascii", "replace"),
+                     value.decode("ascii", "replace"))
+                    for name, value in http_event.headers
+                ])
                 self._http.send_headers(
                     http_event.stream_id,
                     [
@@ -104,6 +112,16 @@ class Responder(QuicConnectionProtocol):
                 )
                 self._http.send_data(http_event.stream_id, PAGE, end_stream=True)
                 self.transmit()
+
+
+def describe_request(fields: list[tuple[str, str]]) -> None:
+    """Print one HTTP/3 request's headers in the order they arrived."""
+    pseudo = [name for name, _ in fields if name.startswith(":")]
+    print("  pseudo-header order: " + " ".join(pseudo))
+    print("  %d headers:" % len(fields))
+    for name, value in fields:
+        shown = value if len(value) <= 72 else value[:69] + "..."
+        print("    %-20s %s" % (name, shown))
 
 
 def describe(hello: bytes) -> None:
@@ -136,7 +154,11 @@ async def run(host: str, port: int, hostname: str, wait: float) -> bytes | None:
     print()
 
     deadline = asyncio.get_event_loop().time() + wait
-    while not captured and asyncio.get_event_loop().time() < deadline:
+    # Wait for the request as well as the hello: the handshake arrives first
+    # and stopping there would throw away half the measurement.
+    while asyncio.get_event_loop().time() < deadline:
+        if captured and requests:
+            break
         await asyncio.sleep(0.2)
     server.close()
     return captured[0] if captured else None
@@ -170,6 +192,12 @@ def main() -> int:
         return 1
 
     describe(hello)
+    if requests:
+        print()
+        describe_request(requests[0])
+    else:
+        print()
+        print("  no HTTP/3 request arrived; only the handshake was captured")
     if args.out is not None:
         save_hex(args.out, hello)
         print()

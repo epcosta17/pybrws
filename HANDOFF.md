@@ -213,13 +213,41 @@ the suite from the binder length rather than naming it.
    aioquic is a transport dependency in the same category as `hpack`, not an
    impersonation library, so the clean-room rule has nothing to say about it.
 
-   Still missing: an HTTP/3 request path worth the name. The handshake is
-   done and `H3Connection` is there, but there is no equivalent of
-   `client.get` over QUIC, no header-order profile for HTTP/3 (QPACK, not
-   HPACK, and the pseudo-header order is its own fingerprint), and no
-   measurement of what Firefox sends in an h3 request. Also unmeasured:
-   Firefox's own initial destination id length, which needs packet headers
-   rather than a handshake.
+   **The request path exists.** `pybrws/h3.py` gives `h3.get(url)`
+   synchronously, running its own event loop, plus `Http3Client` for callers
+   already in one. Three hosts fetched over h3 with gzip negotiated and
+   decompressed.
+
+   Its headers are **not measured**, and that is the live gap. The HTTP/2
+   navigation set is used as a starting point, which `tools/h3_compare.py`
+   showed matches curl_cffi's firefox147 header for header and in order --
+   weak evidence, two guesses agreeing, but evidence.
+
+   The **pseudo-header order is probably wrong**. Ours is
+   `:method :path :authority :scheme`, inherited from our measured HTTP/2
+   profile; curl_cffi's firefox target sends
+   `:method :scheme :authority :path`. One of the two is wrong about Firefox
+   over HTTP/3 and only a capture settles it. This is an inherited
+   assumption of exactly the kind this project exists to catch, so it is
+   named in `pybrws/h3.py`, in `tests/test_h3.py` and here.
+
+   Measured against curl_cffi (`tools/h3_compare.py`), using our own server
+   as the oracle because tls.peet.ws advertises h3 and does not serve it:
+   extension sets, cipher suites, session id, key shares and request header
+   order all agree. Three extensions differ and in all three we match the
+   Firefox 157 capture -- `supported_groups` 12 bytes against 16,
+   `quic_transport_parameters` 86 against 79, `encrypted_client_hello` 282
+   against 186 -- though some of that may be 147 against 157 rather than a
+   modelling difference.
+
+   Two differences are behavioural and not version-dependent. **curl_cffi
+   does not shuffle**: one extension order across four connections, where
+   real Firefox gave six orders in six. And **its ECH payload length
+   varies**, 186 to 250, where Firefox's is a constant 282. Both are tells
+   in their own right.
+
+   Also unmeasured: Firefox's own initial destination id length, which needs
+   packet headers rather than a handshake.
 
    Concurrency is done, as multiplexing within a connection and a thread
    pool across them; streaming is done; what is missing is an asyncio path,

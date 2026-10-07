@@ -2252,3 +2252,101 @@ transcript off the wrong object, one asserted aioquic had never heard of
 compressed certificates when it names them, and one inspected
 `_client_handle_hello` after this module had already replaced it, so it was
 proving that our wrapper calls our own stub.
+
+## 2026-10-07 — Measured against curl_cffi over HTTP/3
+
+curl_cffi is the production tool for this job and it has HTTP/3 fingerprints
+since v0.15, so it is the obvious baseline -- the HTTP/3 equivalent of what
+httpx has been for TCP, except that httpx is a control and this is a rival.
+
+### No third party
+
+The plan was to point both at a fingerprinting service. `tls.peet.ws`
+advertises `h3=":443"` in its Alt-Svc header and does not serve it: both
+clients fail the handshake there, identically. curl_cffi's error named
+**ngtcp2**, which answered a question its README leaves open -- that is the
+QUIC backend curl-impersonate builds against.
+
+So the oracle is our own server, which is better anyway. `catch_quic.py` was
+already capturing the ClientHello; it now records the HTTP/3 request headers
+too, in arrival order, which a third party would not have shown. That is the
+same arrangement `catch_h2.py` gave for HTTP/2.
+
+### What agrees
+
+| | pybrws | curl_cffi firefox147 |
+|---|---|---|
+| extension set | identical | identical |
+| cipher suites | `1301 1303 1302` | `1301 1303 1302` |
+| legacy session id | empty | empty |
+| key shares | `11ec/1216 1d/32 17/65` | same |
+| request header order | 11 headers | **the same 11, same order** |
+
+The header order agreeing is worth dwelling on, because it was a guess. There
+is no measured HTTP/3 header profile: `pybrws/h3.py` sends the HTTP/2
+navigation set and says in a comment that it is a starting point. It turns out
+to match curl_cffi's firefox147 exactly, header for header, in order. Two
+independent guesses landing on the same answer is weak evidence, but it is
+evidence, and it is more than the comment claimed.
+
+### What differs, and where each of us is wrong
+
+Three extensions differ, and in all three we match the Firefox 157 capture:
+
+| extension | pybrws | curl_cffi | Firefox 157 |
+|---|---|---|---|
+| `supported_groups` | 12 | 16 | **12** |
+| `quic_transport_parameters` | 86 | 79 | **86** |
+| `encrypted_client_hello` | 282 | 186 | **282** |
+
+`supported_groups`: five groups against their seven. The transport
+parameters: they omit `reset_stream_at` (0x1d), and their GREASE id is eight
+random bytes where Firefox's is the constant four-byte `0xff02de1a`. The ECH
+payload: 240 bytes against their 144.
+
+Some of that is a version difference rather than a modelling difference, and
+saying otherwise would be unfair. Their newest Firefox target is 147 and the
+capture is 157; `reset_stream_at` is a recent parameter and may simply not
+have been in 147. The group count could go the same way.
+
+Two differences are not version differences, because they are about behaviour
+rather than values. Four connections each:
+
+      pybrws     hello sizes [1905, 1905, 1905, 1905]  ech [282, 282, 282, 282]
+                 distinct extension orders: 4 of 4
+      curl_cffi  hello sizes [1875, 1877, 1807, 1809]  ech [250, 250, 186, 186]
+                 distinct extension orders: 1 of 4
+
+**curl_cffi does not shuffle.** One order in four connections, where the real
+Firefox gave six distinct orders in six. Their README offers "the ability to
+change extension orders", which is a configurable fixed order and not a draw,
+and over enough connections the absence of variation is itself the tell: a
+client whose extension order never moves is not neqo.
+
+**Its ECH payload length varies** and Firefox's does not. 282 bytes in all six
+captured connections and at both server-name lengths tested; theirs moves
+between 186 and 250. A length that changes when the browser's does not is a
+discriminator in the other direction.
+
+And one difference where **we are probably the wrong ones**. The
+pseudo-header order: ours is `:method :path :authority :scheme`, taken from
+our own measured HTTP/2 profile on faith; theirs is
+`:method :scheme :authority :path`. They presumably measured it. One of us is
+wrong about Firefox over HTTP/3 and only a capture settles it. It is written
+down in `pybrws/h3.py`, in `tests/test_h3.py` and in HANDOFF rather than left
+to be discovered, because this is exactly the kind of inherited assumption
+this project is supposed to catch -- and it inherited one.
+
+### What this is and is not
+
+It is not a claim to be better. curl_cffi is a mature tool with Chrome,
+Safari, Edge, proxies, a real API and years of use; this has one browser, no
+Chrome, and five monkeypatches into a dependency's private surface. The claim
+is narrow and checkable: on four specific points of the QUIC handshake,
+measured against a real Firefox 157 capture, we match it and the production
+tool does not -- and on one point it is the other way round.
+
+What the difference comes from is not cleverness. They configure a fixed
+order because a fixed order is what their architecture exposes; we draw one
+because six captures said Firefox draws one. The measurement is the whole
+advantage.

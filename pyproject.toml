@@ -15,4 +15,4 @@ zstd = ["zstandard"]
 # packet decryptor is checked against. pybrws.quic itself needs none of it:
 # reading Initial packets takes only cryptography, because the keys come from
 # a published salt.
-dev = ["httpx[http2]", "jupyterlab", "nbclient", "aioquic"]
+dev = ["httpx[http2]", "jupyterlab", "nbclient", "aioquic", "curl_cffi"]
