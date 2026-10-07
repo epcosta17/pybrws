@@ -8,8 +8,11 @@ retyped.
 
 import unittest
 
+from pathlib import Path
+
 from pybrws import h3
 from pybrws.profiles import firefox157
+from pybrws.profiles import firefox157_quic as profile
 
 
 class TestSplitTarget(unittest.TestCase):
@@ -56,28 +59,90 @@ class TestPseudoHeaders(unittest.TestCase):
     def test_all_four_are_present(self):
         self.assertEqual(len(h3._pseudo("GET", "/", "a.test")), 4)
 
-    def test_the_order_is_the_http2_one_and_is_not_measured(self):
-        # Named rather than silent: this was taken from the TCP profile on
-        # faith, and curl_cffi's firefox target disagrees with it, sending
-        # :method :scheme :authority :path over HTTP/3. One of the two is
-        # wrong about Firefox and only a capture can say which.
-        self.assertEqual(h3.PSEUDO_ORDER, firefox157.H2_PSEUDO_ORDER)
+    def test_the_order_is_measured_and_is_not_the_http2_one(self):
+        # This started as the HTTP/2 order, taken on faith. curl_cffi's
+        # firefox target disagreed, the capture settled it, and curl_cffi was
+        # right. Both are asserted here so the contrast is recorded in one
+        # place rather than inferred from two files.
+        self.assertEqual(h3.PSEUDO_ORDER,
+                         (":method", ":scheme", ":authority", ":path"))
+        self.assertEqual(firefox157.H2_PSEUDO_ORDER,
+                         (":method", ":path", ":authority", ":scheme"))
+        self.assertNotEqual(h3.PSEUDO_ORDER, firefox157.H2_PSEUDO_ORDER)
 
 
-class TestDefaultHeaders(unittest.TestCase):
-    def test_they_come_from_the_http2_navigation_set(self):
-        self.assertIs(h3.DEFAULT_HEADERS, firefox157.H2_NAVIGATION_HEADERS)
+FIXTURE = (Path(__file__).resolve().parent.parent / "fixtures"
+           / "reference-firefox-157-quic-request.txt")
 
-    def test_they_are_not_empty(self):
-        # Sending only the four pseudo-headers is what an empty list gives,
-        # and no browser has ever done that: no Accept, no Accept-Language,
-        # no Accept-Encoding. Measured against curl_cffi's firefox147 over
-        # HTTP/3, this set matches its header order exactly, which is the one
-        # part of the request layer with a second opinion behind it.
-        names = [name.lower() for name, _ in h3.DEFAULT_HEADERS]
-        for required in ("accept", "accept-language", "accept-encoding",
-                         "user-agent"):
-            self.assertIn(required, names)
+
+def captured_request() -> list[tuple[str, str]]:
+    """The measured request, parsed out of the fixture."""
+    fields = []
+    for line in FIXTURE.read_text(encoding="utf-8").splitlines():
+        if not line or line.startswith("#"):
+            continue
+        name, _, value = line.partition(": ")
+        fields.append((name, value))
+    return fields
+
+
+class TestAgainstTheCapture(unittest.TestCase):
+    """The measured HTTP/3 navigation request."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.captured = captured_request()
+        cls.authority = dict(cls.captured)[":authority"]
+
+    def test_the_pseudo_order_matches(self):
+        pseudo = [n for n, _ in self.captured if n.startswith(":")]
+        self.assertEqual(tuple(pseudo), h3.PSEUDO_ORDER)
+
+    def test_the_header_names_and_order_match(self):
+        theirs = [n for n, _ in self.captured if not n.startswith(":")]
+        ours = [n.lower() for n, _ in
+                profile.navigation_headers(self.authority)]
+        self.assertEqual(ours, [n.lower() for n in theirs])
+
+    def test_every_header_value_matches(self):
+        theirs = {n.lower(): v for n, v in self.captured
+                  if not n.startswith(":")}
+        for name, value in profile.navigation_headers(self.authority):
+            with self.subTest(header=name):
+                self.assertEqual(value, theirs[name.lower()])
+
+    def test_alt_used_carries_the_authority(self):
+        # RFC 7838. It is the one value in the set that belongs to the
+        # request rather than to the profile.
+        filled = dict((n.lower(), v) for n, v in
+                      profile.navigation_headers("example.test"))
+        self.assertEqual(filled["alt-used"], "example.test")
+
+    def test_alt_used_sits_after_accept_encoding(self):
+        names = [n.lower() for n, _ in profile.H3_NAVIGATION_HEADERS]
+        self.assertEqual(names[names.index("alt-used") - 1], "accept-encoding")
+
+    def test_te_is_not_sent(self):
+        # `te: trailers` is an HTTP/2 mechanism and the capture does not
+        # carry it, which the HTTP/2 profile does.
+        names = [n.lower() for n, _ in profile.H3_NAVIGATION_HEADERS]
+        self.assertNotIn("te", names)
+        self.assertIn("te", [n.lower() for n, _
+                             in firefox157.H2_NAVIGATION_HEADERS])
+
+    def test_the_shared_headers_keep_their_http2_values_and_order(self):
+        # The guess this replaced was not worthless: ten of the eleven
+        # headers transferred from HTTP/2 unchanged, in order. The two it got
+        # wrong both sit in the first four fields of every request.
+        h2 = [(n.lower(), v) for n, v in firefox157.H2_NAVIGATION_HEADERS]
+        h3_set = [(n.lower(), v) for n, v
+                  in profile.navigation_headers(self.authority)]
+        h3_names = {n for n, _ in h3_set}
+        h2_names = {n for n, _ in h2}
+        shared = h2_names & h3_names
+        self.assertEqual(len(shared), 10)
+        self.assertEqual([p for p in h2 if p[0] in shared],
+                         [p for p in h3_set if p[0] in shared])
 
 
 class TestTheModuleStandsAlone(unittest.TestCase):

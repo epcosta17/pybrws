@@ -1,0 +1,25 @@
+# Firefox 157.0 on Windows, HTTP/3 navigation request to cloudflare-quic.com.
+#
+# Decoded, not raw: HTTP/3 carries headers through QPACK, so there is no byte
+# sequence to compare against the way there is for HTTP/1.1. What is measured
+# here is the field order and the values, which is what the fingerprint is.
+#
+# Captured 2026-10-07 by decrypting a QUIC capture with Firefox's own
+# SSLKEYLOGFILE, since a request travels under handshake keys and cannot be
+# read from the packets alone the way a ClientHello can. Four requests in the
+# capture, identical in order and values.
+:method: GET
+:scheme: https
+:authority: cloudflare-quic.com
+:path: /
+user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:157.0) Gecko/20100101 Firefox/157.0
+accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+accept-language: en-US,en;q=0.9
+accept-encoding: gzip, deflate, br, zstd
+alt-used: cloudflare-quic.com
+upgrade-insecure-requests: 1
+sec-fetch-dest: document
+sec-fetch-mode: navigate
+sec-fetch-site: none
+sec-fetch-user: ?1
+priority: u=0, i

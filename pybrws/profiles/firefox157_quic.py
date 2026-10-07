@@ -251,3 +251,54 @@ def greased_ech(rng: Callable[[int], bytes] = os.urandom) -> bytes:
 def server_name(hostname: str) -> bytes:
     host = hostname.encode("idna")
     return vector(u8(0x00) + vector(host, 2), 2)
+
+
+# --- the HTTP/3 request ------------------------------------------------------
+#
+# Measured, from fixtures/reference-firefox-157-quic-request.txt. Getting it
+# needed Firefox's own SSLKEYLOGFILE: a request travels under handshake keys,
+# so unlike a ClientHello it cannot be read out of a capture on its own.
+#
+# The pseudo-header order is NOT the HTTP/2 one. Over TCP Firefox sends
+#   :method :path :authority :scheme
+# and over QUIC it sends
+#   :method :scheme :authority :path
+# which is the same lesson as the shuffled extension order: neqo is not NSS,
+# and nothing measured on one of Firefox's stacks transfers to the other
+# without being measured again. This project had quietly assumed otherwise,
+# and curl_cffi had it right.
+H3_PSEUDO_ORDER = (":method", ":scheme", ":authority", ":path")
+
+# The header set is the HTTP/2 navigation set with two changes: `te` is gone,
+# which follows from `te: trailers` being an HTTP/2 mechanism, and `alt-used`
+# appears after accept-encoding.
+#
+# `alt-used` carries the authority and is RFC 7838: a client sends it when it
+# reached the origin through an alternative service, which is how a browser
+# gets to HTTP/3 at all -- Alt-Svc on an earlier TCP connection. A client
+# that dials h3 directly, as this one does, has not technically used an
+# alternative service. It is included because it is what was measured and
+# because the direct path is itself the unusual thing; whether Firefox omits
+# it when an HTTPS DNS record sends it straight to h3 is not measured.
+H3_ALT_USED = "Alt-Used"
+
+H3_NAVIGATION_HEADERS: tuple[tuple[str, str], ...] = (
+    ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:157.0) "
+                   "Gecko/20100101 Firefox/157.0"),
+    ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+    ("Accept-Language", "en-US,en;q=0.9"),
+    ("Accept-Encoding", "gzip, deflate, br, zstd"),
+    (H3_ALT_USED, ""),                  # filled with the authority per request
+    ("Upgrade-Insecure-Requests", "1"),
+    ("Sec-Fetch-Dest", "document"),
+    ("Sec-Fetch-Mode", "navigate"),
+    ("Sec-Fetch-Site", "none"),
+    ("Sec-Fetch-User", "?1"),
+    ("Priority", "u=0, i"),
+)
+
+
+def navigation_headers(authority: str) -> list[tuple[str, str]]:
+    """The measured navigation set, with alt-used carrying the authority."""
+    return [(name, authority if name == H3_ALT_USED else value)
+            for name, value in H3_NAVIGATION_HEADERS]

@@ -6,12 +6,23 @@ which run one of their own. The synchronous pair is what makes an HTTP/3
 fetch look like the HTTP/2 one from the caller's side, which is the point --
 a scraper should not have to be rewritten because a host offers h3.
 
-What is *not* here is a measured header profile. The ClientHello is measured;
-the request is not. Firefox's HTTP/3 request carries its headers through QPACK
-rather than HPACK, and the pseudo-header order is a fingerprint of its own,
-and no capture of one has been taken yet. So the values below are the HTTP/2
-navigation set with the HTTP/2 pseudo-header order, which is a starting point
-and is marked as one rather than presented as a measurement.
+The request is measured now, which it was not at first. The first version of
+this module sent the HTTP/2 navigation set with the HTTP/2 pseudo-header
+order, on the reasoning that HTTP/3 is HTTP/2 over QUIC. Two of the three
+parts of that guess were wrong, and curl_cffi disagreeing is what prompted
+the capture:
+
+- the pseudo-header order is `:method :scheme :authority :path` over QUIC
+  against `:method :path :authority :scheme` over TCP;
+- `te: trailers` is not sent, `te` being an HTTP/2 mechanism;
+- `alt-used` is, carrying the authority.
+
+The ten shared headers do keep their HTTP/2 values and order, so the guess
+was not worthless -- but the two it got wrong are both in the first four
+fields of every request, which is the first thing anything looks at.
+
+See `profiles/firefox157_quic.py` and
+`fixtures/reference-firefox-157-quic-request.txt`.
 """
 
 from __future__ import annotations
@@ -26,31 +37,22 @@ from .profiles import firefox157, firefox157_quic
 
 DEFAULT_PORT = 443
 
-# Unmeasured over HTTP/3. The TCP profile's order, used until a capture of a
-# Firefox h3 request exists. Taking the h2 order on faith is exactly the kind
-# of thing this project does not do elsewhere, so it is named here and in
-# HANDOFF rather than left to be discovered.
-PSEUDO_ORDER = firefox157.H2_PSEUDO_ORDER
-
-# Likewise unmeasured. Sending only the four pseudo-headers, which is what an
-# empty header list produces, is far more conspicuous than sending the HTTP/2
-# set: no Accept, no Accept-Language, no Accept-Encoding, which no browser has
-# ever done. The h2 navigation set is a starting point and nothing more.
-DEFAULT_HEADERS = firefox157.H2_NAVIGATION_HEADERS
+PSEUDO_ORDER = firefox157_quic.H3_PSEUDO_ORDER
 
 
 class Http3Error(Exception):
     pass
 
 
-def _pseudo(method: str, path: str, authority: str) -> list[tuple[bytes, bytes]]:
+def _pseudo(method: str, path: str, authority: str,
+            order=None) -> list[tuple[bytes, bytes]]:
     values = {
         ":method": method.upper().encode(),
         ":path": path.encode(),
         ":authority": authority.encode(),
         ":scheme": b"https",
     }
-    return [(name.encode(), values[name]) for name in PSEUDO_ORDER]
+    return [(name.encode(), values[name]) for name in (order or PSEUDO_ORDER)]
 
 
 def _protocol():
@@ -76,13 +78,14 @@ def _protocol():
         # -- requests -------------------------------------------------------
 
         def send(self, method: str, path: str, authority: str,
-                 headers=(), body: bytes = b"") -> asyncio.Future:
+                 headers=(), body: bytes = b"",
+                 pseudo_order=None) -> asyncio.Future:
             if self._http is None:
                 # ProtocolNegotiated normally gets here first; a caller that
                 # sends before the handshake settles should still work.
                 self._http = H3Connection(self._quic)
             stream_id = self._quic.get_next_available_stream_id()
-            fields = _pseudo(method, path, authority)
+            fields = _pseudo(method, path, authority, pseudo_order)
             fields += [(name.lower().encode(), value.encode())
                        for name, value in headers]
             self._http.send_headers(stream_id, fields, end_stream=not body)
@@ -212,7 +215,8 @@ async def fetch(url: str, *, method: str = "GET", headers=None,
                 verify: bool = True, timeout: float = 30.0) -> Response:
     """One request on its own connection, from inside a loop."""
     body, content_type = encode_body(data, json)
-    merged = header_tools.merge(DEFAULT_HEADERS, headers)
+    _host, _port, authority, _path = split_target(url)
+    merged = header_tools.merge(profile.navigation_headers(authority), headers)
     if content_type and not header_tools.has(merged, "content-type"):
         merged = merged + [("Content-Type", content_type)]
 
