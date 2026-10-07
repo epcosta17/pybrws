@@ -3,13 +3,8 @@
 import argparse
 import unittest
 
-from pybrws.cli import (
-    build_parser,
-    merge_headers,
-    parse_header,
-    render_head,
-    resolve_profile,
-)
+from pybrws.cli import build_parser, parse_header, render_head, resolve_profile
+from pybrws.headers import merge
 from pybrws.message import Response
 from pybrws.profiles import firefox157
 
@@ -29,24 +24,25 @@ class TestHeaderArgument(unittest.TestCase):
 
 
 class TestMergeHeaders(unittest.TestCase):
-    def test_no_overrides_leaves_the_profile_alone(self):
-        self.assertIsNone(merge_headers(firefox157, [], http2=True))
+    def test_no_overrides_returns_the_profile_list(self):
+        self.assertEqual(merge(firefox157.H2_NAVIGATION_HEADERS, []),
+                         list(firefox157.H2_NAVIGATION_HEADERS))
 
     def test_override_replaces_in_place_without_reordering(self):
-        merged = merge_headers(
-            firefox157, [("accept-language", "es-MX")], http2=True
+        merged = merge(
+            firefox157.H2_NAVIGATION_HEADERS, [("accept-language", "es-MX")]
         )
         names = [name for name, _ in merged]
         self.assertEqual(names, [n for n, _ in firefox157.H2_NAVIGATION_HEADERS])
         self.assertEqual(dict(merged)["accept-language"], "es-MX")
 
     def test_unknown_header_is_appended(self):
-        merged = merge_headers(firefox157, [("X-Trace", "1")], http2=True)
+        merged = merge(firefox157.H2_NAVIGATION_HEADERS, [("X-Trace", "1")])
         self.assertEqual(merged[-1], ("X-Trace", "1"))
         self.assertEqual(len(merged), len(firefox157.H2_NAVIGATION_HEADERS) + 1)
 
     def test_http1_list_keeps_its_capitalisation(self):
-        merged = merge_headers(firefox157, [("accept", "*/*")], http2=False)
+        merged = merge(firefox157.H1_HEADERS, [("accept", "*/*")])
         self.assertIn(("Accept", "*/*"), merged)
         self.assertEqual(merged[0][0], "Host")
 
@@ -74,7 +70,7 @@ class TestParser(unittest.TestCase):
     def test_defaults(self):
         args = build_parser().parse_args(["https://a.test/"])
         self.assertEqual(args.url, "https://a.test/")
-        self.assertEqual(args.request, "GET")
+        self.assertIsNone(args.request, "the method is decided from -d")
         self.assertEqual(args.profile, "firefox157")
         self.assertTrue(args.location, "a browser follows redirects by default")
 

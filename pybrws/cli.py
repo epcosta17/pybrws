@@ -7,7 +7,8 @@ import sys
 from pathlib import Path
 
 from . import profiles
-from .client import TooManyRedirects, UnsupportedUrl, get
+from . import headers as header_tools
+from .client import TooManyRedirects, UnsupportedUrl, request
 from .message import Response
 from .proxies import ProxyError
 from .records import TlsAlert
@@ -26,25 +27,6 @@ def resolve_profile(name: str):
     except AttributeError:
         available = ", ".join(profiles.__all__)
         raise SystemExit("unknown profile " + repr(name) + "; available: " + available)
-
-
-def merge_headers(profile, overrides: list[tuple[str, str]], http2: bool):
-    """Apply -H overrides, replacing matching names in place and appending new ones.
-
-    Returns None when there is nothing to override, so the profile's own list
-    is used untouched.
-    """
-    if not overrides:
-        return None
-    base = list(profile.H2_NAVIGATION_HEADERS if http2 else profile.H1_HEADERS)
-    for name, value in overrides:
-        for index, (existing, _) in enumerate(base):
-            if existing.lower() == name.lower():
-                base[index] = (existing, value)
-                break
-        else:
-            base.append((name, value))
-    return base
 
 
 def describe_request(profile, args) -> str:
@@ -69,8 +51,10 @@ def build_parser() -> argparse.ArgumentParser:
         description="Fetch an https URL with a browser's protocol fingerprint.",
     )
     parser.add_argument("url", help="the https URL to fetch")
-    parser.add_argument("-X", "--request", default="GET", metavar="METHOD",
-                        help="HTTP method; only GET is implemented")
+    parser.add_argument("-X", "--request", default=None, metavar="METHOD",
+                        help="HTTP method; defaults to GET, or POST with -d")
+    parser.add_argument("-d", "--data", metavar="BODY",
+                        help="request body; implies POST unless -X says otherwise")
     parser.add_argument("-H", "--header", action="append", default=[],
                         type=parse_header, metavar="'Name: value'",
                         help="replace or add a request header, repeatable")
@@ -101,24 +85,25 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-
-    if args.request.upper() != "GET":
-        raise SystemExit("only GET is implemented, not " + args.request.upper())
+    if args.request is None:
+        args.request = "POST" if args.data else "GET"
+    overrides = list(args.header)
+    if args.data and not header_tools.has(overrides, "content-type"):
+        # curl's default for -d, and a server will otherwise guess.
+        overrides.append(("Content-Type", "application/x-www-form-urlencoded"))
 
     profile = resolve_profile(args.profile)
     if args.verbose:
         print(describe_request(profile, args), file=sys.stderr)
 
-    # The protocol is not known until ALPN completes, so -H is applied to both
-    # header lists and the unused one is discarded.
-    headers = merge_headers(profile, args.header, http2=True)
-
     try:
-        response = get(
+        response = request(
             args.url,
+            method=args.request.upper(),
+            headers=overrides or None,
+            data=args.data,
             profile=profile,
             timeout=args.timeout,
-            headers=headers,
             follow_redirects=args.max_redirs if args.location else 0,
             proxy=args.proxy,
         )

@@ -10,11 +10,12 @@ from __future__ import annotations
 from urllib.parse import urljoin, urlsplit
 
 from .client import REDIRECT_STATUSES, TooManyRedirects, UnsupportedUrl
+from . import headers as header_tools
 from .cookies import CookieJar
 from .handshake import connect
 from .http1 import Http1Connection, Http1Error
 from .http2 import Http2Connection, Http2Error
-from .message import Response
+from .message import Response, encode_body
 from .profiles import firefox157
 from .proxies import resolve
 from .records import TlsAlert
@@ -78,8 +79,9 @@ class Session:
         proxy = resolve(self.proxy)
         return (host, port, str(proxy) if proxy else None)
 
-    def _open(self, host: str, port: int):
-        tls = connect(host, port, profile=self.profile, timeout=self.timeout,
+    def _open(self, host: str, port: int, timeout: float | None = None):
+        tls = connect(host, port, profile=self.profile,
+                      timeout=self.timeout if timeout is None else timeout,
                       proxy=self.proxy)
         if tls.alpn == "h2":
             http = Http2Connection(tls, profile=self.profile)
@@ -87,12 +89,12 @@ class Session:
             http = Http1Connection(tls, profile=self.profile)
         return tls, http
 
-    def _connection(self, host: str, port: int):
+    def _connection(self, host: str, port: int, timeout: float | None = None):
         key = self._key(host, port)
         existing = self._pool.get(key)
         if existing is not None:
             return existing, True
-        created = self._open(host, port)
+        created = self._open(host, port, timeout)
         self._pool[key] = created
         return created, False
 
@@ -121,12 +123,10 @@ class Session:
     # -- requests ----------------------------------------------------------
 
     def _headers_for(self, host: str, path: str, http2: bool, override):
-        if override is not None:
-            base = list(override)
-        else:
-            base = list(
-                self.profile.H2_NAVIGATION_HEADERS if http2 else self.profile.H1_HEADERS
-            )
+        base = header_tools.merge(
+            self.profile.H2_NAVIGATION_HEADERS if http2 else self.profile.H1_HEADERS,
+            override,
+        )
         cookie = self.cookies.header_for(host, path.split("?", 1)[0])
         if cookie is None:
             return base
@@ -135,35 +135,45 @@ class Session:
                                  self.profile.H2_COOKIE_BEFORE)
         return insert_header(base, "Cookie", cookie, self.profile.H1_COOKIE_BEFORE)
 
-    def _once(self, url: str, headers) -> Response:
+    def _once(self, url: str, headers, method: str = "GET",
+              body: bytes = b"", timeout: float | None = None) -> Response:
         host, port, authority, path = split_url(url)
-        (tls, http), reused = self._connection(host, port)
+        (tls, http), reused = self._connection(host, port, timeout)
         request_headers = self._headers_for(host, path,
                                             isinstance(http, Http2Connection), headers)
         try:
-            response = http.get(path, authority, headers=request_headers)
+            response = http.request(method, path, authority,
+                                    headers=request_headers, body=body)
         except RETRYABLE:
             self._discard(host, port)
             if not reused:
                 raise
             # A pooled connection the peer had already closed. One retry on a
             # fresh one, which is what a browser does rather than failing.
-            (tls, http), _ = self._connection(host, port)
+            (tls, http), _ = self._connection(host, port, timeout)
             request_headers = self._headers_for(
                 host, path, isinstance(http, Http2Connection), headers
             )
-            response = http.get(path, authority, headers=request_headers)
+            response = http.request(method, path, authority,
+                                    headers=request_headers, body=body)
 
         self.cookies.absorb(response.headers, host, path.split("?", 1)[0])
         response.url = url
         return response
 
-    def get(self, url: str, *, headers=None, follow_redirects: int | None = None) -> Response:
-        """Fetch a URL, carrying and collecting cookies.
+    def request(self, url: str, *, method: str = "GET", headers=None,
+                data=None, json=None, timeout: float | None = None,
+                follow_redirects: int | None = None) -> Response:
+        """Send a request, carrying and collecting cookies.
 
         Args:
             url: an https URL.
-            headers: replaces the profile's header list for this request.
+            method: the HTTP method.
+            headers: values merged into the profile's header list, keeping
+                its order. A value of None drops that header.
+            data: bytes, a string, or a mapping to form-encode.
+            json: an object to serialise as JSON.
+            timeout: overrides the session default for this request.
             follow_redirects: overrides the session default.
 
         Returns:
@@ -172,10 +182,15 @@ class Session:
         Raises:
             TooManyRedirects: if the budget runs out while still redirecting.
         """
+        body, content_type = encode_body(data, json)
+        if content_type and not header_tools.has(header_tools.as_pairs(headers),
+                                                 "content-type"):
+            headers = header_tools.as_pairs(headers) + [("Content-Type", content_type)]
+
         budget = self.follow_redirects if follow_redirects is None else follow_redirects
         seen = []
         for hop in range(budget + 1):
-            response = self._once(url, headers)
+            response = self._once(url, headers, method, body, timeout)
             response.history = list(seen)
             location = response.header("location")
             if response.status not in REDIRECT_STATUSES or not location:
@@ -189,3 +204,13 @@ class Session:
                 )
             seen.append(response)
             url = urljoin(url, location)
+            if response.status in (301, 302, 303) and method != "HEAD":
+                method, body = "GET", b""
+
+    def get(self, url: str, **kwargs) -> Response:
+        """Fetch a URL. See `request` for the arguments."""
+        return self.request(url, method="GET", **kwargs)
+
+    def post(self, url: str, **kwargs) -> Response:
+        """Send a POST. See `request` for the arguments."""
+        return self.request(url, method="POST", **kwargs)

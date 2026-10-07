@@ -7,6 +7,7 @@ both come from the profile rather than from a dictionary.
 from __future__ import annotations
 
 from .handshake import Connection
+from . import headers as header_tools
 from .message import Response, decompress
 from .profiles import firefox157
 
@@ -100,22 +101,33 @@ class Http1Connection:
         self.profile = profile
         self.reader = _StreamReader(tls)
 
-    def build_request(self, method: str, path: str, authority: str, headers=None) -> bytes:
+    def build_request(self, method: str, path: str, authority: str, headers=None,
+                      body: bytes = b"") -> bytes:
         if headers is None:
             headers = self.profile.H1_HEADERS
+        if body and not header_tools.has(headers, "content-length"):
+            # Slot unmeasured: no capture of this browser sending a body
+            # exists yet. A caller that cares can place it explicitly.
+            headers = list(headers) + [("Content-Length", str(len(body)))]
         lines = [method + " " + path + " HTTP/1.1"]
         for name, value in headers:
             lines.append(name + ": " + value.replace("{authority}", authority))
-        return ("\r\n".join(lines) + "\r\n\r\n").encode("latin-1")
+        head = ("\r\n".join(lines) + "\r\n\r\n").encode("latin-1")
+        return head + body
+
+    def request(self, method: str, path: str, authority: str, *, headers=None,
+                body: bytes = b"") -> Response:
+        """Send one request and read its complete response."""
+        self.tls.send(self.build_request(method, path, authority, headers, body))
+        return self._read_response(method)
 
     def get(self, path: str, authority: str, *, headers=None) -> Response:
-        """Send one GET and read its complete response."""
-        self.tls.send(self.build_request("GET", path, authority, headers))
-        return self._read_response()
+        return self.request("GET", path, authority, headers=headers)
 
-    def _read_body(self, headers: list[tuple[str, str]], status: int) -> bytes:
+    def _read_body(self, headers: list[tuple[str, str]], status: int,
+                   method: str = "GET") -> bytes:
         lookup = {name.lower(): value for name, value in headers}
-        if status < 200 or status in (204, 304):
+        if status < 200 or status in (204, 304) or method == "HEAD":
             return b""
         if "chunked" in lookup.get("transfer-encoding", "").lower():
             return self._read_chunked()
@@ -137,7 +149,7 @@ class Http1Connection:
             body += self.reader.read_exactly(size)
             self.reader.read_exactly(2)  # trailing CRLF
 
-    def _read_response(self) -> Response:
+    def _read_response(self, method: str = "GET") -> Response:
         while True:
             head = self.reader.read_until(b"\r\n\r\n", MAX_HEADER_BYTES)
             status_line, _, header_block = head.partition(b"\r\n")
@@ -146,7 +158,7 @@ class Http1Connection:
                 break
 
         headers = _parse_headers(header_block)
-        body = self._read_body(headers, status)
+        body = self._read_body(headers, status, method)
         response = Response(status=status, headers=headers, http_version=version)
         response.body = decompress(body, response.header("content-encoding") or "")
         return response

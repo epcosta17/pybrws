@@ -149,12 +149,12 @@ class TestSessionRequests(unittest.TestCase):
     def setUp(self):
         self.session = Session()
         self.addCleanup(self.session.close)
-        self.visited = []
+        self.calls = []
 
     def scripted(self, responses):
-        def _once(url, headers):
-            self.visited.append(url)
-            return responses[len(self.visited) - 1]
+        def _once(url, headers, method="GET", body=b"", timeout=None):
+            self.calls.append((url, method))
+            return responses[len(self.calls) - 1]
 
         self.session._once = _once
 
@@ -172,7 +172,7 @@ class TestSessionRequests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(len(response.history), 2)
         self.assertEqual(
-            self.visited,
+            [url for url, _ in self.calls],
             ["https://a.test/one", "https://a.test/two", "https://b.test/three"],
         )
 
@@ -180,7 +180,7 @@ class TestSessionRequests(unittest.TestCase):
         self.scripted([Response(301, [("Location", "/elsewhere")])])
         response = self.session.get("https://a.test/", follow_redirects=0)
         self.assertEqual(response.status, 301)
-        self.assertEqual(len(self.visited), 1)
+        self.assertEqual(len(self.calls), 1)
 
     def test_a_redirect_without_a_location_is_returned_as_is(self):
         self.scripted([Response(302, [])])

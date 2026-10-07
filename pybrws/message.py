@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json as _json
 import zlib
 from dataclasses import dataclass, field
+from urllib.parse import urlencode
 
 
 class ContentEncodingError(Exception):
@@ -40,6 +42,27 @@ def decompress(body: bytes, encoding: str) -> bytes:
     raise ContentEncodingError("unsupported content-encoding " + encoding)
 
 
+def encode_body(data=None, json=None) -> tuple[bytes, str | None]:
+    """Turn a caller's body into bytes and the content type it implies.
+
+    `data` may be bytes, a string, or a mapping to form-encode. `json` is
+    serialised. Returns (body, content_type), content_type None when the
+    caller should supply its own.
+    """
+    if data is not None and json is not None:
+        raise ValueError("pass data or json, not both")
+    if json is not None:
+        return _json.dumps(json, separators=(",", ":")).encode(), "application/json"
+    if data is None:
+        return b"", None
+    if isinstance(data, bytes):
+        return data, None
+    if isinstance(data, str):
+        return data.encode(), None
+    return (urlencode(data, doseq=True).encode(),
+            "application/x-www-form-urlencoded")
+
+
 @dataclass
 class Response:
     status: int
@@ -57,4 +80,21 @@ class Response:
         return None
 
     def text(self, errors: str = "replace") -> str:
-        return self.body.decode("utf-8", errors)
+        return self.body.decode(self.charset, errors)
+
+    def json(self):
+        """Decode the body as JSON."""
+        return _json.loads(self.body)
+
+    @property
+    def charset(self) -> str:
+        content_type = self.header("content-type") or ""
+        for part in content_type.split(";")[1:]:
+            key, _, value = part.partition("=")
+            if key.strip().lower() == "charset":
+                return value.strip().strip('"') or "utf-8"
+        return "utf-8"
+
+    @property
+    def ok(self) -> bool:
+        return 200 <= self.status < 400

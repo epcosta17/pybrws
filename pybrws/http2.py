@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from hpack import Decoder, Encoder
 
+from . import headers as header_tools
 from .handshake import Connection
 from .message import ContentEncodingError, Response, decompress
 from .profiles import firefox157
@@ -27,6 +28,12 @@ WINDOW_UPDATE = 0x08
 CONTINUATION = 0x09
 
 SETTING_HEADER_TABLE_SIZE = 0x01
+SETTING_INITIAL_WINDOW_SIZE = 0x04
+SETTING_MAX_FRAME_SIZE = 0x05
+
+# RFC 7540 defaults, in force until the peer's SETTINGS arrive.
+DEFAULT_WINDOW = 65535
+DEFAULT_MAX_FRAME = 16384
 
 FLAG_END_STREAM = 0x01
 FLAG_ACK = 0x01
@@ -66,6 +73,15 @@ class Http2Connection:
             self.decoder.max_allowed_table_size = advertised
         self.next_stream_id = profile.H2_FIRST_STREAM_ID
         self._buffer = bytearray()
+        # Frames that arrive while a body is being sent are kept here, so
+        # waiting for a WINDOW_UPDATE cannot swallow the response.
+        self._pending: list[tuple[int, int, int, bytes]] = []
+        # What the peer lets us send before it grants more. These are the
+        # protocol defaults until its SETTINGS say otherwise.
+        self.peer_window = DEFAULT_WINDOW
+        self.peer_max_frame_size = DEFAULT_MAX_FRAME
+        self._stream_windows: dict[int, int] = {}
+        self._peer_initial_window = DEFAULT_WINDOW
         self._send_preamble()
 
     def _send_preamble(self) -> None:
@@ -81,10 +97,24 @@ class Http2Connection:
 
     def _header_block(self, pseudo: dict[str, str], headers) -> bytes:
         ordered = [(name, pseudo[name]) for name in self.profile.H2_PSEUDO_ORDER]
-        ordered += list(headers)
+        # RFC 7540 section 8.1.2: field names are lowercase on the wire, and a
+        # peer treats an uppercase one as a protocol error. Casing is part of
+        # the fingerprint over HTTP/1.1 and is simply not expressible here.
+        ordered += [(name.lower(), value) for name, value in headers]
         return self.encoder.encode(ordered)
 
     def _next_frame(self) -> tuple[int, int, int, bytes]:
+        """The next frame, preferring any deferred while a body was sent."""
+        if self._pending:
+            return self._pending.pop(0)
+        return self._frame_from_wire()
+
+    def _frame_from_wire(self) -> tuple[int, int, int, bytes]:
+        """Read a frame off the connection, ignoring the deferred queue.
+
+        Separate from _next_frame because a reader that defers a frame must
+        not then be handed its own deferral back, which spins forever.
+        """
         while True:
             if len(self._buffer) >= 9:
                 length = int.from_bytes(self._buffer[:3], "big")
@@ -97,22 +127,26 @@ class Http2Connection:
                     return frame_type, flags, stream_id, payload
             self._buffer += self.tls.recv()
 
-    def get(self, path: str, authority: str, *, headers=None) -> Response:
-        """Send one GET and read its complete response."""
+    def request(self, method: str, path: str, authority: str, *, headers=None,
+                body: bytes = b"") -> Response:
+        """Send one request and read its complete response."""
         stream_id = self.next_stream_id
         self.next_stream_id += 2
+        self._stream_windows[stream_id] = self._peer_initial_window
 
         pseudo = {
-            ":method": "GET",
+            ":method": method,
             ":path": path,
             ":authority": authority,
             ":scheme": "https",
         }
         if headers is None:
             headers = self.profile.H2_NAVIGATION_HEADERS
+        if body and not header_tools.has(headers, "content-length"):
+            headers = list(headers) + [("content-length", str(len(body)))]
         block = self._header_block(pseudo, headers)
 
-        flags = FLAG_END_STREAM | FLAG_END_HEADERS
+        flags = FLAG_END_HEADERS if body else FLAG_END_STREAM | FLAG_END_HEADERS
         payload = block
         priority = getattr(self.profile, "H2_HEADERS_PRIORITY", None)
         if priority:
@@ -126,15 +160,70 @@ class Http2Connection:
             )
 
         self.tls.send(frame(HEADERS, flags, stream_id, payload))
+        if body:
+            self._send_body(stream_id, body)
         return self._read_response(stream_id)
 
+    def get(self, path: str, authority: str, *, headers=None) -> Response:
+        return self.request("GET", path, authority, headers=headers)
+
+    def _send_body(self, stream_id: int, body: bytes) -> None:
+        """Write DATA frames, respecting both flow control windows."""
+        offset = 0
+        while offset < len(body):
+            room = self._await_window(stream_id)
+            size = min(room, self.peer_max_frame_size, len(body) - offset)
+            chunk = body[offset : offset + size]
+            offset += size
+            last = offset >= len(body)
+            self.tls.send(frame(DATA, FLAG_END_STREAM if last else 0,
+                                stream_id, chunk))
+            self.peer_window -= size
+            self._stream_windows[stream_id] -= size
+
+    def _await_window(self, stream_id: int) -> int:
+        """Return how much may be sent now, reading frames until that is more
+        than nothing. Anything that is not a window update is kept for the
+        response reader rather than discarded."""
+        while True:
+            room = min(self.peer_window, self._stream_windows.get(stream_id, 0))
+            if room > 0:
+                return room
+            frame_type, flags, frame_stream, payload = self._frame_from_wire()
+            if frame_type == WINDOW_UPDATE:
+                self._credit(frame_stream, int.from_bytes(payload[:4], "big"))
+            elif frame_type == SETTINGS:
+                if not flags & FLAG_ACK:
+                    self._apply_settings(payload)
+                    self.tls.send(frame(SETTINGS, FLAG_ACK, 0))
+            elif frame_type == GOAWAY:
+                raise Http2Error("GOAWAY while sending the request body")
+            elif frame_type == RST_STREAM and frame_stream == stream_id:
+                raise Http2Error("stream reset while sending the request body")
+            else:
+                self._pending.append((frame_type, flags, frame_stream, payload))
+
+    def _credit(self, stream_id: int, increment: int) -> None:
+        if stream_id == 0:
+            self.peer_window += increment
+        elif stream_id in self._stream_windows:
+            self._stream_windows[stream_id] += increment
+
     def _apply_settings(self, payload: bytes) -> None:
-        """Honour the peer's HEADER_TABLE_SIZE, which bounds our encoder."""
+        """Adopt the peer's limits: what it will decode, and what it will accept."""
         for offset in range(0, len(payload) - 5, 6):
             identifier = int.from_bytes(payload[offset:offset + 2], "big")
             value = int.from_bytes(payload[offset + 2:offset + 6], "big")
             if identifier == SETTING_HEADER_TABLE_SIZE:
                 self.encoder.header_table_size = value
+            elif identifier == SETTING_INITIAL_WINDOW_SIZE:
+                # Applies to streams already open as a delta, per RFC 7540.
+                delta = value - self._peer_initial_window
+                self._peer_initial_window = value
+                for open_stream in self._stream_windows:
+                    self._stream_windows[open_stream] += delta
+            elif identifier == SETTING_MAX_FRAME_SIZE:
+                self.peer_max_frame_size = value
 
     def _read_response(self, stream_id: int) -> Response:
         header_block = bytearray()
@@ -144,7 +233,9 @@ class Http2Connection:
         while not done:
             frame_type, flags, frame_stream, payload = self._next_frame()
 
-            if frame_type == SETTINGS and not flags & FLAG_ACK:
+            if frame_type == WINDOW_UPDATE:
+                self._credit(frame_stream, int.from_bytes(payload[:4], "big"))
+            elif frame_type == SETTINGS and not flags & FLAG_ACK:
                 self._apply_settings(payload)
                 self.tls.send(frame(SETTINGS, FLAG_ACK, 0))
             elif frame_type == PING and not flags & FLAG_ACK:

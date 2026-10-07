@@ -62,6 +62,29 @@ class TestRequestFormat(unittest.TestCase):
             Http1Connection(FakeTls(alpn="h2"))
 
 
+class TestRequestBodies(unittest.TestCase):
+    def build(self, method, body=b"", headers=None):
+        conn = Http1Connection(FakeTls(), profile=firefox157)
+        return conn.build_request(method, "/submit", "a.test", headers, body)
+
+    def test_body_follows_the_blank_line(self):
+        raw = self.build("POST", b"name=value")
+        head, _, body = raw.partition(b"\r\n\r\n")
+        self.assertTrue(head.startswith(b"POST /submit HTTP/1.1"))
+        self.assertEqual(body, b"name=value")
+
+    def test_content_length_is_added(self):
+        self.assertIn(b"Content-Length: 10", self.build("POST", b"name=value"))
+
+    def test_a_supplied_content_length_is_not_duplicated(self):
+        raw = self.build("POST", b"abc",
+                         headers=[("Host", "{authority}"), ("Content-Length", "3")])
+        self.assertEqual(raw.count(b"Content-Length"), 1)
+
+    def test_no_body_means_no_content_length(self):
+        self.assertNotIn(b"Content-Length", self.build("GET"))
+
+
 class TestResponseParsing(unittest.TestCase):
     def fetch(self, inbound):
         tls = FakeTls(inbound)

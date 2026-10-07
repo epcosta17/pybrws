@@ -145,7 +145,8 @@ and the source of NSS, Firefox and OpenSSL.
 | 5 | curl-style CLI | done |
 | 6 | Proxy sidecar for other languages | done |
 | 7 | Outbound proxies, HTTP CONNECT and SOCKS5 | done |
-| 8 | Sessions: cookie jar and connection reuse | done, cookie slot unmeasured |
+| 8 | Sessions: cookie jar and connection reuse | done |
+| 9 | Methods, request bodies, header merging | done |
 
 Phases 0 through 2 are standard library only.
 
@@ -165,6 +166,12 @@ Capture a ClientHello (see `fixtures/README.md` for the hostname requirement):
 Run the tests:
 
     python -m unittest discover -s tests -t . -v
+
+Send a request, with a body and headers of your own merged into the profile's:
+
+    from pybrws.client import get, post
+    post("https://api.example.com/v1/items", json={"name": "x"})
+    get("https://example.com/", headers={"Accept-Language": "es-MX", "Priority": None})
 
 Keep cookies and connections across requests:
 

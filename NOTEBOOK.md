@@ -1114,3 +1114,41 @@ every other measurement of it.
 Also fixed while here: `verdict()` lived in the sweep cell, so section 6
 could not run without section 3. Helpers now live in the setup cell and every
 section stands alone, which matters for a notebook presented live.
+
+---
+
+## 2026-10-06 — Methods, bodies and header merging
+
+What a scraper written against `curl_cffi` needs before this can replace it:
+other methods, request bodies, and headers that merge rather than replace.
+
+**Header merging is the one with teeth.** Passing `headers=` used to replace
+the profile's whole list, so a caller adding one header silently discarded
+the fingerprint. `headers.merge` now keeps the profile order, replaces a
+header in place where the name already exists, appends a genuinely new one,
+and treats `None` as a removal. Verified against httpbingo: a value added, a
+value replaced in situ, one dropped, and the rest of the profile intact.
+
+`tools/verify.py` still passes 18 of 18 after all of it, which was the point
+of checking.
+
+**Two bugs, both mine, both found by running it.**
+
+An uppercase header name is a protocol error over HTTP/2: RFC 7540 section
+8.1.2 requires lowercase field names, and a caller passing `X-Demo` earned a
+GOAWAY. Names are now lowered in the HTTP/2 header block only, since casing
+*is* the fingerprint over HTTP/1.1 and simply has no expression here.
+
+Worse, the flow control path span forever on any body over 65535 bytes.
+`_await_window` defers frames that are not window updates so the response
+reader can have them, and `_next_frame` prefers the deferred queue, so the
+first deferral was handed straight back to the code that deferred it. A busy
+loop with no error and no timeout, since nothing ever blocked. Split into
+`_next_frame`, which prefers deferrals, and `_frame_from_wire`, which never
+does. A 200 KB body now posts in half a second and 500 KB works; 1 MB returns
+400, and httpx gets the same 400, so that is httpbingo's limit and not ours.
+
+**Unmeasured and marked:** the slot a browser gives `Content-Length`, and the
+header set Firefox sends with a POST, which differs from a navigation in
+`Content-Type`, `Origin` and the `Sec-Fetch-*` values. Both need a capture
+that `tools/catch_request.py` can take.

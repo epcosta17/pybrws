@@ -225,6 +225,94 @@ class TestFlowControl(unittest.TestCase):
         self.assertEqual(stream_updates, [])
 
 
+class TestSendFlowControl(unittest.TestCase):
+    """A body larger than the peer's window must wait for credit, not stall."""
+
+    def connection(self, credits):
+        """A connection whose peer grants `credits` one WINDOW_UPDATE at a time."""
+        conn = Http2Connection(FakeTls(), profile=firefox157)
+        queued = list(credits)
+
+        def grant():
+            if not queued:
+                raise AssertionError("asked for more credit than the test grants")
+            amount = queued.pop(0)
+            return (WINDOW_UPDATE, 0, 0, amount.to_bytes(4, "big"))
+
+        conn._frame_from_wire = grant
+        conn.tls.sent.clear()
+        return conn
+
+    def data_frames(self, conn):
+        return [f for f in frames_in(bytes(conn.tls.sent)) if f[0] == 0x00]
+
+    def test_small_body_goes_in_one_frame(self):
+        conn = self.connection([])
+        conn._stream_windows[3] = 65535
+        conn._send_body(3, b"x" * 100)
+        sent = self.data_frames(conn)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0][1], FLAG_END_STREAM)
+
+    def test_body_is_split_at_the_peer_max_frame_size(self):
+        conn = self.connection([])
+        conn._stream_windows[3] = 1 << 20
+        conn.peer_window = 1 << 20
+        conn.peer_max_frame_size = 1000
+        conn._send_body(3, b"x" * 2500)
+        sizes = [len(f[3]) for f in self.data_frames(conn)]
+        self.assertEqual(sizes, [1000, 1000, 500])
+
+    def test_only_the_last_frame_ends_the_stream(self):
+        conn = self.connection([])
+        conn._stream_windows[3] = 1 << 20
+        conn.peer_window = 1 << 20
+        conn.peer_max_frame_size = 1000
+        conn._send_body(3, b"x" * 2500)
+        flags = [f[1] for f in self.data_frames(conn)]
+        self.assertEqual(flags, [0, 0, FLAG_END_STREAM])
+
+    def test_waits_for_credit_when_the_window_runs_out(self):
+        conn = self.connection([500])      # the peer grants 500 more, once
+        conn.peer_window = 300
+        conn._stream_windows[3] = 10_000
+        conn._send_body(3, b"x" * 700)
+        sizes = [len(f[3]) for f in self.data_frames(conn)]
+        self.assertEqual(sizes, [300, 400], "sends what fits, then what is granted")
+
+    def test_the_stream_window_binds_as_well_as_the_connection(self):
+        conn = self.connection([])
+        conn.peer_window = 10_000
+        conn._stream_windows[3] = 250
+        conn._send_body(3, b"x" * 250)
+        self.assertEqual([len(f[3]) for f in self.data_frames(conn)], [250])
+
+    def test_settings_resize_open_stream_windows_by_the_delta(self):
+        conn = Http2Connection(FakeTls(), profile=firefox157)
+        conn._stream_windows[3] = 65535
+        payload = (0x04).to_bytes(2, "big") + (100_000).to_bytes(4, "big")
+        conn._apply_settings(payload)
+        self.assertEqual(conn._stream_windows[3], 65535 + (100_000 - 65535))
+
+    def test_peer_max_frame_size_is_adopted(self):
+        conn = Http2Connection(FakeTls(), profile=firefox157)
+        conn._apply_settings((0x05).to_bytes(2, "big") + (32768).to_bytes(4, "big"))
+        self.assertEqual(conn.peer_max_frame_size, 32768)
+
+    def test_a_deferred_frame_is_not_handed_back_to_the_deferrer(self):
+        # Reading its own deferral is what span forever before the split
+        # between _next_frame and _frame_from_wire.
+        conn = Http2Connection(FakeTls(), profile=firefox157)
+        conn._stream_windows[3] = 1000
+        conn.peer_window = 0
+        script = [(0x06, 0, 0, b"ping1234"),            # deferred, not credit
+                  (WINDOW_UPDATE, 0, 0, (50).to_bytes(4, "big"))]
+        conn._frame_from_wire = lambda: script.pop(0)
+        self.assertEqual(conn._await_window(3), 50)
+        self.assertEqual(len(conn._pending), 1, "the ping waits for the reader")
+        self.assertEqual(conn._pending[0][0], 0x06)
+
+
 class TestDecompress(unittest.TestCase):
     def test_identity(self):
         self.assertEqual(decompress(b"plain", ""), b"plain")
