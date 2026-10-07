@@ -1491,3 +1491,43 @@ which the README said less precisely before. And a failing check that fails
 for the right reason is worth more than a passing one: left out, the client
 would have looked unchanged while presenting a different operating system to
 every server it talked to.
+
+---
+
+## 2026-10-07 — Multiplexing, and walking into a hazard I had just written down
+
+Until now the client sent one request and blocked until its reply, which
+makes HTTP/2 a more complicated HTTP/1.1. The reader is now a demultiplexer:
+`send_request` opens a stream and returns, `_pump` reads one frame and files
+it against whichever stream it belongs to, and `request_many` keeps as many
+in flight as the peer's MAX_CONCURRENT_STREAMS allows.
+
+    six one-second requests, one connection
+      one at a time   6.6s
+      multiplexed     1.1s
+
+**The bug is the part worth keeping.** While writing `_pump` I added this
+comment:
+
+> HPACK has one decoder per connection and its state depends on every header
+> block in order, so frames cannot be skipped for being someone else's:
+> ignoring one corrupts every later header on the connection.
+
+And then accumulated each stream's header block and decoded it when the
+stream finished, which is a different order. Six parallel requests later:
+`InvalidTableIndex: Invalid table index 72`.
+
+Knowing the hazard was not enough, because the mistake was not skipping a
+frame. It was decoding in completion order rather than arrival order, which
+is the same hazard wearing different clothes. Blocks are now decoded the
+moment END_HEADERS arrives.
+
+The regression test encodes the same fields twice so the second block is
+indexed references into the table the first one filled, then delivers them
+on two streams whose completion order is the reverse of their arrival order.
+Decoding out of order cannot look like it worked.
+
+A GOAWAY now fails only the streams above the peer's last_stream_id, rather
+than the whole connection, since the ones below it will still be answered.
+A RST_STREAM fails its own stream and leaves the rest alone. Neither was
+expressible while one request owned the reader.

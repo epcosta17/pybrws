@@ -180,6 +180,18 @@ Send a request, with a body and headers of your own merged into the profile's:
     post("https://example.com/login", data={"u": "x"}, kind="form")  # a clicked form
     get("https://example.com/", headers={"Accept-Language": "es-MX", "Priority": None})
 
+Put several requests on one connection at once:
+
+    from pybrws.handshake import connect
+    from pybrws.http2 import Http2Connection
+    with connect("httpbingo.org") as tls:
+        http = Http2Connection(tls)
+        for response in http.request_many(
+            [("GET", "/delay/1", "httpbingo.org")] * 6
+        ):
+            print(response.status)
+    # six one-second requests in 1.1s rather than 6.6s
+
 Keep cookies and connections across requests:
 
     from pybrws.session import Session

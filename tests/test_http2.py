@@ -6,6 +6,7 @@ import zlib
 
 from pybrws.message import ContentEncodingError
 from pybrws.http2 import (
+    _Stream,
     FLAG_END_HEADERS,
     FLAG_END_STREAM,
     FLAG_PRIORITY,
@@ -198,6 +199,8 @@ class TestFlowControl(unittest.TestCase):
         tls = ScriptedTls(frames)
         conn = Http2Connection(tls, profile=firefox157)
         tls.sent.clear()
+        # The reader expects the stream to have been opened by send_request.
+        conn._open[stream] = _Stream()
         response = conn._read_response(stream)
         return response, frames_in(bytes(tls.sent))
 
@@ -356,3 +359,86 @@ class TestResponse(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMultiplexing(unittest.TestCase):
+    """Several requests in flight on one connection."""
+
+    def scripted(self, frames):
+        tls = ScriptedTls(frames)
+        conn = Http2Connection(tls, profile=firefox157)
+        tls.sent.clear()
+        return conn
+
+    def blocks(self):
+        """Two header blocks where the second leans on the first's table.
+
+        Encoding the same fields twice makes the second block a set of
+        indexed references into the dynamic table the first one filled, so
+        decoding them out of order cannot silently appear to work.
+        """
+        from hpack import Encoder
+
+        encoder = Encoder()
+        fields = [(":status", "200"), ("x-custom", "a-fairly-long-value")]
+        return encoder.encode(fields), encoder.encode(fields)
+
+    def test_header_blocks_decode_in_arrival_order(self):
+        first, second = self.blocks()
+        self.assertLess(len(second), len(first), "the second must be indexed")
+        # Wire order 3 then 5, completion order 5 then 3.
+        conn = self.scripted([
+            frame(HEADERS, FLAG_END_HEADERS, 3, first),
+            frame(HEADERS, FLAG_END_HEADERS, 5, second),
+            frame(0x00, FLAG_END_STREAM, 5, b"five"),
+            frame(0x00, FLAG_END_STREAM, 3, b"three"),
+        ])
+        conn._open[3] = _Stream()
+        conn._open[5] = _Stream()
+        conn._stream_windows[3] = conn._stream_windows[5] = 1 << 20
+        finished = []
+        while len(finished) < 2:
+            done = conn._pump()
+            if done is not None:
+                finished.append((done, conn._finish(done)))
+        by_stream = dict(finished)
+        self.assertEqual([stream for stream, _ in finished], [5, 3])
+        for response in by_stream.values():
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.header("x-custom"), "a-fairly-long-value")
+
+    def test_a_frame_for_an_unknown_stream_is_ignored(self):
+        conn = self.scripted([
+            frame(0x00, FLAG_END_STREAM, 99, b"stray"),
+            frame(HEADERS, FLAG_END_HEADERS | FLAG_END_STREAM, 3,
+                  self.blocks()[0]),
+        ])
+        conn._open[3] = _Stream()
+        self.assertIsNone(conn._pump())
+        self.assertEqual(conn._pump(), 3)
+
+    def test_send_request_returns_without_reading(self):
+        conn = self.scripted([])
+        first = conn.send_request("GET", "/a", "a.test")
+        second = conn.send_request("GET", "/b", "a.test")
+        self.assertEqual(second, first + 2)
+        self.assertEqual(sorted(conn._open), [first, second])
+
+    def test_max_concurrent_streams_is_adopted(self):
+        conn = self.scripted([])
+        conn._apply_settings((0x03).to_bytes(2, "big") + (7).to_bytes(4, "big"))
+        self.assertEqual(conn.peer_max_streams, 7)
+
+    def test_a_reset_stream_fails_only_itself(self):
+        conn = self.scripted([
+            frame(0x03, 0, 5, (8).to_bytes(4, "big")),
+            frame(HEADERS, FLAG_END_HEADERS | FLAG_END_STREAM, 3,
+                  self.blocks()[0]),
+        ])
+        conn._open[3] = _Stream()
+        conn._open[5] = _Stream()
+        self.assertEqual(conn._pump(), 5)
+        with self.assertRaises(Http2Error):
+            conn._finish(5)
+        self.assertEqual(conn._pump(), 3)
+        self.assertEqual(conn._finish(3).status, 200)
