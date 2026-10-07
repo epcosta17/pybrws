@@ -992,3 +992,36 @@ rule is not simply "a path other than the homepage".
 
 Added to the demo as its own section rather than dropped, since the pair is a
 better argument for running a control than any explanation of one.
+
+---
+
+## 2026-10-06 — Widening the sweep
+
+Scanned 24 public homepages with both clients, then re-measured the promising
+ones over three interleaved rounds. Seven more targets discriminate, all of
+them 3/3 for this client and 0/3 for httpx with no variance in any cell:
+
+| Target | Protection |
+|---|---|
+| www.yelp.com | DataDome |
+| www.homedepot.com | Akamai |
+| www.macys.com | Akamai |
+| www.sephora.com | Akamai |
+| www.stubhub.com | CloudFront |
+| www.quora.com | Cloudflare |
+| seatgeek.com | not disclosed |
+
+Akamai is new: until now every result came from Cloudflare, DataDome or
+CloudFront, and a vendor named in the job posting had no evidence behind it.
+
+**Candidates rejected from the first pass**, which is where the scan earned
+its keep. `redfin.com` answered 405 Method Not Allowed, which the `served`
+helper counted as a pass because it only tests for 403, 429 and 503; a 405 is
+not a served page. `expedia`, `vrbo` and `wayfair` had httpx at 429 rather
+than 403, which is rate limiting and not a judgement about the client, so the
+contrast could be an artefact of the scan's own traffic. `bestbuy` had httpx
+failing with a protocol error, the same GOAWAY class seen earlier and not a
+block either. None of those are evidence and none were kept.
+
+The sweep in the demo now carries a protection column, so the spread across
+vendors is visible rather than asserted.

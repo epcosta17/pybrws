@@ -12,20 +12,31 @@ in protocol fingerprint.
 
 | Target | Protection | httpx | pybrws |
 |---|---|---|---|
-| www.zillow.com | CloudFront | 0/4 served | **4/4 served** |
-| www.ticketmaster.com | - | 0/4 served | **4/4 served** |
-| www.indeed.com | Cloudflare | 0/4 served | **4/4 served** |
-| www.etsy.com/c/jewelry | DataDome | 0/4 served | **4/4 served** |
+| www.zillow.com | CloudFront | 0/3 served | **3/3 served** |
+| www.etsy.com/c/jewelry | DataDome | 0/3 | **3/3** |
+| www.yelp.com | DataDome | 0/3 | **3/3** |
+| www.homedepot.com | Akamai | 0/3 | **3/3** |
+| www.macys.com | Akamai | 0/3 | **3/3** |
+| www.sephora.com | Akamai | 0/3 | **3/3** |
+| www.stubhub.com | CloudFront | 0/3 | **3/3** |
+| www.quora.com | Cloudflare | 0/3 | **3/3** |
+| www.ticketmaster.com | - | 0/4 | **4/4** |
+| www.indeed.com | Cloudflare | 0/4 | **4/4** |
 | www.etsy.com/ | DataDome | 0/4 | 0/4 |
-| www.etsy.com/?q= | DataDome | 0/4 | 0/4 |
 | www.g2.com | Cloudflare | 0/4 | 0/4 |
-| www.crunchbase.com | Cloudflare | 4/4 | 4/4 (control) |
+| example.com | - | served | served (control) |
 
-Four of seven discriminating targets stop blocking, with no flapping in any
-cell. What still blocks is specific rather than general: on etsy the homepage
-and the search parameter `?q=` are refused while an ordinary category page is
-served, so the strictest rules sit on the endpoints worth scraping. g2 runs
-Cloudflare at a setting this client cannot satisfy.
+Ten of twelve discriminating targets stop blocking, across four protection
+vendors, with no flapping in any cell. What still blocks is specific rather
+than general: on etsy the homepage and the search parameter `?q=` are refused
+while an ordinary category page is served, so the strictest rules sit on the
+endpoints worth scraping.
+
+g2 is worth its own line. It serves a request carrying any query string, and
+so does httpx, so the query opens it for everybody and this client adds
+nothing there. etsy refuses httpx with the same parameter. The same
+observation means opposite things on the two sites, and only the baseline arm
+tells them apart.
 
 ### The fingerprint is necessary and not sufficient
 
