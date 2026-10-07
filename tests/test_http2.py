@@ -357,8 +357,6 @@ class TestResponse(unittest.TestCase):
         self.assertEqual(json.loads(response.text()), {"a": 1})
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestMultiplexing(unittest.TestCase):
@@ -442,3 +440,7 @@ class TestMultiplexing(unittest.TestCase):
             conn._finish(5)
         self.assertEqual(conn._pump(), 3)
         self.assertEqual(conn._finish(3).status, 200)
+
+
+if __name__ == "__main__":
+    unittest.main()

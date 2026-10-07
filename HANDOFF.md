@@ -78,9 +78,10 @@ requests after the first send a fingerprint no capture covers.
 2. **TLS 1.2 is advertised and not implemented**, because Firefox advertises
    it and removing it would change the fingerprint. httpbin.org declines TLS
    1.3 and so is unreachable.
-3. HTTP/3 and streaming responses. Concurrency is done, as multiplexing
-   within a connection and a thread pool across them; what is missing is an
-   asyncio path, if one is ever wanted.
+3. HTTP/3. The job this project was built for names QUIC explicitly, and
+   it is the one remaining large item. Streaming is done; concurrency is
+   done, as multiplexing within a connection and a thread pool across
+   them; what is missing is an asyncio path, if one is ever wanted.
 
 ## Things that cost time here
 

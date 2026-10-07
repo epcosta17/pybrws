@@ -11,7 +11,12 @@ from hpack import Decoder, Encoder
 
 from . import headers as header_tools
 from .handshake import Connection
-from .message import ContentEncodingError, Response, decompress
+from .message import (
+    ContentEncodingError,
+    IncrementalDecoder,
+    Response,
+    decompress,
+)
 from .profiles import firefox157
 
 PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
@@ -201,6 +206,54 @@ class Http2Connection:
     def read_response(self, stream_id: int) -> Response:
         """Wait for one in-flight request to finish."""
         return self._read_response(stream_id)
+
+    def stream_response(self, stream_id: int):
+        """Yield (response, chunks) without holding the whole body.
+
+        The response arrives with its headers filled and an empty body; the
+        iterator then produces decoded chunks. A gigabyte CSV should not
+        have to fit in memory twice.
+        """
+        stream = self._open[stream_id]
+        while not stream.fields and not stream.done:
+            self._pump()
+        if stream.error is not None:
+            self._open.pop(stream_id, None)
+            raise stream.error
+
+        status = 0
+        headers: list[tuple[str, str]] = []
+        for name, value in stream.fields:
+            if name == ":status":
+                status = int(value)
+            elif not name.startswith(":"):
+                headers.append((name, value))
+        response = Response(status=status, headers=headers, http_version="h2")
+        decoder = IncrementalDecoder(response.header("content-encoding") or "")
+
+        def chunks():
+            try:
+                while True:
+                    if stream.body:
+                        raw = bytes(stream.body)
+                        stream.body.clear()
+                        decoded = decoder.feed(raw)
+                        if decoded:
+                            yield decoded
+                    elif stream.done:
+                        break
+                    else:
+                        self._pump()
+                if stream.error is not None:
+                    raise stream.error
+                tail = decoder.finish()
+                if tail:
+                    yield tail
+            finally:
+                self._open.pop(stream_id, None)
+                self._stream_windows.pop(stream_id, None)
+
+        return response, chunks()
 
     def request_many(self, requests) -> list[Response]:
         """Send several requests over this connection and collect them all.

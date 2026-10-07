@@ -136,7 +136,10 @@ and the source of NSS, Firefox and OpenSSL.
 - **TLS 1.2 is advertised but not implemented.** The profile offers it because
   Firefox does, and removing it would change the fingerprint, so a server that
   declines TLS 1.3 is refused rather than downgraded to. httpbin.org is one.
-- No renegotiation and no session resumption.
+- Session resumption is implemented and is a `Session`'s default, which
+  is also a gap: a resumed ClientHello carries `pre_shared_key` and so a
+  second JA4, and no capture covers it yet.
+- No renegotiation.
 
 ## Phases
 
@@ -208,6 +211,20 @@ Keep cookies and connections across requests:
         s.get("https://httpbingo.org/cookies/set?demo=1")
         print(s.get("https://httpbingo.org/cookies").text())
         # {"cookies": {"demo": "1"}} - sent back over the same connection
+
+Read a large response without holding it in memory:
+
+    from pybrws.client import stream
+    with stream("https://www.etsy.com/c/jewelry") as (response, chunks):
+        for chunk in chunks:
+            out.write(chunk)
+    # a 1.0 MB document: 0.68 MB peak against 2.67 MB buffered, 4.0x less
+
+Chunks are decompressed as they arrive, which is the part worth testing:
+gzip, brotli and zstd all carry state across a chunk boundary, so a chunk
+is not a valid stream on its own. A body that stops early raises rather
+than returning the prefix, because a silently short document reads exactly
+like a page that changed.
 
 Fetch a URL:
 

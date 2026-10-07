@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from urllib.parse import urljoin, urlsplit
 
 from .handshake import connect
@@ -23,6 +24,22 @@ class TooManyRedirects(Exception):
 
 
 REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+
+
+def split_target(url: str) -> tuple[str, int, str, str]:
+    """Return host, port, authority and path-with-query for an https URL."""
+    parts = urlsplit(url)
+    if parts.scheme != "https":
+        raise UnsupportedUrl("only https is supported, got " + repr(parts.scheme))
+    if not parts.hostname:
+        raise UnsupportedUrl("no host in " + repr(url))
+    port = parts.port or DEFAULT_PORT
+    authority = (parts.hostname if port == DEFAULT_PORT
+                 else parts.hostname + ":" + str(port))
+    path = parts.path or "/"
+    if parts.query:
+        path += "?" + parts.query
+    return parts.hostname, port, authority, path
 
 
 def header_set(profile, method: str, kind: str, http2: bool):
@@ -57,19 +74,7 @@ def fetch_once(url: str, *, method: str = "GET", profile=firefox157,
     Returns:
         The response, with the body decompressed.
     """
-    parts = urlsplit(url)
-    if parts.scheme != "https":
-        raise UnsupportedUrl("only https is supported, got " + repr(parts.scheme))
-    if not parts.hostname:
-        raise UnsupportedUrl("no host in " + repr(url))
-
-    host = parts.hostname
-    port = parts.port or DEFAULT_PORT
-    authority = host if port == DEFAULT_PORT else host + ":" + str(port)
-    path = parts.path or "/"
-    if parts.query:
-        path += "?" + parts.query
-
+    host, port, authority, path = split_target(url)
     with connect(host, port, profile=profile, timeout=timeout,
                  proxy=proxy, verify=verify, trust_store=trust_store) as tls:
         http2 = tls.alpn == "h2"
@@ -160,3 +165,45 @@ def get(url: str, **kwargs) -> Response:
 def post(url: str, **kwargs) -> Response:
     """Send a POST. See `request` for the arguments."""
     return request(url, method="POST", **kwargs)
+
+
+@contextmanager
+def stream(url: str, *, method: str = "GET", profile=firefox157,
+           timeout: float = 20.0, headers=None, data=None, json=None,
+           proxy=None, kind: str = "xhr", referer: str | None = None,
+           verify: bool = True, trust_store=None):
+    """Open a response and iterate its body without buffering it.
+
+    Yields (response, chunks). The connection stays open for as long as the
+    block runs, so the iterator has to be consumed inside it.
+
+        with stream(url) as (response, chunks):
+            for chunk in chunks:
+                out.write(chunk)
+    """
+    body, content_type = encode_body(data, json)
+    if content_type and not header_tools.has(header_tools.as_pairs(headers),
+                                             "content-type"):
+        headers = header_tools.as_pairs(headers) + [("Content-Type", content_type)]
+
+    host, port, authority, path = split_target(url)
+    origin = "https://" + (urlsplit(url).netloc or "")
+    context = {
+        "origin": origin,
+        "referer": origin + "/" if referer is None else referer,
+        "content_type": content_type or "application/octet-stream",
+    }
+
+    with connect(host, port, profile=profile, timeout=timeout, proxy=proxy,
+                 verify=verify, trust_store=trust_store) as tls:
+        if tls.alpn != "h2":
+            raise UnsupportedUrl("streaming needs HTTP/2; this server chose "
+                                 + repr(tls.alpn))
+        http = Http2Connection(tls, profile=profile)
+        base = header_set(profile, method, kind, True)
+        stream_id = http.send_request(method, path, authority,
+                                      headers=header_tools.merge(base, headers),
+                                      body=body, context=context)
+        response, chunks = http.stream_response(stream_id)
+        response.url = url
+        yield response, chunks

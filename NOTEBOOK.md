@@ -1608,3 +1608,95 @@ the browser rendered every page normally. The only reason it surfaced is
 that something in this project reports back what the server actually
 received, which is the same reason the free proxy's interception was caught
 rather than shipped.
+
+## 2026-10-07 — Streaming, and a five-kilobyte scare that was nothing
+
+Streaming works: 0.68 MB peak against 2.67 MB buffered for a 1.0 MB
+document, 91 chunks, largest 43,216 bytes. Four times less memory, which is
+about what a reader that never concatenates should give.
+
+The interesting part is the hour between "it works" and knowing it works.
+
+The first comparison said `same content: False` — 974,701 streamed against
+979,740 buffered, a gap of 5,039 bytes. The target was `etsy.com/c/jewelry`,
+a dynamic page, so the easy move was to shrug: of course two fetches differ.
+That explanation is available for any discrepancy, which is exactly why it
+cannot be accepted without a measurement. So:
+
+**Static resources first.** `example.com` and `httpbingo.org/encoding/utf8`
+came back byte-identical, streamed against buffered. `httpbingo.org/gzip`
+did not, repeatably, five rounds out of five, at identical length. A
+repeatable mismatch at identical length is not page variance.
+
+**Then I looked at the wrong thing.** I printed the first 120 bytes and the
+last 80 of each body, saw them agree, and nearly concluded the bodies were
+identical. The difference lived on line 52 of 55, inside the window I had not
+printed. The slice was chosen to be convenient, not to be informative.
+Diffing the whole thing took one more line and showed it immediately:
+
+    -      "t=1791390273581527"
+    +      "t=1791390273822666"
+
+`X-Request-Start`, a timestamp the httpbingo front end injects into the
+request and the endpoint then echoes into the body. Same length every time,
+different digits. The endpoint echoes the request, so it cannot be
+deterministic, and I had picked it as a determinism control.
+
+**The etsy gap was sampling.** Comparing arms proves nothing without
+comparing within an arm first:
+
+| comparison | sizes | delta |
+|---|---|---|
+| buffered vs buffered | 981,265 / 981,151 | 114 |
+| streamed vs streamed | 977,061 / 976,451 | 610 |
+| buffered vs streamed | 981,265 / 977,061 | 4,204 |
+
+I read that table as a systematic 4 KB shortfall in the streaming arm and
+went looking for a lost tail. The next pair put streamed *above* buffered —
+977,928 against 958,737 — and both ended in a complete `</body></html>`.
+Across six fetches etsy served between 958,737 and 981,265 bytes. The page
+varies by up to 22 KB, so the 114-byte agreement was luck and the 4,204-byte
+gap was luck of the opposite sign. With a spread that wide, two samples per
+arm can support any conclusion you like. The negative controls were the only
+real evidence, and they had already said streaming was correct.
+
+### What the hunt actually found
+
+Chasing a non-bug turned up a real one, in the place I was looking:
+
+    def finish(self):
+        if self._impl is None or not hasattr(self._impl, "flush"):
+            return b""
+        return self._impl.flush()
+
+The whole-body path gets truncation detection free — `zlib.decompress` on a
+cut stream raises `Error -5: incomplete or truncated stream`, because it
+refuses to return a partial result. Feeding chunk by chunk had no such
+guard. A connection dropped mid-body would yield every chunk that arrived,
+flush nothing, and hand back a short document with no error.
+
+That is the worst possible failure for a scraper. It does not look like a
+failed download; it looks like a page that changed, which is precisely the
+explanation I had just caught myself reaching for. The two halves of this
+entry are the same mistake seen from both sides.
+
+`finish()` now checks the end-of-stream marker: `eof` for zlib and zstd,
+`is_finished()` for brotli, and raises `ContentEncodingError` otherwise.
+
+### Tests
+
+`tests/test_streaming.py`, 16 tests, no network. Every encoding fed at chunk
+sizes 1, 2, 7, 64, 1024, whole and oversized, asserted equal to what the
+whole-body decoder returns — 1 byte being the pathological case, since
+gzip's 10-byte header alone then spans ten calls. Then the same over
+scripted HTTP/2 DATA frames at sizes 1, 3, 17, 997 and 16384, because a
+frame boundary is a second place a boundary can land.
+
+Two tests exist because an earlier version of a test would have passed
+without them: one asserts the body arrives in more than one chunk, since
+every equality test above would pass on a decoder that secretly buffered
+everything; the other asserts that abandoning the iterator early still
+releases the stream, which the `finally` handles but nothing proved.
+
+Disabling the truncation check fails 5 of the 16. Worth running: a guard
+whose tests pass with it removed is not a guard.
