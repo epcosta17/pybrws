@@ -1559,3 +1559,43 @@ repeating; a block is an answer, and repeating it only burns the address
 faster. That distinction came out of the measurement work rather than from
 general principle: 429 and 403 mean different things and the harness had to
 learn that too.
+
+---
+
+## 2026-10-07 — The browser is being intercepted
+
+A fresh look at tls.peet.ws from Firefox reported a fingerprint matching
+neither the stored reference nor this client:
+
+    stored reference  t13d1517h2_8daaf6152771_3cbfd9057e0d
+    this client now   t13d1517h2_8daaf6152771_3cbfd9057e0d
+    the browser now   t13d2713h2_bd9791dd9fd6_ecd0401ec68b
+
+It is not Firefox's stack. Twenty-seven ciphers rather than fifteen, every
+one listed twice, which NSS never does. `encrypt_then_mac` present, which is
+an OpenSSL extension. `renegotiation_info` ahead of `server_name`, the
+reverse of Firefox's order. And none of the five extensions this project has
+used since the first capture to tell NSS from BoringSSL:
+`delegated_credentials`, `record_size_limit`, `status_request`,
+`signed_certificate_timestamp`, ECH.
+
+The HTTP/2 layer is rebuilt too: stream id 1 rather than 3, no PRIORITY flag
+on the HEADERS frame, INITIAL_WINDOW_SIZE 1048576 against Firefox's 131072,
+WINDOW_UPDATE 983041 against 12517377.
+
+So something terminates both layers and re-originates them: an interception
+proxy, most likely antivirus HTTPS scanning or something on the network. It
+fits the earlier anomaly, where the TCP signature briefly read Linux from a
+different exit address.
+
+**What matters for the fixtures.** The stored references were captured
+before this appeared and carry the five NSS extensions, so they are the real
+browser. Re-capturing now would bake the middlebox into the profile and the
+client would start imitating the antivirus. Nothing should be re-captured
+until the certificate issuer on an ordinary site is a public CA again.
+
+Worth noting what it took to see it. Nothing broke, no error appeared, and
+the browser rendered every page normally. The only reason it surfaced is
+that something in this project reports back what the server actually
+received, which is the same reason the free proxy's interception was caught
+rather than shipped.
