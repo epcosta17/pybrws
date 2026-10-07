@@ -1267,3 +1267,26 @@ glassdoor reading deleted it instead. Both outcomes are the point.
 A wart fixed on the way: the capture tool was answering the favicon request
 with the page that triggers the POST, which is harmless here only because
 the favicon does not run scripts. Subresources now get a 404.
+
+---
+
+## 2026-10-07 — A header set deleted in silence
+
+Taking inventory of what the profile still lacks turned up that
+`H1_IMAGE_HEADERS` was gone. The text slice two entries ago, the one written
+to remove an outdated comment, had taken two constants sitting between its
+markers: `H1_COOKIE_BEFORE` and the image set.
+
+The cookie constant was caught within minutes, because a test used it. The
+image set had **no test**, so it vanished into a commit with a green suite
+and nobody noticed until an unrelated inventory listed the profile's
+attributes and one was missing.
+
+Restored from history, and given the test it never had, which asserts it
+reproduces its capture byte for byte like every other set.
+
+Two things worth keeping from this. Editing source by slicing text between
+markers is a bad habit that has now cost twice in one session; both times the
+replacement was correct and the collateral was not. And a measured constant
+without a test is a measurement that can be deleted without the suite
+objecting, which makes it no better than a guess that happens to be right.

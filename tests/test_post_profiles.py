@@ -147,3 +147,31 @@ class TestClickedFormPost(unittest.TestCase):
     def test_the_scripted_capture_lacks_it(self):
         scripted = (FIXTURES / "reference-firefox-157-post-form.txt").read_text()
         self.assertNotIn("Sec-Fetch-User", scripted)
+
+
+class TestImageSubresource(unittest.TestCase):
+    """This set was once deleted by a text edit and nothing noticed, because
+    it had no test. That is the whole reason this class exists."""
+
+    REFERENCE = FIXTURES / "reference-firefox-157-image.txt"
+
+    def test_byte_identical(self):
+        built = Http1Connection(FakeTls()).build_request(
+            "GET", "/favicon.ico", AUTHORITY, firefox157.H1_IMAGE_HEADERS, b"",
+            {"referer": ORIGIN + "/", "cookie": "pybrws_probe=1; pybrws_second=2"},
+        )
+        self.assertEqual(built, self.REFERENCE.read_bytes())
+
+    def test_differs_from_a_navigation_where_the_capture_says(self):
+        image = dict(firefox157.H1_IMAGE_HEADERS)
+        page = dict(firefox157.H1_HEADERS)
+        self.assertTrue(image["Accept"].startswith("image/avif"))
+        self.assertEqual(image["Sec-Fetch-Dest"], "image")
+        self.assertEqual(image["Sec-Fetch-Mode"], "no-cors")
+        self.assertEqual(image["Priority"], "u=6")
+        self.assertEqual(page["Priority"], "u=0, i")
+        self.assertNotIn("Upgrade-Insecure-Requests", image)
+
+    def test_the_http2_variant_is_derived(self):
+        self.assertEqual(firefox157.H2_IMAGE_HEADERS[-1], ("te", "trailers"))
+        self.assertNotIn("host", [n for n, _ in firefox157.H2_IMAGE_HEADERS])

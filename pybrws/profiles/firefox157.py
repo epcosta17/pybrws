@@ -249,3 +249,25 @@ H1_POST_FORM_HEADERS = header_tools.insert_before(
 H2_POST_FORM_SCRIPT_HEADERS = _as_http2(H1_POST_FORM_SCRIPT_HEADERS)
 H2_POST_FORM_HEADERS = _as_http2(H1_POST_FORM_HEADERS)
 H2_POST_XHR_HEADERS = _as_http2(H1_POST_XHR_HEADERS)
+
+
+# Measured from fixtures/reference-firefox-157-image.txt: Firefox fetching a
+# favicon from a page on the same origin. An image subresource differs from a
+# navigation in Accept, all three Sec-Fetch values and Priority, and it carries
+# a Referer that a typed-URL navigation does not.
+H1_IMAGE_HEADERS = [
+    ("Host", "{authority}"),
+    ("User-Agent", USER_AGENT),
+    ("Accept", "image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8,*/*;q=0.5"),
+    ("Accept-Language", "en-US,en;q=0.9"),
+    ("Accept-Encoding", "gzip, deflate, br, zstd"),
+    ("Connection", "keep-alive"),
+    ("Referer", "{referer}"),
+    ("Cookie", "{cookie}"),
+    ("Sec-Fetch-Dest", "image"),
+    ("Sec-Fetch-Mode", "no-cors"),
+    ("Sec-Fetch-Site", "same-origin"),
+    ("Priority", "u=6"),
+]
+
+H2_IMAGE_HEADERS = _as_http2(H1_IMAGE_HEADERS)
