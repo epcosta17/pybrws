@@ -9,3 +9,4 @@ venv/
 fixtures/*.hex
 !fixtures/.gitkeep
 !fixtures/reference-*.hex
+.ipynb_checkpoints/
