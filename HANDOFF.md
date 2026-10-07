@@ -125,20 +125,37 @@ the suite from the binder length rather than naming it.
    half: Firefox shuffles over QUIC, because that is neqo and not NSS. So
    shuffling is a property of a *stack*, not of a browser, and a Chrome
    profile should not assume one rule covers both of its protocols either.
-2. **CertificateRequest is not handled.** A server that asks for a client
-   certificate gets `unexpected handshake message 0x0d` and the connection
-   dies; `ulta.com` is one. A browser with no matching certificate sends an
-   empty Certificate message and continues, which is all this needs. Found
-   by accident during a WAF sweep, which is to say it had been silently
-   making hosts unreachable.
+2. **TLS 1.2 and client certificates are done**, and both were found by a
+   sweep rather than planned. `pybrws/tls12.py` carries the PRF, the key
+   block, the two AEAD record constructions and both Finished messages;
+   `handshake.py` branches on the ServerHello. ECDHE with AES-GCM and
+   ChaCha20-Poly1305 is implemented, the CBC and static-RSA suites are
+   refused by name, and `extended_master_secret` is there because Firefox
+   asks for it.
 
-   Related and unknown: `iberia.com`, `swisscom.ch` and `aena.es` fail
-   certificate chain validation. Could be odd chains, could be how
-   intermediates are handled here. Not investigated.
+   Tested against Python's `ssl` as a TLS 1.2 server, which makes OpenSSL the
+   oracle for every derivation at once: swapping the two randoms in the key
+   block, changing the verify_data length, using one Finished label for both
+   directions, or skipping the extended master secret each fail all seven
+   integration tests.
 
-3. **TLS 1.2 is advertised and not implemented**, because Firefox advertises
-   it and removing it would change the fingerprint. httpbin.org declines TLS
-   1.3 and so is unreachable.
+   It also uncovered a bug that had been invisible since the beginning. The
+   compatibility ChangeCipherSpec was going out immediately after the
+   ClientHello instead of before the second flight, which RFC 8446 appendix
+   D.4 is explicit about. Every TLS 1.3 server tolerated it; a TLS 1.2 server
+   answers `handshake_failure`, since a ChangeCipherSpec before the
+   ClientKeyExchange is a protocol violation there. The bug could not be seen
+   for as long as 1.2 was unreachable, and 1.2 could not be reached because
+   of the bug.
+
+   Still unimplemented and marked: the CBC suites, the static-RSA suites, and
+   TLS 1.2 session resumption through `session_ticket`. Also
+   `iberia.com`, `swisscom.ch` and `aena.es` fail certificate chain
+   validation, which is unrelated and not looked into.
+
+3. **A certificate chain question.** Three hosts fail validation and it is
+   not known whether their chains are odd or our intermediate handling is.
+
 4. **HTTP/3.** Reading and writing both work. The reading side: `pybrws/quic.py`
    recovers a ClientHello from Initial packets, which need no secret --
    RFC 9001 publishes the salt and the header carries the connection ID --

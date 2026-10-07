@@ -147,9 +147,16 @@ and the source of NSS, Firefox and OpenSSL.
   `verify=False` or the CLI's `-k` to opt out. It was off for most of this
   project's life, and one of two working free proxies tested during that time
   turned out to be intercepting and replacing the fingerprint undetected.
-- **TLS 1.2 is advertised but not implemented.** The profile offers it because
-  Firefox does, and removing it would change the fingerprint, so a server that
-  declines TLS 1.3 is refused rather than downgraded to. httpbin.org is one.
+- **TLS 1.2 is implemented**, ECDHE with AES-GCM and ChaCha20-Poly1305, which
+  is every suite a current server picks. The profile offers twelve because
+  Firefox does; the CBC and static-RSA ones are refused by name if a server
+  chooses one, which no server tested does. `extended_master_secret` is
+  implemented because Firefox asks for it, and a server that echoes it
+  derives that way.
+- **A client certificate request is answered**, with an empty Certificate and
+  no CertificateVerify, which is what a browser holding none does. Asking is
+  itself a bot check: the server does not need the certificate, it wants to
+  see what an unexpected message does to the client.
 - Session resumption is implemented and is a `Session`'s default, which
   is also a gap: a resumed ClientHello carries `pre_shared_key` and so a
   second JA4, and no capture covers it yet.
@@ -175,7 +182,8 @@ and the source of NSS, Firefox and OpenSSL.
 | 12 | Reading a ClientHello out of QUIC Initial packets | done |
 | 13 | Firefox's ClientHello over QUIC, via aioquic | done |
 | 14 | HTTP/3 requests, measured against a real capture | done |
-| 15 | A second browser profile, to test the abstraction | not started |
+| 15 | TLS 1.2, for the hosts that decline 1.3 | done |
+| 16 | A second browser profile, to test the abstraction | not started |
 
 Phases 0 through 2 are standard library only.
 

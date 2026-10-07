@@ -2427,3 +2427,99 @@ HTTP/1.1 -- a fair thing to distrust, since an HTTP/1.1 baseline would make
 every result in the table look better than it is. `ab_test.py` has
 `http2=True` and a live check confirms it negotiates `HTTP/2`. Verified
 rather than taken from reading the flag.
+
+## 2026-10-07 — TLS 1.2, and the bug that was hiding behind it
+
+Ernesto asked for TLS 1.2. The profile has offered twelve of its suites since
+the first day, because Firefox does and removing them would change the
+fingerprint, and a server that took one got refused. Two hosts fell out of the
+WAF sweep that way and `httpbin.org` had been on the gap list from the start.
+
+Almost nothing carries over from 1.3. Key derivation is a PRF, not HKDF: one
+48-byte master secret from HMAC chained over itself, rather than a schedule of
+secrets per stage. The server signs its key exchange in ServerKeyExchange
+instead of signing the transcript in CertificateVerify, and it may sign with
+`rsa_pkcs1`, which 1.3 forbids and 1.2 uses everywhere -- all three test hosts
+do. Records keep their content type in the clear, and for GCM they carry an
+explicit eight-byte nonce with the sequence number and header as additional
+data. ChangeCipherSpec is a real message. Finished is twelve bytes whatever
+the hash. And `extended_master_secret` changes the derivation, which is not
+optional here because Firefox asks for it.
+
+Implemented: ECDHE with AES-GCM and ChaCha20-Poly1305. The CBC and
+static-RSA suites are offered in the hello and refused by name if a server
+picks one -- better a failure that says which suite than a silent wrong
+answer. Nothing tested picks them.
+
+### OpenSSL as the oracle
+
+The integration tests run against Python's own `ssl` as a TLS 1.2 server. That
+is worth more than any unit test here: a PRF tested against a second copy of
+itself proves nothing, while a handshake that completes against OpenSSL means
+the PRF, the key block, both record constructions and both Finished messages
+are all right at once.
+
+Four mutations, each failing all seven of those tests: swapping the two
+randoms in the key block, where RFC 5246 reverses them against the master
+secret; making verify_data sixteen bytes; using `client finished` for both
+directions; and skipping the extended master secret.
+
+### The bug underneath
+
+The first attempt got all the way to ServerHelloDone and then
+`handshake_failure`. The trace showed the server's four messages arriving,
+the signature verifying, and the failure landing on our flight.
+
+The first cause was mine and embarrassing: I built the ClientKeyExchange,
+added it to the transcript, and never sent it. The server got a
+ChangeCipherSpec and a Finished and no key.
+
+The second was older and more interesting. `connect` sent the compatibility
+ChangeCipherSpec immediately after the ClientHello:
+
+      sock.sendall(client_hello)
+      records.write(0x14, b"\x01")
+
+RFC 8446 appendix D.4 puts it immediately before the *second* flight. Every
+TLS 1.3 server tolerated the early one, so it never showed. A TLS 1.2 server
+cannot: a ChangeCipherSpec arriving before the ClientKeyExchange is a
+protocol violation, and the answer is `handshake_failure`.
+
+So the bug was invisible for as long as 1.2 was unreachable, and 1.2 was
+unreachable because of the bug. There is a test for the ordering now, which
+is simply that a 1.2 handshake completes.
+
+### A client certificate request, twice
+
+The same sweep that found the 1.2 hosts found `ulta.com` dying with
+`unexpected handshake message 0x0d`. That is CertificateRequest: the server
+asks for a client certificate and the state machine had no case for it.
+
+A browser with none to offer does not fail. It sends a Certificate with an
+empty list and no CertificateVerify, and the handshake continues. Which makes
+asking a bot check in itself -- the server does not want the certificate, it
+wants to see what an unexpected message does to the client. Ours fell over,
+which is about as clear an answer as it could have given.
+
+Implemented on both paths, and the 1.3 one taught me something I had wrong.
+Adding our Certificate to the transcript before deriving the application
+secrets broke them: RFC 8446 section 7.1 derives those from the transcript up
+to and including the *server's* Finished, not ours. The symptom was a
+handshake that completed and then `InvalidTag` on the first application
+record, which says nothing at all about the cause. A snapshot taken at the
+server's Finished fixes it.
+
+`ulta.com` now returns 1,657,617 bytes.
+
+### Where it stands
+
+      httpbin.org        TLS 1.2  ECDHE_RSA_WITH_AES_128_GCM_SHA256  h2
+      www.gls-group.eu   TLS 1.2  ECDHE_RSA_WITH_AES_128_GCM_SHA256  http/1.1
+      www.proximus.be    TLS 1.2  ECDHE_RSA_WITH_AES_128_GCM_SHA256  h2
+      www.ulta.com       TLS 1.3  client certificate requested       h2
+      example.com        TLS 1.3  TLS_AES_128_GCM_SHA256             h2
+
+Four hosts that were unreachable this morning, and the TLS 1.3 path
+unchanged -- which has its own test now, against the same harness, because
+the two paths share everything up to the ServerHello and a change to one can
+break the other in silence.

@@ -79,6 +79,12 @@ class RecordLayer:
         self.sock = sock
         self.read_cipher: Cipher | None = None
         self.write_cipher: Cipher | None = None
+        # TLS 1.2 changes two things here and nothing else. An encrypted
+        # record keeps its own content type instead of hiding it inside the
+        # ciphertext and presenting itself as application data; and
+        # ChangeCipherSpec is a real message that says when to start
+        # decrypting, rather than the padding TLS 1.3 sends for middleboxes.
+        self.legacy = False
 
     def _recv_exactly(self, n: int) -> bytes:
         chunks = []
@@ -104,7 +110,11 @@ class RecordLayer:
             body = self._recv_exactly(int.from_bytes(header[3:5], "big"))
 
             content_type = header[0]
-            if content_type == APPLICATION_DATA and self.read_cipher is not None:
+            if self.legacy:
+                if (self.read_cipher is not None
+                        and content_type != CHANGE_CIPHER_SPEC):
+                    content_type, body = self.read_cipher.decrypt(header, body)
+            elif content_type == APPLICATION_DATA and self.read_cipher is not None:
                 content_type, body = self.read_cipher.decrypt(header, body)
             elif content_type == CHANGE_CIPHER_SPEC:
                 # Middlebox compatibility only; carries no meaning in TLS 1.3.
