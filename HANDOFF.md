@@ -109,10 +109,22 @@ the suite from the binder length rather than naming it.
 
 ## Known gaps, roughly by value
 
-1. **A second profile.** `profiles/` is an abstraction with one
-   implementation, which is exactly the thing worth distrusting. Chrome would
-   validate or break it, and Chrome shuffles its extension order, which
-   Firefox does not.
+1. **A second profile.** `profiles/` has two implementations now, but both
+   are Firefox, so it is still an abstraction shaped by one browser. Chrome
+   would validate it or break it.
+
+   There is a head start: the first QUIC capture caught Chrome talking to
+   bing.com, and it looks nothing like Firefox -- eleven extensions against
+   fifteen, a 218-byte greased ECH against 282, extension 17613, Google's
+   transport parameters, and none of the NSS markers (`renegotiation_info`,
+   `delegated_credentials`, `status_request`,
+   `extended_master_secret`, `record_size_limit`).
+
+   Note the TCP profile's claim that "Chrome shuffles its extension order and
+   Firefox does not" is only half true, and this project proved the other
+   half: Firefox shuffles over QUIC, because that is neqo and not NSS. So
+   shuffling is a property of a *stack*, not of a browser, and a Chrome
+   profile should not assume one rule covers both of its protocols either.
 2. **TLS 1.2 is advertised and not implemented**, because Firefox advertises
    it and removing it would change the fingerprint. httpbin.org declines TLS
    1.3 and so is unreachable.
