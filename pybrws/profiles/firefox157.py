@@ -165,12 +165,12 @@ H1_HEADERS = [
 # crumbling, placed after Connection and before Upgrade-Insecure-Requests.
 # A test asserts the generated request equals that capture byte for byte.
 #
-# The HTTP/2 anchor is inferred rather than measured, from the two orders
-# being the same sequence apart from Host, Connection and te. Capturing it
-# needs an HTTP/2 server, which tools/catch_request.py is not.
+# The HTTP/2 anchor is measured too, from
+# fixtures/reference-firefox-157-h2-cookie.txt, and matches the inference.
 #
-# Also unmeasured: whether HTTP/2 crumbles cookies into separate headers,
-# which HPACK makes worthwhile.
+# That capture also settled the open question: over HTTP/2 Firefox sends one
+# `cookie` field per cookie rather than one joined header, which HPACK makes
+# cheaper. The two protocols differ here and the code has to as well.
 
 H2_COOKIE_BEFORE = "upgrade-insecure-requests"
 H1_COOKIE_BEFORE = "Upgrade-Insecure-Requests"
@@ -231,10 +231,9 @@ H1_POST_XHR_HEADERS = [
 def _as_http2(headers):
     """Derive an HTTP/2 set from an HTTP/1.1 one.
 
-    INFERRED, not measured. The rule is the one the navigation captures
-    confirmed: drop Host and Connection, lowercase the names, append `te`.
-    Capturing it directly needs an HTTP/2 server, which the capture tool is
-    not.
+    The rule is drop Host and Connection, lowercase the names, append `te`.
+    Confirmed against fixtures/reference-firefox-157-h2-post.txt, which the
+    derived XHR set reproduces field for field.
     """
     dropped = {"host", "connection"}
     return [(name.lower(), value) for name, value in headers

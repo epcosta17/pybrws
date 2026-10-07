@@ -54,16 +54,26 @@ def merge(base: Headers, overrides: Overrides) -> list[tuple[str, str]]:
 
 def insert_before(headers: Headers, name: str, value: str, anchor: str):
     """Place a header immediately before `anchor`, or at the end if absent."""
+    return insert_all_before(headers, name, [value], anchor)
+
+
+def insert_all_before(headers: Headers, name: str, values, anchor: str):
+    """Place several headers of the same name at the anchor, in order.
+
+    HTTP/2 lets a browser send one `cookie` field per cookie, and Firefox
+    does, so this cannot collapse them into one.
+    """
+    added = [(name, value) for value in values]
     out = []
     placed = False
     for existing, existing_value in headers:
         if not placed and existing.lower() == anchor.lower():
-            out.append((name, value))
+            out.extend(added)
             placed = True
         if existing.lower() != name.lower():
             out.append((existing, existing_value))
     if not placed:
-        out.append((name, value))
+        out.extend(added)
     return out
 
 

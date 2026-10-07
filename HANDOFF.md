@@ -57,15 +57,12 @@ header order and values for a navigation, for a navigation carrying cookies,
 for an image subresource, for a `fetch` POST, and for a form POST both
 submitted by script and submitted by a click.
 
-Inferred, and marked in the code: the Cookie header's slot over HTTP/2,
-deduced from the HTTP/1.1 order.
+The HTTP/2 sets are measured too, with `tools/catch_h2.py`, which speaks
+enough HTTP/2 to decode a browser's HEADERS frame. Nothing in the profile is
+inferred any more.
 
-Inferred too: the HTTP/2 POST sets, derived from the HTTP/1.1 ones by the
-rule the navigation captures confirmed.
-
-Unmeasured, and marked: whether HTTP/2 crumbles cookies into separate
-headers; the pattern of later WINDOW_UPDATE frames, which Firefox batches and
-this client does not.
+Unmeasured, and marked: the pattern of later WINDOW_UPDATE frames, which
+Firefox batches and this client does not.
 
 ## Known gaps, roughly by value
 

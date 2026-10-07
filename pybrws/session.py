@@ -127,13 +127,20 @@ class Session:
             self.profile.H2_NAVIGATION_HEADERS if http2 else self.profile.H1_HEADERS,
             override,
         )
-        cookie = self.cookies.header_for(host, path.split("?", 1)[0])
-        if cookie is None:
+        cookies = self.cookies.matching(host, path.split("?", 1)[0])
+        if not cookies:
             return base
         if http2:
-            return insert_header(base, "cookie", cookie,
-                                 self.profile.H2_COOKIE_BEFORE)
-        return insert_header(base, "Cookie", cookie, self.profile.H1_COOKIE_BEFORE)
+            # Measured: Firefox sends one `cookie` field per cookie over
+            # HTTP/2, which HPACK makes cheaper than one joined header.
+            return header_tools.insert_all_before(
+                base, "cookie",
+                [c.name + "=" + c.value for c in cookies],
+                self.profile.H2_COOKIE_BEFORE,
+            )
+        joined = "; ".join(c.name + "=" + c.value for c in cookies)
+        return header_tools.insert_before(base, "Cookie", joined,
+                                          self.profile.H1_COOKIE_BEFORE)
 
     def _once(self, url: str, headers, method: str = "GET",
               body: bytes = b"", timeout: float | None = None) -> Response:

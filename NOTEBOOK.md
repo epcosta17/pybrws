@@ -1290,3 +1290,47 @@ markers is a bad habit that has now cost twice in one session; both times the
 replacement was correct and the collateral was not. And a measured constant
 without a test is a measurement that can be deleted without the suite
 objecting, which makes it no better than a guess that happens to be right.
+
+---
+
+## 2026-10-07 — HTTP/2 measured, and a cookie bug it found
+
+Three captures with the new HTTP/2 server. Two confirmed what was inferred
+and one did not.
+
+**Navigation**: the field list matches `H2_NAVIGATION_HEADERS` exactly.
+
+**POST over fetch**: matches the derived set field for field, so the rule
+used to produce the HTTP/2 variants from the HTTP/1.1 ones, drop Host and
+Connection, lowercase, append `te`, holds.
+
+**Cookies**: it does not.
+
+    referer: https://pybrws.127.0.0.1.nip.io:4443/
+    cookie: pybrws_probe=1
+    cookie: pybrws_second=2
+    upgrade-insecure-requests: 1
+
+**Firefox sends one `cookie` field per cookie over HTTP/2.** This client sent
+one joined header, as HTTP/1.1 requires, and has done on every HTTP/2 request
+it ever made with more than one cookie. The question had been marked
+unmeasured since the cookie work went in, which was honest but did not stop
+the wrong behaviour shipping. Marking a gap is not the same as having one.
+
+HPACK is why: each `cookie` field can be indexed on its own, so a repeated
+one costs a byte on later requests while a joined header changes whenever any
+cookie does.
+
+The anchor was right. Cookies sit before `upgrade-insecure-requests` in both
+protocols, which the inference had already got from the HTTP/1.1 order.
+
+Fixed, with the two protocols now deliberately different: joined for
+HTTP/1.1, crumbled for HTTP/2, each asserted against its own capture.
+Verified on the wire against peet.ws with the Akamai fingerprint unchanged.
+
+One header in the cookie capture belongs to nothing in the profile:
+`cache-control: max-age=0`, which Firefox adds on a reload. The capture was a
+meta-refresh, so that request is a reload and not a navigation. Not modelled,
+and worth knowing before someone reads the fixture as a plain navigation.
+
+Nothing in the profile is inferred any more.
