@@ -55,8 +55,11 @@ def as_url(target: str) -> str:
     return target if "://" in target else "https://" + target + "/"
 
 
+PROXY = None  # set from --proxy; None means a direct connection
+
+
 def via_pybrws(target: str, timeout: float) -> int:
-    return get(as_url(target), timeout=timeout,
+    return get(as_url(target), timeout=timeout, proxy=PROXY or False,
                follow_redirects=MAX_REDIRECTS).status
 
 
@@ -99,6 +102,7 @@ def run(targets: list[str], rounds: int, timeout: float, pause: float) -> list[d
                         "status": status,
                         "error": error,
                         "profile": firefox157.NAME,
+                        "proxy": bool(PROXY) if name == "pybrws" else False,
                     }
                 )
                 print(".", end="", flush=True)
@@ -171,6 +175,13 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=25.0)
     parser.add_argument("--pause", type=float, default=1.0,
                         help="seconds between requests, to stay polite")
+    parser.add_argument("--proxy", metavar="URL",
+                        help="route the pybrws arm through this proxy, so a "
+                             "fresh address separates fingerprint from "
+                             "address reputation. Reads PYBRWS_PROXY when the "
+                             "flag is omitted and --use-env is given")
+    parser.add_argument("--use-env", action="store_true",
+                        help="take the proxy from PYBRWS_PROXY or HTTPS_PROXY")
     parser.add_argument("--no-log", action="store_true")
     parser.add_argument("--history", action="store_true",
                         help="summarise past runs and exit")
@@ -179,6 +190,23 @@ def main() -> int:
     if args.history:
         show_history()
         return 0
+
+    global PROXY
+    if args.proxy:
+        PROXY = args.proxy
+    elif args.use_env:
+        from pybrws.proxies import proxy_from_env
+
+        PROXY = proxy_from_env()
+        if not PROXY:
+            raise SystemExit("--use-env given but no proxy variable is set")
+    if PROXY:
+        from pybrws.proxies import parse_proxy
+
+        # str(Proxy) omits the password.
+        print("pybrws arm through %s" % (parse_proxy(PROXY),))
+        print("the httpx arm stays direct, so the comparison isolates the "
+              "fingerprint and not the address")
 
     targets = list(args.targets)
     if CONTROL not in targets:

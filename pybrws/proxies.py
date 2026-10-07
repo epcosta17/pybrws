@@ -12,6 +12,7 @@ matching, by design.
 from __future__ import annotations
 
 import base64
+import os
 import socket
 import struct
 from dataclasses import dataclass
@@ -79,6 +80,34 @@ def parse_proxy(url: str) -> Proxy:
         username=unquote(parts.username) if parts.username else None,
         password=unquote(parts.password) if parts.password else None,
     )
+
+
+# Checked in order, matching the convention curl and requests follow. Keeping
+# credentials in the environment rather than on the command line keeps them
+# out of shell history and process listings.
+ENV_VARS = ("PYBRWS_PROXY", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy")
+
+
+def proxy_from_env() -> str | None:
+    for name in ENV_VARS:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
+def resolve(proxy) -> Proxy | None:
+    """Turn a proxy argument into a Proxy, falling back to the environment.
+
+    Pass False to force a direct connection regardless of the environment.
+    """
+    if proxy is False:
+        return None
+    if proxy is None:
+        proxy = proxy_from_env()
+        if not proxy:
+            return None
+    return parse_proxy(proxy) if isinstance(proxy, str) else proxy
 
 
 def _recv_exactly(sock: socket.socket, n: int) -> bytes:
@@ -181,16 +210,16 @@ def open_socket(host: str, port: int, *, proxy: Proxy | str | None = None,
     Args:
         host: the target hostname. With a proxy it is never resolved locally.
         port: the target port.
-        proxy: a Proxy, a proxy URL, or None for a direct connection.
+        proxy: a Proxy, a proxy URL, None to read the environment, or False
+            to force a direct connection.
         timeout: socket timeout in seconds.
 
     Raises:
         ProxyError: if the proxy refuses or speaks unexpectedly.
     """
+    proxy = resolve(proxy)
     if proxy is None:
         return socket.create_connection((host, port), timeout=timeout)
-    if isinstance(proxy, str):
-        proxy = parse_proxy(proxy)
 
     sock = socket.create_connection((proxy.host, proxy.port), timeout=timeout)
     try:

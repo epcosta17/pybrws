@@ -5,7 +5,17 @@ import struct
 import threading
 import unittest
 
-from pybrws.proxies import Proxy, ProxyError, open_socket, parse_proxy
+import os
+from unittest import mock
+
+from pybrws.proxies import (
+    Proxy,
+    ProxyError,
+    open_socket,
+    parse_proxy,
+    proxy_from_env,
+    resolve,
+)
 
 
 class FakeProxy:
@@ -82,6 +92,31 @@ class TestParseProxy(unittest.TestCase):
         rendered = str(parse_proxy("http://user:secret@p.test:3128"))
         self.assertIn("user@", rendered)
         self.assertNotIn("secret", rendered)
+
+
+class TestEnvironment(unittest.TestCase):
+    def test_precedence(self):
+        with mock.patch.dict(os.environ, {"PYBRWS_PROXY": "socks5://a:1",
+                                          "HTTPS_PROXY": "http://b:2"}, clear=True):
+            self.assertEqual(proxy_from_env(), "socks5://a:1")
+        with mock.patch.dict(os.environ, {"HTTPS_PROXY": "http://b:2"}, clear=True):
+            self.assertEqual(proxy_from_env(), "http://b:2")
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(proxy_from_env())
+
+    def test_resolve_reads_the_environment(self):
+        with mock.patch.dict(os.environ, {"PYBRWS_PROXY": "socks5://a:1"}, clear=True):
+            self.assertEqual(resolve(None), Proxy("socks5", "a", 1, None, None))
+
+    def test_false_forces_a_direct_connection(self):
+        # Needed so a measurement can keep one arm direct while the
+        # environment is set for the other.
+        with mock.patch.dict(os.environ, {"PYBRWS_PROXY": "socks5://a:1"}, clear=True):
+            self.assertIsNone(resolve(False))
+
+    def test_explicit_argument_wins(self):
+        with mock.patch.dict(os.environ, {"PYBRWS_PROXY": "socks5://a:1"}, clear=True):
+            self.assertEqual(resolve("http://b:2"), Proxy("http", "b", 2, None, None))
 
 
 class TestHttpConnect(unittest.TestCase):
