@@ -11,4 +11,8 @@ client = ["cryptography>=50", "hpack", "brotli"]
 # Only for Python below 3.14, where zstd is not yet in the standard library.
 zstd = ["zstandard"]
 # Measurement and demo: httpx is the baseline every comparison runs against.
-dev = ["httpx[http2]", "jupyterlab", "nbclient"]
+# aioquic is the QUIC transport and, in the tests, the oracle the Initial
+# packet decryptor is checked against. pybrws.quic itself needs none of it:
+# reading Initial packets takes only cryptography, because the keys come from
+# a published salt.
+dev = ["httpx[http2]", "jupyterlab", "nbclient", "aioquic"]

@@ -116,10 +116,30 @@ the suite from the binder length rather than naming it.
 2. **TLS 1.2 is advertised and not implemented**, because Firefox advertises
    it and removing it would change the fingerprint. httpbin.org declines TLS
    1.3 and so is unreachable.
-3. HTTP/3. The job this project was built for names QUIC explicitly, and
-   it is the one remaining large item. Streaming is done; concurrency is
-   done, as multiplexing within a connection and a thread pool across
-   them; what is missing is an asyncio path, if one is ever wanted.
+3. **HTTP/3, write side.** The reading side is done: `pybrws/quic.py`
+   recovers a ClientHello from Initial packets, which need no secret --
+   RFC 9001 publishes the salt and the header carries the connection ID --
+   and `tools/read_quic.py` gets them out of a pcap or pcapng.
+
+   What is missing is a Firefox capture to aim at, and then the write side.
+   The TCP extension list cannot be reused: `session_ticket` is the TLS 1.2
+   mechanism and has no place over QUIC, `record_size_limit` has nothing to
+   limit, and `quic_transport_parameters` (57) must be there. That last one
+   is a fingerprint with no TCP equivalent -- an ordered list of values a
+   client picks for itself. aioquic sends twelve in ascending id order; a
+   browser probably does not.
+
+   The intervention point for the write side is known. aioquic's
+   `push_client_hello` hardcodes its own extension order, but it is called
+   inside `with push_message(key_schedule, output_buf):`, which hashes
+   whatever was written into the buffer. So replacing that one function with
+   one that writes Firefox's order keeps the transcript correct for free.
+   aioquic is a transport dependency in the same category as `hpack`, not an
+   impersonation library, so the clean-room rule has nothing to say about it.
+
+   Concurrency is done, as multiplexing within a connection and a thread
+   pool across them; streaming is done; what is missing is an asyncio path,
+   which HTTP/3 will want since aioquic is asyncio.
 
 ## Things that cost time here
 

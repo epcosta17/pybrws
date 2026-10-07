@@ -41,6 +41,8 @@ EXTENSION_NAMES: dict[int, str] = {
     35: "session_ticket",
     41: "pre_shared_key",               # must be the last extension
     45: "psk_key_exchange_modes",
+    # transport
+    57: "quic_transport_parameters",  # QUIC only, RFC 9001 section 8.2
     # legacy and compatibility
     21: "padding",
     23: "extended_master_secret",

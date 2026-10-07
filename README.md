@@ -244,6 +244,18 @@ the CA it prints on startup, or skip verification. A plain CONNECT tunnel
 would leave the caller performing its own handshake, which is the fingerprint
 this project replaces.
 
+Recover a browser's ClientHello from a QUIC capture:
+
+    # capture UDP 443 while the browser visits a site that speaks HTTP/3
+    python tools/read_quic.py capture.pcapng --host www.google.com
+
+QUIC carries TLS 1.3 inside rather than running over it, and an Initial
+packet is protected with keys derived from a salt published in RFC 9001 and
+the connection ID its own header carries in the clear. So the ClientHello is
+as readable there as it is on TCP, by anyone, with no server and no
+certificate for a browser to object to -- and every extension-order question
+this project answers for TCP applies unchanged.
+
 Compare the live fingerprint against the reference capture:
 
     python tools/verify.py

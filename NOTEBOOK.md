@@ -1890,3 +1890,96 @@ cost was a few minutes, but the lesson is cheaper to write down than to
 relearn: `git checkout` of a file is a delete, and a mutation test should be
 undone by restoring the copy you made, not by asking git for a version that
 predates your work.
+
+## 2026-10-07 — QUIC, starting from the reading end
+
+HTTP/3 is the last large item and the one the job posting names. Starting it
+by writing a client would have been the wrong end: there is nothing to aim at
+until a browser's QUIC ClientHello has been measured, and it cannot be
+assumed from the TCP one. Firefox cannot send `session_ticket` over QUIC --
+that is the TLS 1.2 mechanism -- nor `record_size_limit`, since QUIC has no
+TLS records to limit, and it must send `quic_transport_parameters`. So the
+first thing built is a reader.
+
+### QUIC hands the handshake over
+
+The useful fact: QUIC does not run over TLS, it carries TLS 1.3 inside.
+The handshake travels in CRYPTO frames inside Initial packets, and those are
+protected with keys derived from a salt printed in RFC 9001 section 5.2 and
+the connection ID the header carries in the clear. Nothing secret goes into
+them. An observer reads a QUIC ClientHello as easily as one off TCP -- which
+cuts both ways, and is why all the extension-order work transfers intact.
+
+It also solved a problem I was about to have. Capturing Firefox over HTTP/3
+against a local server means persuading Firefox to use HTTP/3 at all, which
+needs an Alt-Svc advertisement over TCP first, and then persuading it to
+accept a self-signed certificate over QUIC, which it may well refuse outright.
+None of that is necessary: capture UDP 443 while the browser visits a real
+h3 site and decrypt the Initial. Real server, real certificate, real
+transport parameters, no warnings.
+
+### What got built
+
+`pybrws/quic.py` reads a client's first flight: header protection removal,
+AEAD decryption, frame walking, and CRYPTO reassembly. It depends on
+`cryptography` and nothing else -- deliberately, and there is a check that
+imports it with aioquic hidden from `sys.meta_path` to keep that true.
+
+`tools/read_quic.py` gets datagrams out of a pcap or pcapng: both byte
+orders, Ethernet, raw IP, loopback and Linux cooked, IPv4 and IPv6.
+
+The piece I would have got wrong by reasoning about it: a capture of port 443
+holds several connections whose datagrams interleave. Feeding the lot in as
+one stream would mix CRYPTO offsets from different handshakes, and because
+offsets from two handshakes can cover a contiguous range, the result would
+*parse* -- a ClientHello assembled out of two browsers' worth of bytes.
+Grouping by destination connection ID, which is what keys the decryption
+anyway, keeps them apart. There is a test that interleaves two flights and
+insists on getting both back.
+
+### aioquic as an oracle
+
+The decryptor is checked against aioquic rather than against itself: aioquic
+builds a first flight into raw datagrams, and is asked separately what
+ClientHello it serialised, so two independent implementations have to agree
+on the bytes. Breaking the salt by one byte fails 8 tests, widening the
+header-protection mask from `0x0f` to `0x1f` fails 5, and turning the
+reassembly gap guard into a no-op fails 1.
+
+One assumption in those tests was wrong and the test caught it. I asserted
+the flight spans more than one datagram, because a ClientHello does not fit
+in the 1200 bytes QUIC starts with. Firefox's does not -- it is around 1900 --
+but aioquic's is 484 bytes and fits easily, so the assertion failed and the
+reassembly path was never being exercised. aioquic has
+`quantum_readiness_test`, whose whole purpose is to inflate the hello, and
+with it the flight takes two datagrams. The multi-datagram cases now live in
+their own class, built on that, and the single-datagram class says out loud
+that it is not the one covering reassembly.
+
+Which is the second time today a test earned its keep by contradicting the
+comment I wrote above it.
+
+### The new fingerprint surface
+
+`quic_transport_parameters` has no equivalent on TCP: an ordered list of
+values a client chooses for itself. aioquic sends twelve, in ascending id
+order:
+
+      0x1   max_idle_timeout                     0x8   initial_max_streams_bidi
+      0x4   initial_max_data                     0x9   initial_max_streams_uni
+      0x5   initial_max_stream_data_bidi_local   0xa   ack_delay_exponent
+      0x6   initial_max_stream_data_bidi_remote  0xb   max_ack_delay
+      0x7   initial_max_stream_data_uni          0xe   active_connection_id_limit
+                                                 0xf   initial_source_connection_id
+                                                 0x11  version_information
+
+Ascending order is itself a choice, and I would expect a browser not to make
+it. That is the measurement to take next.
+
+A detail worth having got right by accident: RFC 9000 section 18.1 reserves
+ids of the form 31N+27 to be ignored, the same greasing idea as the cipher
+suites. My first `parameter_name` checked that formula before the registered
+table, which would rename any registered parameter whose id happens to
+satisfy it -- and the formula covers a third of the id space, so that is a
+coincidence waiting to happen, not a hypothetical. The table wins now, with a
+test that walks the registered ids looking for collisions.
