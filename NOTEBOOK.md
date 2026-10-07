@@ -2136,3 +2136,119 @@ connection to Edge on the grounds that it was a Windows machine. Ernesto had
 Chrome open at the time. The attribution did not matter to any measurement,
 but it was stated with more confidence than it was held with, which is the
 habit worth not having.
+
+## 2026-10-07 — The write side, and two failures that were compliments
+
+Seven hosts out of seven now connect over HTTP/3 with a ClientHello that
+matches the Firefox capture byte for byte, six of them selecting
+X25519MLKEM768:
+
+      www.google.com                   group 0x11ec  suite 0x1301  alpn h3
+      cloudflare-quic.com              group 0x11ec  suite 0x1301  alpn h3
+      blog.cloudflare.com              group 0x11ec  suite 0x1301  alpn h3
+      www.bing.com                     group 0x11ec  suite 0x1302  alpn h3
+      incoming.telemetry.mozilla.org   group 0x001d  suite 0x1301  alpn h3
+      www.facebook.com                 group 0x11ec  suite 0x1301  alpn h3
+      www.youtube.com                  group 0x11ec  suite 0x1301  alpn h3
+
+Against the capture, with the genuinely per-connection parts compared by
+length rather than by value: 1931 bytes against 1931, every static payload
+identical, the extension set and pinned tail identical, the cipher suites and
+the empty session id identical, and the fourteen transport parameters
+identical in order and in value but for the connection's own id.
+
+### Five seams
+
+The plan was one seam. `push_client_hello` writes the message inside
+`with push_message(key_schedule, output_buf):`, and that context manager
+hashes whatever ends up in the buffer, so replacing the writer keeps the
+transcript correct for free. That part held exactly as hoped.
+
+The other four were found by running it.
+
+**Getting hold of the connection.** The writer is handed a buffer and a
+hello, not the Context, and per-connection state has to live somewhere, so
+`_client_send_hello` is wrapped to create it.
+
+**The key exchange.** Firefox's QUIC key_share is 1327 bytes across three
+entries -- X25519MLKEM768 at 1216, X25519 at 32, secp256r1 at 65 -- and
+aioquic's `Group` enum has no post-quantum group at all. An unknown group is
+silently skipped, so there is no configuration that produces one. We have the
+hybrid in `keyexchange.py`, already verified against real servers on TCP, so
+all three shares are ours and aioquic's own private keys go unused. The
+secret has to come from us too, and aioquic computes it as
+`self._x25519_private_key.exchange(peer_public_key)` after
+`decode_public_key` turns the server's share into a key object. So
+`decode_public_key` keeps the raw share and returns a dummy whose type
+satisfies the `isinstance` check, and `_x25519_private_key` becomes an object
+whose `exchange` ignores its argument and returns the real secret. A stub in
+a hole of exactly the right shape. Ugly, contained, and better than copying
+`_client_handle_hello` into our tree where it would go stale in silence.
+
+The remaining two were protocol lessons rather than plumbing, and both only
+showed up *because* the impersonation worked.
+
+### A compressed certificate
+
+Cloudflare's answer to our hello was handshake message type 25, and aioquic
+replied with `unexpected_message`: CRYPTO_ERROR 266, which is alert 10 inside
+a CRYPTO frame.
+
+Type 25 is RFC 8879 CompressedCertificate. We asked for it, because Firefox
+sends `compress_certificate` and the profile copies Firefox. The server took
+us at our word. aioquic names `COMPRESSED_CERTIFICATE` in its enum and never
+dispatches it, which is what made the failure confusing to read: the type is
+known and the handling is absent.
+
+We already decompress those in `certs.py` for the TCP client, so the fix was
+small, but there is one trap in it. RFC 8879 section 5 puts the *compressed*
+message in the handshake transcript. Decompressing and handing the result to
+aioquic's own certificate handler would hash the certificate that came out,
+not the message that came in, and the only symptom would be a Finished check
+failing with nothing in the error pointing at compression. So the
+interception hashes the compressed bytes itself and calls only the parsing
+half.
+
+A failure caused by being convincing is a good failure. A plain client never
+sees message type 25 because it never asks for it.
+
+### Two connection ids, not one
+
+With that fixed, Cloudflare connected and Google did not -- and Google did
+not answer at all. No ServerHello, no alert, nothing. Every Initial packet
+dropped in silence.
+
+Matching Firefox's three-byte `initial_source_connection_id` means setting
+aioquic's `connection_id_length` to 3, and aioquic uses that one setting for
+both ids: line 339 of `connection.py` draws the initial *destination* id with
+it too. RFC 9000 section 7.2 requires the client's initial destination id to
+be at least 8 bytes, because the Initial keys are derived from it and an
+attacker who can guess it can forge packets. Three bytes is a violation.
+Cloudflare tolerated it; Google dropped it, which is the correct response and
+the less helpful one.
+
+So Firefox uses asymmetric lengths -- three bytes for the id it issues, eight
+or more for the one it picks for the server -- and aioquic conflates them. The
+two are separated now, with a test asserting the destination id in the packet
+header is the same bytes the keys were derived from, because a mismatch there
+makes every Initial undecryptable by the peer and says nothing about why.
+
+Worth being plain about what is measured and what is not: three bytes is
+measured, from the one connection whose parameter values were read out. Eight
+is the RFC's floor, not an observation. Firefox's actual choice is not in the
+ClientHello and needs the packet headers from a capture.
+
+### On the tests
+
+Twenty-six, offline. Half assert the hello against the fixture. The other
+half assert that the seams still exist -- every private name reached for,
+plus the shape of the key-exchange hole, plus that aioquic still lacks the
+post-quantum group and still does not dispatch type 25. Five monkeypatches
+into a dependency's private surface is a liability, and the way to carry it
+is to make an upgrade break a test rather than a connection.
+
+Three of my own tests were wrong on the first run and said so: one read the
+transcript off the wrong object, one asserted aioquic had never heard of
+compressed certificates when it names them, and one inspected
+`_client_handle_hello` after this module had already replaced it, so it was
+proving that our wrapper calls our own stub.

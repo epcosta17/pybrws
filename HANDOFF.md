@@ -116,7 +116,7 @@ the suite from the binder length rather than naming it.
 2. **TLS 1.2 is advertised and not implemented**, because Firefox advertises
    it and removing it would change the fingerprint. httpbin.org declines TLS
    1.3 and so is unreachable.
-3. **HTTP/3, write side.** The reading side is done: `pybrws/quic.py`
+3. **HTTP/3.** Reading and writing both work. The reading side: `pybrws/quic.py`
    recovers a ClientHello from Initial packets, which need no secret --
    RFC 9001 publishes the salt and the header carries the connection ID --
    and `tools/read_quic.py` gets them out of a pcap or pcapng.
@@ -166,13 +166,48 @@ the suite from the binder length rather than naming it.
    as though it varied. Both wrong readings came from the same mistake.
    `--all` groups by extension set first for that reason.
 
-   The intervention point for the write side is known. aioquic's
-   `push_client_hello` hardcodes its own extension order, but it is called
-   inside `with push_message(key_schedule, output_buf):`, which hashes
-   whatever was written into the buffer. So replacing that one function with
-   one that writes Firefox's order keeps the transcript correct for free.
+   **The write side works.** `pybrws/quic_impersonate.py` makes aioquic send
+   the profile's hello: seven hosts out of seven connect over HTTP/3, six
+   selecting X25519MLKEM768, and the hello matches the capture at 1931 bytes
+   with every static payload identical.
+
+   It costs five monkeypatches into aioquic's private surface, each named in
+   that module's docstring and each asserted by a test, so an aioquic upgrade
+   breaks a test rather than a connection:
+
+   - `push_client_hello`, the writer. Called inside
+     `with push_message(key_schedule, output_buf):`, which hashes whatever
+     lands in the buffer, so replacing it keeps the transcript correct for
+     free. This was the only seam planned.
+   - `Context._client_send_hello`, wrapped only to reach the connection,
+     since the writer is handed a buffer and a hello and nothing else.
+   - **The key exchange.** aioquic has no post-quantum group and silently
+     skips unknown ones, so all three key shares are ours from
+     `keyexchange.py` and the shared secret is too. `decode_public_key`
+     keeps the server's raw share and returns a type-compatible dummy, and
+     `_x25519_private_key` becomes a stub whose `exchange` returns the real
+     secret. The most fragile part, and the most load bearing.
+   - **Compressed certificates.** Advertising `compress_certificate` because
+     Firefox does means servers send handshake type 25, which aioquic names
+     and never dispatches. RFC 8879 section 5 hashes the *compressed*
+     message, so the interception hashes it itself rather than letting
+     aioquic hash what came out of the decompressor.
+   - **The connection ids.** aioquic uses one length for both; RFC 9000
+     section 7.2 requires the initial destination id to be at least 8 bytes
+     while Firefox's source id is 3. Three bytes for both is a violation
+     that Cloudflare tolerated and Google answered by dropping every
+     Initial packet in silence.
+
    aioquic is a transport dependency in the same category as `hpack`, not an
    impersonation library, so the clean-room rule has nothing to say about it.
+
+   Still missing: an HTTP/3 request path worth the name. The handshake is
+   done and `H3Connection` is there, but there is no equivalent of
+   `client.get` over QUIC, no header-order profile for HTTP/3 (QPACK, not
+   HPACK, and the pseudo-header order is its own fingerprint), and no
+   measurement of what Firefox sends in an h3 request. Also unmeasured:
+   Firefox's own initial destination id length, which needs packet headers
+   rather than a handshake.
 
    Concurrency is done, as multiplexing within a connection and a thread
    pool across them; streaming is done; what is missing is an asyncio path,

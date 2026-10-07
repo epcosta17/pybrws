@@ -37,6 +37,38 @@ CIPHER_SUITES = (0x1301, 0x1303, 0x1302)
 # Empty, where the TCP profile sends 32 bytes.
 SESSION_ID_SIZE = 0
 
+# The client's own connection id, three bytes. aioquic defaults to eight,
+# which showed up as a five-byte difference in the transport parameters
+# extension and nowhere else -- the sort of thing that is invisible until
+# something is compared byte for byte.
+#
+# Measured once, from the one connection whose parameter values were read
+# out. Whether neqo always uses three bytes is not established; a capture
+# with several connections' ids compared would settle it.
+CONNECTION_ID_SIZE = 3
+
+# The client's *initial destination* connection id is a different length from
+# its source id, and aioquic uses one setting for both. RFC 9000 section 7.2
+# requires the initial destination id to be at least 8 bytes, since it is what
+# seeds the Initial keys and an attacker who can guess it can forge packets.
+# Three bytes is a protocol violation: Cloudflare tolerated it and Google
+# dropped every Initial without a word, which is the correct response.
+#
+# Eight is the mandated floor, not a measurement. What Firefox actually picks
+# is not in the ClientHello, so reading it needs the packet headers from a
+# capture rather than the handshake.
+INITIAL_DESTINATION_ID_SIZE = 8
+
+# The limits the transport parameters advertise, in the units aioquic's
+# configuration wants them. These are not decoration: a client that announces
+# a 24 MB connection window and then enforces 1 MB is lying about itself in a
+# way that shows up as stalled streams rather than as a fingerprint.
+IDLE_TIMEOUT_SECONDS = 30.0          # max_idle_timeout, 30000 ms
+MAX_DATA = 25165824                  # initial_max_data
+MAX_STREAM_DATA = 12582912           # initial_max_stream_data_bidi_local
+MAX_DATAGRAM_FRAME_SIZE = 65535      # max_datagram_frame_size
+ALPN_PROTOCOLS = ("h3",)
+
 LEGACY_COMPRESSION_METHODS = (0x00,)
 
 # X25519MLKEM768 first, then the classical ones. No GREASE group, which the
