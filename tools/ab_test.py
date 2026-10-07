@@ -176,10 +176,9 @@ def main() -> int:
     parser.add_argument("--pause", type=float, default=1.0,
                         help="seconds between requests, to stay polite")
     parser.add_argument("--proxy", metavar="URL",
-                        help="route the pybrws arm through this proxy, so a "
-                             "fresh address separates fingerprint from "
-                             "address reputation. Reads PYBRWS_PROXY when the "
-                             "flag is omitted and --use-env is given")
+                        help="route the pybrws arm through this proxy. Note "
+                             "this confounds fingerprint with address; "
+                             "tools/isolate.py crosses the two instead")
     parser.add_argument("--use-env", action="store_true",
                         help="take the proxy from PYBRWS_PROXY or HTTPS_PROXY")
     parser.add_argument("--no-log", action="store_true")
@@ -205,8 +204,10 @@ def main() -> int:
 
         # str(Proxy) omits the password.
         print("pybrws arm through %s" % (parse_proxy(PROXY),))
-        print("the httpx arm stays direct, so the comparison isolates the "
-              "fingerprint and not the address")
+        print("WARNING: this changes two variables at once. The proxied arm "
+              "differs from the direct one in both fingerprint and address, "
+              "so a difference cannot be attributed to either. Use "
+              "tools/isolate.py for that.")
 
     targets = list(args.targets)
     if CONTROL not in targets:

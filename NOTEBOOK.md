@@ -761,3 +761,50 @@ defence against the proxies you do not control".
 Free proxy lists are unusable for measurement for a second reason anyway:
 their addresses are already burned, so a run through them measures the
 proxy's reputation rather than this client's fingerprint.
+
+---
+
+## 2026-10-06 — Crossing fingerprint against address
+
+A BrightData static ISP exit, verified first for interception: the JA4 and
+Akamai fingerprint it reports are this client's, so the proxy is not
+inspecting.
+
+Routing the pybrws arm of `ab_test.py` through it dropped every previously
+passing target to 0/4: zillow, ticketmaster, indeed and the etsy category
+page. The run also exposed a claim in the tool, written earlier in this
+session, that proxying one arm "isolates the fingerprint and not the
+address". It does the opposite. Changing the exit changes both variables at
+once, so nothing in that output can be attributed to either. The tool now
+prints a warning saying so.
+
+The experiment that does isolate them crosses both factors, three rounds each:
+
+| Target | pybrws direct | pybrws proxied | httpx direct | httpx proxied |
+|---|---|---|---|---|
+| www.zillow.com | 3/3 | 0/3 | 0/3 | 0/3 |
+| www.crunchbase.com | 3/3 | 3/3 | 2/3 | 3/3 |
+| www.glassdoor.com | 0/3 | 0/3 | 0/3 | 0/3 |
+| www.g2.com | 0/3 | 0/3 | 0/3 | 0/3 |
+| www.etsy.com | 0/3 | 0/3 | 0/3 | 0/3 |
+
+zillow is the only discriminating row and it is unambiguous. **One cell out
+of four passes.** The fingerprint alone does not do it, and the address alone
+does not either; both are required, which is an interaction rather than two
+additive effects.
+
+**The commercial exit was worse than a domestic line.** Not what was expected
+when it was bought for this. A static ISP range belonging to a known proxy
+vendor is itself a signal, and anti-bot vendors buy those ranges and label
+them. "Clean IP" means unburned by *you*, not untainted.
+
+**This reframes the project's own results.** Every number in the README comes
+from one residential connection. The protocol work is real and measurable,
+and it buys one of the two things a request needs. Stated plainly in the
+README rather than left as a footnote.
+
+glassdoor is now 0/3 from both addresses, so it is finished as an instrument
+rather than merely degraded here.
+
+`tools/isolate.py` keeps the crossed design available, since the single-arm
+comparison is the easier thing to reach for and the wrong one.

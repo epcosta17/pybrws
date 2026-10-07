@@ -27,10 +27,27 @@ and the search parameter `?q=` are refused while an ordinary category page is
 served, so the strictest rules sit on the endpoints worth scraping. g2 runs
 Cloudflare at a setting this client cannot satisfy.
 
-Caveats worth stating. A single client IP, so address reputation is an
-uncontrolled variable, and it degrades over a session of cold requests. No
-JavaScript challenge is solvable here by construction, so any site that
-issues one is out of reach regardless of fingerprint.
+### The fingerprint is necessary and not sufficient
+
+Those numbers come from a residential connection. Crossing the fingerprint
+against the address, three rounds each, shows the two factors are not
+independent:
+
+| Target | pybrws direct | pybrws proxied | httpx direct | httpx proxied |
+|---|---|---|---|---|
+| www.zillow.com | **3/3** | 0/3 | 0/3 | 0/3 |
+| www.crunchbase.com | 3/3 | 3/3 | 2/3 | 3/3 (control) |
+| www.glassdoor.com | 0/3 | 0/3 | 0/3 | 0/3 |
+| www.g2.com | 0/3 | 0/3 | 0/3 | 0/3 |
+| www.etsy.com | 0/3 | 0/3 | 0/3 | 0/3 |
+
+One cell passes. The browser fingerprint on a home connection; every other
+combination is refused, including the same fingerprint through a commercial
+static ISP exit. A proxy address sold as clean is itself a signal, and here
+it was worse than an ordinary domestic line.
+
+So this project buys one of two things a request needs, and `tools/isolate.py`
+exists to keep that honest.
 
 ## Clean-room rule
 
@@ -124,3 +141,7 @@ Track how targets respond over time, against a plain client:
 
     python tools/ab_test.py
     python tools/ab_test.py --history
+
+Separate the fingerprint from the address it comes from:
+
+    python tools/isolate.py
