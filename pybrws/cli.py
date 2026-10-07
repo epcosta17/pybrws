@@ -9,6 +9,7 @@ from pathlib import Path
 from . import profiles
 from .client import TooManyRedirects, UnsupportedUrl, get
 from .message import Response
+from .proxies import ProxyError
 from .records import TlsAlert
 
 
@@ -48,6 +49,8 @@ def merge_headers(profile, overrides: list[tuple[str, str]], http2: bool):
 
 def describe_request(profile, args) -> str:
     lines = ["> " + args.url, "> profile: " + profile.NAME]
+    if args.proxy:
+        lines.append("> proxy: " + args.proxy)
     for name, value in args.header:
         lines.append("> override: " + name + ": " + value)
     return "\n".join(lines)
@@ -88,6 +91,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="describe the request on stderr")
     parser.add_argument("-s", "--silent", action="store_true",
                         help="suppress the status line on stderr")
+    parser.add_argument("-x", "--proxy", metavar="URL",
+                        help="http://, socks5:// or socks5h://, with optional "
+                             "user:pass@")
     parser.add_argument("--profile", default="firefox157", metavar="NAME")
     parser.add_argument("--timeout", type=float, default=20.0, metavar="SECONDS")
     return parser
@@ -114,8 +120,9 @@ def main(argv: list[str] | None = None) -> int:
             timeout=args.timeout,
             headers=headers,
             follow_redirects=args.max_redirs if args.location else 0,
+            proxy=args.proxy,
         )
-    except (UnsupportedUrl, TooManyRedirects, TlsAlert) as exc:
+    except (UnsupportedUrl, TooManyRedirects, TlsAlert, ProxyError) as exc:
         raise SystemExit(type(exc).__name__ + ": " + str(exc))
     except OSError as exc:
         raise SystemExit("connection failed: " + str(exc))

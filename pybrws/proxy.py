@@ -29,6 +29,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
 from .client import TooManyRedirects, UnsupportedUrl, get
+from .proxies import ProxyError
 from .message import Response
 from .profiles import firefox157
 from .records import TlsAlert
@@ -223,11 +224,13 @@ def error_response(status: int, message: str) -> bytes:
 
 class Proxy:
     def __init__(self, ca: CertificateAuthority, *, profile=firefox157,
-                 timeout: float = 20.0, verbose: bool = True) -> None:
+                 timeout: float = 20.0, verbose: bool = True,
+                 upstream: str | None = None) -> None:
         self.ca = ca
         self.profile = profile
         self.timeout = timeout
         self.verbose = verbose
+        self.upstream = upstream
 
     def log(self, message: str) -> None:
         if self.verbose:
@@ -236,9 +239,11 @@ class Proxy:
     def fetch(self, url: str, headers=None) -> bytes:
         try:
             response = get(url, profile=self.profile, timeout=self.timeout,
-                           headers=headers)
+                           headers=headers, proxy=self.upstream)
         except (UnsupportedUrl, TooManyRedirects) as exc:
             return error_response(400, str(exc))
+        except ProxyError as exc:
+            return error_response(502, "upstream proxy: " + str(exc))
         except TlsAlert as exc:
             return error_response(502, str(exc))
         except OSError as exc:
@@ -302,6 +307,8 @@ class Proxy:
         listener.listen(64)
         print("proxy listening on http://%s:%d, profile %s"
               % (host, port, self.profile.NAME))
+        if self.upstream:
+            print("outbound through %s" % (self.upstream,))
         print("CA certificate: %s" % self.ca.cert_path)
         print("trust it, or disable verification in the calling client")
         try:
@@ -323,6 +330,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--ca-dir", type=Path, default=DEFAULT_CA_DIR)
     parser.add_argument("--timeout", type=float, default=20.0)
+    parser.add_argument("--upstream", metavar="URL",
+                        help="send outbound requests through this proxy")
     parser.add_argument("-q", "--quiet", action="store_true")
     parser.add_argument("--print-ca", action="store_true",
                         help="print the CA certificate path and exit")
@@ -332,7 +341,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.print_ca:
         print(ca.cert_path)
         return 0
-    Proxy(ca, timeout=args.timeout, verbose=not args.quiet).serve(args.host, args.port)
+    Proxy(ca, timeout=args.timeout, verbose=not args.quiet,
+          upstream=args.upstream).serve(args.host, args.port)
     return 0
 
 

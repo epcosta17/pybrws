@@ -12,6 +12,7 @@ from .keyexchange import KeyExchange
 from .keyschedule import CIPHER_SUITES, KeySchedule, finished_verify_data
 from .parser import _Reader
 from .profiles import firefox157
+from .proxies import open_socket
 from .records import APPLICATION_DATA, HANDSHAKE, Cipher, RecordLayer
 from .wire import u24, u8
 
@@ -132,6 +133,7 @@ def connect(
     *,
     profile=firefox157,
     timeout: float = 15.0,
+    proxy=None,
 ) -> Connection:
     """Open a TLS 1.3 connection impersonating `profile`.
 
@@ -140,6 +142,9 @@ def connect(
         port: TCP port.
         profile: the client to imitate.
         timeout: socket timeout in seconds.
+        proxy: a proxy URL or Proxy, or None for a direct connection. The
+            handshake is identical either way; only the egress address and
+            the TCP/IP signature change.
 
     Returns:
         A Connection ready to carry application data.
@@ -152,7 +157,7 @@ def connect(
     key_exchange = KeyExchange([group for group, _ in profile.KEY_SHARE_GROUPS])
     client_hello = build_client_hello(host, profile=profile, key_exchange=key_exchange)
 
-    sock = socket.create_connection((host, port), timeout=timeout)
+    sock = open_socket(host, port, proxy=proxy, timeout=timeout)
     records = RecordLayer(sock)
     try:
         sock.sendall(client_hello)

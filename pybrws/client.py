@@ -25,7 +25,7 @@ REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 
 def fetch_once(url: str, *, profile=firefox157, timeout: float = 20.0,
-               headers=None) -> Response:
+               headers=None, proxy=None) -> Response:
     """Fetch one URL without following redirects.
 
     The server picks the protocol through ALPN; both branches are implemented,
@@ -54,7 +54,8 @@ def fetch_once(url: str, *, profile=firefox157, timeout: float = 20.0,
     if parts.query:
         path += "?" + parts.query
 
-    with connect(host, port, profile=profile, timeout=timeout) as tls:
+    with connect(host, port, profile=profile, timeout=timeout,
+                 proxy=proxy) as tls:
         if tls.alpn == "h2":
             http = Http2Connection(tls, profile=profile)
         else:
@@ -65,7 +66,7 @@ def fetch_once(url: str, *, profile=firefox157, timeout: float = 20.0,
 
 
 def get(url: str, *, profile=firefox157, timeout: float = 20.0, headers=None,
-        follow_redirects: int = 0) -> Response:
+        follow_redirects: int = 0, proxy=None) -> Response:
     """Fetch a URL, optionally following redirects.
 
     Args:
@@ -75,6 +76,7 @@ def get(url: str, *, profile=firefox157, timeout: float = 20.0, headers=None,
         headers: overrides the profile's request headers.
         follow_redirects: how many redirects to follow. 0 returns the
             redirect itself, as curl does without -L.
+        proxy: a proxy URL or Proxy, applied to every hop.
 
     Returns:
         The final response, with the body decompressed.
@@ -85,7 +87,8 @@ def get(url: str, *, profile=firefox157, timeout: float = 20.0, headers=None,
     """
     seen = []
     for hop in range(follow_redirects + 1):
-        response = fetch_once(url, profile=profile, timeout=timeout, headers=headers)
+        response = fetch_once(url, profile=profile, timeout=timeout,
+                              headers=headers, proxy=proxy)
         response.history = list(seen)
         location = response.header("location")
         if response.status not in REDIRECT_STATUSES or not location:

@@ -78,6 +78,7 @@ and the source of NSS, Firefox and OpenSSL.
 | 4b | HTTP/1.1, for hosts that do not offer h2 | done |
 | 5 | curl-style CLI | done |
 | 6 | Proxy sidecar for other languages | done |
+| 7 | Outbound proxies, HTTP CONNECT and SOCKS5 | done |
 
 Phases 0 through 2 are standard library only.
 
@@ -101,12 +102,13 @@ Run the tests:
 Fetch a URL:
 
     python -m pybrws https://example.com/
-    python -m pybrws -IL https://www.glassdoor.com/
+    python -m pybrws -x socks5://user:pass@exit.example:1080 https://example.com/
     python -m pybrws -H 'Accept-Language: es-MX,es;q=0.9' -o page.html https://www.zillow.com/
 
 Lend the fingerprint to another language, with no change to its code:
 
     python -m pybrws.proxy
+    python -m pybrws.proxy --upstream socks5://user:pass@exit.example:1080
     HTTPS_PROXY=http://127.0.0.1:8080 node --use-env-proxy -e "fetch('https://tls.peet.ws/api/all')..."
     curl -k -x http://127.0.0.1:8080 https://tls.peet.ws/api/all
 

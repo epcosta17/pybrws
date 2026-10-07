@@ -680,3 +680,35 @@ blocked. Three tests cover it, driving the reader from scripted frames.
 The initial WINDOW_UPDATE is the only one in the Akamai fingerprint, so this
 does not change it. The *pattern* of later updates is still a signal, and
 Firefox batches them rather than answering every DATA frame. Not measured.
+
+---
+
+## 2026-10-06 — Outbound proxies
+
+HTTP CONNECT and SOCKS5, with optional credentials, threaded through
+`handshake.connect`, `client.get`, the CLI as `-x`, and the sidecar as
+`--upstream` so a Ruby caller can reach a residential exit without knowing
+either exists.
+
+The design claim was that nothing above the socket changes. Verified against
+tls.peet.ws through pass-through proxies running on loopback:
+
+    direct            ja4=t13d1517h2_8daaf6152771_3cbfd9057e0d  akamai=1:65536;2:0;4:131072;5:16384|12517377|0|m,p,a,s
+    via HTTP CONNECT  ja4=t13d1517h2_8daaf6152771_3cbfd9057e0d  akamai=1:65536;2:0;4:131072;5:16384|12517377|0|m,p,a,s
+    via SOCKS5        ja4=t13d1517h2_8daaf6152771_3cbfd9057e0d  akamai=1:65536;2:0;4:131072;5:16384|12517377|0|m,p,a,s
+
+**What does change is below the socket.** The TCP/IP signature a server sees
+becomes the proxy's. `tools/verify.py` checks `tcpip.p0f` against a Firefox
+capture taken from this machine, so that single check is expected to fail
+through a proxy while the other seventeen keep passing. That is the honest
+behaviour: the fingerprint this project controls stops at the socket.
+
+**SOCKS5 sends the target as a name**, never an address, so the exit resolves
+it. Resolving locally would leak every target to this machine's resolver and
+would also break any proxy whose value is where it resolves from. A test
+asserts the request carries `example.test` rather than an address.
+
+Sixteen tests, all offline: fake proxies on loopback that record what this
+client sends and replay scripted answers. One of them asserts that data sent
+immediately after a SOCKS5 reply is still readable, which only holds if the
+variable-length bound address was consumed exactly.
