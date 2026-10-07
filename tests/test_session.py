@@ -1,6 +1,7 @@
 """Tests for pybrws.session."""
 
 import unittest
+from pathlib import Path
 
 from pybrws.client import UnsupportedUrl
 from pybrws.cookies import Cookie
@@ -92,6 +93,54 @@ class TestHeaderAssembly(unittest.TestCase):
             "a.test", "/", True, [("accept", "*/*"), ("upgrade-insecure-requests", "1")]
         )
         self.assertIn(("cookie", "sid=1"), built)
+
+
+class FakeTls:
+    alpn = "http/1.1"
+
+    def send(self, data):
+        pass
+
+    def recv(self):
+        raise EOFError
+
+
+class TestMatchesTheCookieCapture(unittest.TestCase):
+    """A request carrying cookies must equal the browser's, byte for byte."""
+
+    REFERENCE = (
+        Path(__file__).resolve().parent.parent
+        / "fixtures"
+        / "reference-firefox-157-cookie.txt"
+    )
+    HOST = "pybrws.127.0.0.1.nip.io"
+    AUTHORITY = "pybrws.127.0.0.1.nip.io:4443"
+
+    def build(self):
+        from pybrws.http1 import Http1Connection
+
+        session = Session()
+        self.addCleanup(session.close)
+        session.cookies.set(Cookie("pybrws_probe", "1", self.HOST, "/"))
+        session.cookies.set(Cookie("pybrws_second", "2", self.HOST, "/"))
+        headers = session._headers_for(self.HOST, "/", False, None)
+        return Http1Connection(FakeTls()).build_request(
+            "GET", "/", self.AUTHORITY, headers
+        )
+
+    def test_byte_identical(self):
+        self.assertEqual(self.build(), self.REFERENCE.read_bytes())
+
+    def test_cookie_precedes_upgrade_insecure_requests(self):
+        # The one thing the earlier subresource capture could not settle,
+        # since a subresource carries no Upgrade-Insecure-Requests.
+        text = self.REFERENCE.read_text()
+        self.assertLess(text.index("Cookie:"), text.index("Upgrade-Insecure-Requests:"))
+
+    def test_both_cookies_travel_in_one_header(self):
+        text = self.REFERENCE.read_text()
+        self.assertEqual(text.count("Cookie:"), 1)
+        self.assertIn("pybrws_probe=1; pybrws_second=2", text)
 
 
 class TestSessionRequests(unittest.TestCase):

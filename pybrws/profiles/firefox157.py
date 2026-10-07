@@ -159,19 +159,17 @@ H1_HEADERS = [
 
 
 # --- Cookies --------------------------------------------------------------
-# Partly measured. fixtures/reference-firefox-157-image.txt shows Firefox
-# carrying two cookies in a single `Cookie` header, so there is no crumbling
-# over HTTP/1.1, and the header sits after Connection and before the
-# Sec-Fetch block. Both anchors below are consistent with that.
+# Measured. fixtures/reference-firefox-157-cookie.txt is a Firefox navigation
+# carrying two cookies: they travel in a single `Cookie` header with no
+# crumbling, placed after Connection and before Upgrade-Insecure-Requests.
+# A test asserts the generated request equals that capture byte for byte.
 #
-# Still unmeasured: that capture is a subresource, which carries no
-# Upgrade-Insecure-Requests, so whether Cookie precedes or follows that header
-# on a navigation is unknown. Both land between Connection and Sec-Fetch-Dest,
-# so only their relative order is open.
+# The HTTP/2 anchor is inferred rather than measured, from the two orders
+# being the same sequence apart from Host, Connection and te. Capturing it
+# needs an HTTP/2 server, which tools/catch_request.py is not.
 #
 # Also unmeasured: whether HTTP/2 crumbles cookies into separate headers,
-# which HPACK makes worthwhile and which this single-header form would not
-# reproduce.
+# which HPACK makes worthwhile.
 
 H2_COOKIE_BEFORE = "upgrade-insecure-requests"
 H1_COOKIE_BEFORE = "Upgrade-Insecure-Requests"

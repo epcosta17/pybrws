@@ -932,3 +932,33 @@ The `Referer` and `Sec-Fetch-Site: same-origin` pairing is the combination
 guessed at during the glassdoor experiment, here observed rather than
 assumed. That experiment found no effect; this says nothing about effect,
 only that the pairing is what the browser actually sends.
+
+---
+
+## 2026-10-06 — The cookie slot, settled
+
+The navigation reload, captured once the tool stopped letting the favicon
+take its place:
+
+    Connection: keep-alive
+    Cookie: pybrws_probe=1; pybrws_second=2
+    Upgrade-Insecure-Requests: 1
+    Sec-Fetch-Dest: document
+
+**Cookie precedes Upgrade-Insecure-Requests.** That was the last open pair,
+and the guessed anchor turns out to have been right. Generating the request
+through a Session with those two cookies now reproduces the capture byte for
+byte, all 503, and a test holds it there.
+
+The HTTP/2 anchor stays inferred rather than measured. The two orders are the
+same sequence apart from Host, Connection and te, which is good reason to
+believe it, and capturing it would need an HTTP/2 server that
+tools/catch_request.py is not.
+
+Worth noting in the capture: `Sec-Fetch-Site: none` and no `Referer`, even
+though the page had been loaded a moment earlier. A reload is still a
+user-initiated navigation with no initiator origin, so the pairing holds in
+the other direction too: the subresource had both, this has neither.
+
+Three header sets are now measured rather than assumed: navigation,
+navigation with cookies, and an image subresource.
