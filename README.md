@@ -174,7 +174,8 @@ and the source of NSS, Firefox and OpenSSL.
 | 11 | Streaming responses, incremental decoding | done |
 | 12 | Reading a ClientHello out of QUIC Initial packets | done |
 | 13 | Firefox's ClientHello over QUIC, via aioquic | done |
-| 14 | An HTTP/3 request path worth the name | not started |
+| 14 | HTTP/3 requests, measured against a real capture | done |
+| 15 | A second browser profile, to test the abstraction | not started |
 
 Phases 0 through 2 are standard library only.
 
