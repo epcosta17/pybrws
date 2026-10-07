@@ -121,13 +121,39 @@ the suite from the binder length rather than naming it.
    RFC 9001 publishes the salt and the header carries the connection ID --
    and `tools/read_quic.py` gets them out of a pcap or pcapng.
 
-   What is missing is a Firefox capture to aim at, and then the write side.
-   The TCP extension list cannot be reused: `session_ticket` is the TLS 1.2
-   mechanism and has no place over QUIC, `record_size_limit` has nothing to
-   limit, and `quic_transport_parameters` (57) must be there. That last one
-   is a fingerprint with no TCP equivalent -- an ordered list of values a
-   client picks for itself. aioquic sends twelve in ascending id order; a
-   browser probably does not.
+   The Firefox capture has been taken. What it says:
+
+   - **Fifteen extensions**, always the same set:
+     `0 5 10 13 16 23 27 28 34 43 45 51 57 65037 65281`. Against TCP's
+     seventeen, `ec_point_formats`, `session_ticket` and
+     `signed_certificate_timestamp` are gone and `quic_transport_parameters`
+     is new.
+   - **The order is shuffled per connection.** Six connections, six distinct
+     orders, identical sets. Exactly two are pinned, at the end:
+     `quic_transport_parameters` then `encrypted_client_hello`. This is the
+     opposite of Firefox on TCP, where the order is fixed -- its QUIC stack
+     is neqo, in Rust, not NSS. So a QUIC profile draws an order rather than
+     storing one, and no test may assert a single order.
+   - **Three cipher suites**, `0x1301 0x1303 0x1302`, against fifteen on TCP,
+     since QUIC forbids TLS 1.2. The cheapest tell on the protocol.
+   - **Transport parameters are not sorted.** `reset_stream_at` (0x1d) and
+     the GREASE id come before `max_datagram_frame_size` (0x20). aioquic
+     sorts; Firefox does not. The GREASE id is drawn per connection, with an
+     eight-byte one observed, so it is generated rather than copied.
+
+   Open: `cloudflare-ech.com` has Firefox's exact set and pinned tail but
+   three transport parameters where the others send fourteen, which is not a
+   working set. The suspicion is a real-ECH outer hello -- a decoy with the
+   working parameters encrypted inside -- which would mean a QUIC profile has
+   two cases. It needs the bytes looked at; `--all` now prints the ECH
+   extension length per connection, which is what would distinguish a real
+   ECH from the greased 282.
+
+   **A capture of port 443 holds more than the browser under test.** The
+   first one mixed Firefox with something Chromium-shaped talking to
+   bing.com, eleven extensions and Google transport parameters, and reading
+   it as one client made the order look less structured than it is. `--all`
+   groups by extension set first for that reason.
 
    The intervention point for the write side is known. aioquic's
    `push_client_hello` hardcodes its own extension order, but it is called

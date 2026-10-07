@@ -37,6 +37,7 @@ from pybrws.quic import (QuicError, client_hello_from_datagrams,  # noqa: E402
 
 EXT_SERVER_NAME = 0
 EXT_QUIC_TRANSPORT_PARAMETERS = 57
+EXT_ENCRYPTED_CLIENT_HELLO = 65037
 
 PCAPNG_SECTION_HEADER = 0x0A0D0D0A
 PCAPNG_INTERFACE_DESCRIPTION = 0x00000001
@@ -256,69 +257,127 @@ def report(raw: bytes) -> None:
                                        value.hex() or "(empty)"))
 
 
-def compare(hellos) -> None:
-    """Report what is the same and what differs across several hellos.
+def _parameters(hello):
+    try:
+        return parse_transport_parameters(
+            hello.extension(EXT_QUIC_TRANSPORT_PARAMETERS).data)
+    except Exception:
+        return []
 
-    This is the question a single capture cannot answer. If the extension
-    order is stable there is an order to imitate; if it is shuffled per
-    connection then the order is not the fingerprint and the set is. Chrome
-    shuffles and Firefox does not on TCP, but a browser's QUIC stack need not
-    be the same code -- Firefox's is neqo, not NSS.
+
+def _ech_length(hello) -> int:
+    for extension in hello.extensions:
+        if extension.type == EXT_ENCRYPTED_CLIENT_HELLO:
+            return len(extension.data)
+    return 0
+
+
+def compare(hellos) -> None:
+    """Report what varies across several recovered hellos.
+
+    Grouped by extension *set* first, because a capture of port 443 holds
+    whatever the machine was doing and not just the browser under test. The
+    first real capture here mixed Firefox with something sending Google
+    transport parameters and eleven extensions, and reading all of it as one
+    client made the extension order look less stable than it is. The set is
+    what identifies a client; the order is what is being measured.
     """
     parsed = [parse_client_hello(raw) for raw in hellos]
-    orders = {}
-    for hello, raw in zip(parsed, hellos):
-        orders.setdefault(tuple(hello.extension_types()), []).append(
-            server_name_of(hello))
 
-    print("extension order across %d connections: %d distinct"
-          % (len(parsed), len(orders)))
-    for index, (order, names) in enumerate(orders.items(), 1):
-        print("  order %d, seen on %d: %s" % (index, len(names),
-                                              ", ".join(n or "?" for n in names)))
-        print("    " + " ".join(str(t) for t in order))
-    if len(orders) == 1:
-        print("  -> stable. There is an order to imitate.")
-    else:
-        print("  -> not stable. The order is drawn per connection, so the set")
-        print("     is the fingerprint and the order is noise to reproduce")
-        print("     only in distribution.")
+    print("%-50s %5s %4s %4s %4s %5s" % ("sni", "bytes", "ext", "ciph",
+                                         "ech", "param"))
+    for hello, raw in zip(parsed, hellos):
+        print("%-50s %5d %4d %4d %4d %5d"
+              % ((server_name_of(hello) or "?")[:50], len(raw),
+                 len(hello.extensions), len(hello.cipher_suites),
+                 _ech_length(hello), len(_parameters(hello))))
+
+    clients: dict[frozenset, list] = {}
+    for hello in parsed:
+        clients.setdefault(frozenset(hello.extension_types()), []).append(hello)
 
     print()
-    print("transport parameters across the same connections:")
-    sets = {}
-    for hello in parsed:
-        try:
-            params = parse_transport_parameters(
-                hello.extension(EXT_QUIC_TRANSPORT_PARAMETERS).data)
-        except Exception:
-            continue
-        sets.setdefault(tuple(i for i, _ in params), []).append(
-            server_name_of(hello))
-    print("  %d distinct id sequences" % len(sets))
-    for order, names in sets.items():
-        print("    %s" % " ".join(parameter_name(i) for i in order))
-        print("      on %d: %s" % (len(names),
-                                   ", ".join(n or "?" for n in names)))
+    print("%d distinct extension set%s, so %d client%s in this capture"
+          % (len(clients), "" if len(clients) == 1 else "s",
+             len(clients), "" if len(clients) == 1 else "s"))
 
-    greased = [
-        [i for i, _ in parse_transport_parameters(
-            hello.extension(EXT_QUIC_TRANSPORT_PARAMETERS).data)
-         if is_grease_parameter(i)]
-        for hello in parsed
-        if any(e.type == EXT_QUIC_TRANSPORT_PARAMETERS for e in hello.extensions)
-    ]
-    flat = [i for row in greased for i in row]
-    if flat:
+    for index, (extension_set, group) in enumerate(
+            sorted(clients.items(), key=lambda item: -len(item[1])), 1):
+        names = [server_name_of(h) or "?" for h in group]
         print()
-        print("  grease-pattern ids seen: %s"
-              % ", ".join(hex(i) for i in sorted(set(flat))))
-        if len(set(flat)) == 1:
-            print("  -> one value every time, so it is a constant to copy,")
-            print("     not a value drawn per connection.")
-        else:
-            print("  -> it varies, so it is drawn per connection and has to")
-            print("     be generated rather than copied.")
+        print("client %d: %d extensions, %d connection%s"
+              % (index, len(extension_set), len(group),
+                 "" if len(group) == 1 else "s"))
+        print("  " + ", ".join(names))
+        print("  set: " + " ".join(str(t) for t in sorted(extension_set)))
+
+        orders = {}
+        for hello in group:
+            orders.setdefault(tuple(hello.extension_types()), []).append(
+                server_name_of(hello) or "?")
+        print("  %d distinct order%s across %d connection%s"
+              % (len(orders), "" if len(orders) == 1 else "s", len(group),
+                 "" if len(group) == 1 else "s"))
+        for order in orders:
+            print("    " + " ".join(str(t) for t in order))
+
+        if len(group) < 2:
+            print("  -> one connection says nothing about stability.")
+        elif len(orders) == 1:
+            print("  -> stable across %d. There is an order to imitate."
+                  % len(group))
+        elif len(orders) == len(group):
+            # Every connection different is a shuffle, not drift.
+            pinned = _pinned_tail([tuple(h.extension_types()) for h in group])
+            print("  -> a different order every time: it is shuffled per")
+            print("     connection, so the set is the fingerprint and the")
+            print("     order has to be drawn rather than copied.")
+            if pinned:
+                print("     pinned at the end every time: "
+                      + " ".join("%s (%d)" % (extension_name(t), t)
+                                 for t in pinned))
+
+        sequences = {}
+        for hello in group:
+            sequences.setdefault(
+                tuple(i for i, _ in _parameters(hello)), []).append(
+                    server_name_of(hello) or "?")
+        print("  %d distinct transport parameter sequence%s"
+              % (len(sequences), "" if len(sequences) == 1 else "s"))
+        for sequence, names in sequences.items():
+            print("    %d id%s on %s:" % (len(sequence),
+                                          "" if len(sequence) == 1 else "s",
+                                          ", ".join(names)))
+            print("      " + " ".join(parameter_name(i) for i in sequence))
+
+        greased = sorted({i for hello in group for i, _ in _parameters(hello)
+                          if is_grease_parameter(i)})
+        if greased:
+            print("  grease-pattern ids: "
+                  + ", ".join("0x%x" % i for i in greased))
+            if len(greased) == 1 and len(group) > 1:
+                print("  -> the same value every time, so a constant to copy.")
+            elif len(group) > 1:
+                print("  -> it varies, so it is drawn per connection and has")
+                print("     to be generated rather than copied.")
+
+
+def _pinned_tail(orders) -> list[int]:
+    """The longest suffix every order shares.
+
+    A shuffle that still ends the same way is two rules, not one, and the
+    pinned part is the half that can be asserted.
+    """
+    if not orders:
+        return []
+    shortest = min(len(order) for order in orders)
+    pinned: list[int] = []
+    for depth in range(1, shortest + 1):
+        candidates = {order[-depth] for order in orders}
+        if len(candidates) != 1:
+            break
+        pinned.insert(0, orders[0][-depth])
+    return pinned
 
 
 def main() -> int:

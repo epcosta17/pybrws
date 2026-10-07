@@ -1983,3 +1983,110 @@ table, which would rename any registered parameter whose id happens to
 satisfy it -- and the formula covers a third of the id space, so that is a
 coincidence waiting to happen, not a hypothetical. The table wins now, with a
 test that walks the registered ids looking for collisions.
+
+## 2026-10-07 — Firefox shuffles over QUIC, and a capture that was two browsers
+
+The first real capture: 231 UDP datagrams, 12 long-header connections, seven
+ClientHellos recovered. The tool worked on real traffic first time, which was
+more luck than it sounds -- it had only ever seen datagrams aioquic made.
+
+### The finding
+
+Six of the seven connections carry an identical set of fifteen extensions:
+
+      0 5 10 13 16 23 27 28 34 43 45 51 57 65037 65281
+
+and a **different order every time**. Six connections, six orders, no
+repeats. The last two never move: `quic_transport_parameters` then
+`encrypted_client_hello`, in that order, in all six.
+
+One of the six is `incoming.telemetry.mozilla.org`, which nothing but Firefox
+contacts, and the other five share its exact transport parameter sequence. So
+this is one client, and that client shuffles.
+
+Which is the opposite of its behaviour on TCP. `HANDOFF` has said for days
+that "Chrome shuffles its extension order, which Firefox does not" -- true,
+and true only of the TCP path. Firefox's QUIC is neqo, written in Rust, not
+NSS, and it behaves like Chrome here. Two stacks in one browser, two
+fingerprinting rules.
+
+It also means the fixture written an hour ago is one sample of a
+distribution, not a reference, and no test may assert its order. What can be
+asserted is the relationship between samples, which is what
+`tests/test_read_quic.py` now holds: same set every time, different order
+every time, exactly two pinned at the end.
+
+### The capture was two browsers
+
+The seventh connection, to `www.bing.com`, is not Firefox. Eleven extensions
+rather than fifteen, carrying 17613, and missing every NSS marker the others
+have -- `renegotiation_info`, `delegated_credentials`, `status_request`,
+`extended_master_secret`, `record_size_limit`. Its transport parameters are
+`google_connection_options`, `initial_rtt`, `google_version`. That is
+something Chromium-shaped, which on this machine means Edge doing whatever
+Edge does in the background.
+
+My first reading had all seven as one client, so the report said "7 distinct
+orders across 7 connections" and I nearly wrote down that the set varies too.
+It does not; the sets split cleanly into two clients. A capture of port 443
+holds whatever the machine was doing, which is obvious once stated and was
+not obvious while reading the output.
+
+`--all` now groups by extension set before saying anything about order, so a
+second client shows up as a second client instead of as noise in the first
+one's measurement. It also prints a per-connection line with the ECH
+extension length and the parameter count, because the thing that gave the
+mixing away was an outlier in a column I had not thought to print.
+
+### Three other differences from TCP
+
+Three cipher suites rather than fifteen: `0x1301 0x1303 0x1302`, the TLS 1.3
+ones only, because QUIC forbids TLS 1.2. That is the single cheapest QUIC
+tell there is -- a client offering the TLS 1.2 suites over QUIC has not
+thought about it.
+
+Three extensions gone: `ec_point_formats`, `session_ticket` and
+`signed_certificate_timestamp`. The first two follow from TLS 1.2 being
+unavailable. The third does not obviously, and is worth a note rather than an
+explanation.
+
+The transport parameters are not in ascending id order -- `reset_stream_at`
+(0x1d) and the GREASE id come before `max_datagram_frame_size` (0x20).
+aioquic sorts them; Firefox does not. And the GREASE id differs between
+connections, with an eight-byte one among them (`0x3ce1db6c726e52b5`), so it
+is drawn per connection rather than copied.
+
+### Two things I got wrong on the way
+
+The chooser. `--host cloudflare-quic.com` matched nothing, and the tool fell
+back to the largest hello and wrote the fixture anyway -- for
+`blog-cloudflare-com-assets.storage.googleapis.com`. A file labelled for one
+host holding a measurement of another is worse than no file, because the
+label is what a later reader trusts. It refuses now.
+
+The parameter table. I wrote it from memory and it was wrong where it
+mattered: 0x1d is `reset_stream_at`, not unknown, and `min_ack_delay` is
+0xff04de1b, not the 0xff02de1a the capture shows. The IANA registry settled
+it in one fetch. 0xff02de1a satisfies 31N+27 exactly, so it is real GREASE
+rather than an old draft codepoint -- but I had assumed the opposite, and the
+only reason I checked is that the arithmetic was cheap.
+
+### Still open
+
+`cloudflare-ech.com` has Firefox's exact extension set and Firefox's pinned
+tail, but **three** transport parameters where the other five send fourteen:
+`max_ack_delay`, `initial_source_connection_id`, `version_information` and
+nothing else. That is not a functioning set -- no flow control credit at all.
+
+Our parser is strict about trailing bytes and truncated extension headers, so
+a hello that parses cleanly with fifteen extensions almost certainly is not a
+reassembly accident. Which points at it being real, and the obvious
+suspicion is that `cloudflare-ech.com` publishes a real ECH config, so what
+was captured is the *outer* hello -- a decoy -- with the working parameters
+encrypted inside. If so it is the first real-ECH hello in this project and
+worth its own fixture, and it also means a QUIC profile has two cases, not
+one.
+
+Not concluded. It needs the bytes looked at, and the ECH extension length
+compared against the 282 of a greased one, which is exactly what the new
+per-connection line prints.

@@ -258,6 +258,75 @@ class TestTheChooser(CaptureCase):
         self.assertEqual(code, 0)
         self.assertTrue(target.exists())
 
+# The six Firefox orders recovered from the first real capture, 2026-10-07.
+# Same fifteen extensions every time, a different order every time, and the
+# last two never move. Kept here rather than as six fixtures because what is
+# asserted is the relationship between them, not their bytes.
+FIREFOX_QUIC_ORDERS = [
+    (28, 16, 23, 65281, 27, 13, 51, 10, 5, 43, 34, 45, 0, 57, 65037),
+    (34, 28, 51, 43, 45, 5, 13, 23, 16, 10, 0, 65281, 27, 57, 65037),
+    (43, 0, 13, 10, 51, 65281, 45, 28, 5, 34, 16, 23, 27, 57, 65037),
+    (45, 10, 16, 28, 23, 65281, 5, 0, 13, 27, 43, 34, 51, 57, 65037),
+    (27, 28, 34, 16, 43, 65281, 10, 23, 51, 13, 0, 45, 5, 57, 65037),
+    (0, 13, 45, 28, 65281, 43, 51, 5, 27, 10, 23, 34, 16, 57, 65037),
+]
+
+# What was talking to bing.com in the same capture, with Google transport
+# parameters and eleven extensions. Here to document the hazard: reading it
+# as the same client made Firefox's order look less structured than it is.
+EDGE_QUIC_ORDER = (45, 10, 0, 16, 27, 17613, 65037, 51, 43, 13, 57)
+
+NSS_MARKERS = (65281, 34, 5, 23, 28)
+
+
+class TestTheCaptureItself(unittest.TestCase):
+    """What the first real capture showed, asserted so it cannot drift."""
+
+    def test_every_connection_had_a_different_order(self):
+        self.assertEqual(len(set(FIREFOX_QUIC_ORDERS)),
+                         len(FIREFOX_QUIC_ORDERS))
+
+    def test_but_always_the_same_fifteen_extensions(self):
+        # Different order, identical set: a shuffle, not a different client
+        # and not drift between browser versions.
+        sets = {frozenset(order) for order in FIREFOX_QUIC_ORDERS}
+        self.assertEqual(len(sets), 1)
+        self.assertEqual(len(next(iter(sets))), 15)
+
+    def test_the_last_two_never_move(self):
+        self.assertEqual(read_quic._pinned_tail(FIREFOX_QUIC_ORDERS),
+                         [57, 65037])
+
+    def test_nothing_else_is_pinned(self):
+        # The claim is that exactly two are fixed. A third would mean the
+        # shuffle is narrower than everything-but-the-tail.
+        self.assertEqual(len(read_quic._pinned_tail(FIREFOX_QUIC_ORDERS)), 2)
+
+    def test_the_other_client_is_distinguishable(self):
+        firefox = frozenset(FIREFOX_QUIC_ORDERS[0])
+        other = frozenset(EDGE_QUIC_ORDER)
+        self.assertNotEqual(firefox, other)
+        for marker in NSS_MARKERS:
+            self.assertIn(marker, firefox)
+            self.assertNotIn(marker, other)
+
+
+class TestPinnedTail(unittest.TestCase):
+    def test_no_common_suffix(self):
+        self.assertEqual(read_quic._pinned_tail([(1, 2), (3, 4)]), [])
+
+    def test_a_whole_order_in_common(self):
+        self.assertEqual(read_quic._pinned_tail([(1, 2), (1, 2)]), [1, 2])
+
+    def test_it_stops_at_the_first_difference(self):
+        self.assertEqual(read_quic._pinned_tail([(9, 1, 2), (8, 1, 2)]), [1, 2])
+
+    def test_orders_of_different_lengths(self):
+        self.assertEqual(read_quic._pinned_tail([(7, 1, 2), (1, 2)]), [1, 2])
+
+    def test_nothing_at_all(self):
+        self.assertEqual(read_quic._pinned_tail([]), [])
+
 
 if __name__ == "__main__":
     unittest.main()
