@@ -97,6 +97,34 @@ RELOADING_PAGE = (
 )
 
 
+FORM_PAGE = (
+    b"<!doctype html><title>pybrws</title>"
+    b"<form id=f method=post action=/submit "
+    b"enctype=application/x-www-form-urlencoded>"
+    b"<input name=field value=value></form>"
+    b"<script>document.getElementById('f').submit()</script>"
+    b"<p>submitting a form, to capture the POST a navigation sends"
+)
+
+FETCH_PAGE = (
+    b"<!doctype html><title>pybrws</title>"
+    b"<script>fetch('/submit',{method:'POST',"
+    b"headers:{'Content-Type':'application/json'},"
+    b"body:JSON.stringify({field:'value'})})</script>"
+    b"<p>calling fetch, to capture the POST an XHR sends"
+)
+
+
+def page_response(page: bytes) -> bytes:
+    lines = [
+        "HTTP/1.1 200 OK",
+        "Content-Type: text/html; charset=utf-8",
+        "Content-Length: " + str(len(page)),
+        "Connection: close",
+    ]
+    return (CRLF.join(lines) + CRLF + CRLF).encode("latin-1") + page
+
+
 def not_found() -> bytes:
     lines = [
         "HTTP/1.1 404 Not Found",
@@ -121,7 +149,8 @@ def cookie_response() -> bytes:
 
 def capture(host: str, port: int, hostname: str, alpn: str, wait: float,
             quiet_after: float, set_cookie: bool = False,
-            want_document: bool = True) -> tuple[bytes, str | None]:
+            want_document: bool = True,
+            want_post: str | None = None) -> tuple[bytes, str | None]:
     with tempfile.TemporaryDirectory() as tmp:
         cert_path, key_path = self_signed(hostname, Path(tmp))
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -194,7 +223,23 @@ def capture(host: str, port: int, hostname: str, alpn: str, wait: float,
                         or line.lower().startswith(b"sec-fetch-dest: font")
                         for line in lines
                     )
-                    if want_document and not is_document:
+                    is_post = lines[0].split(b" ")[0].upper() == b"POST"
+                    if want_post and not is_post:
+                        target = lines[0].split(b" ")[1].decode("latin-1", "replace")
+                        print("  attempt %d from port %d: %s %s, answering with "
+                              "the page that triggers the POST"
+                              % (attempt, peer[1],
+                                 lines[0].split(b" ")[0].decode(), target))
+                        try:
+                            page = FORM_PAGE if want_post == "form" else FETCH_PAGE
+                            tls.sendall(page_response(page))
+                            tls.settimeout(3.0)
+                            while tls.recv(4096):
+                                pass
+                        except OSError:
+                            pass
+                        continue
+                    if want_document and not want_post and not is_document:
                         target = lines[0].split(b" ")[1].decode("latin-1", "replace")
                         print("  attempt %d from port %d: subresource %s, "
                               "answering and still waiting"
@@ -241,6 +286,10 @@ def main() -> int:
     parser.add_argument("--hostname", default="pybrws.127.0.0.1.nip.io",
                         help="name in the certificate, must match the URL")
     parser.add_argument("--alpn", default="http/1.1", choices=["http/1.1", "h2"])
+    parser.add_argument("--post", choices=["form", "fetch"], dest="want_post",
+                        help="answer with a page that posts, then capture that "
+                             "POST. A form sends a navigation, fetch sends an "
+                             "XHR, and the two carry different headers")
     parser.add_argument("--any-request", action="store_true",
                         help="capture subresources too, instead of waiting "
                              "for a document request")
@@ -253,7 +302,7 @@ def main() -> int:
 
     data, negotiated = capture(args.host, args.port, args.hostname, args.alpn,
                                args.wait, args.quiet_after, args.set_cookie,
-                               not args.any_request)
+                               not args.any_request, args.want_post)
 
     Path(args.out).write_bytes(data)
     print("negotiated ALPN: %r" % negotiated)

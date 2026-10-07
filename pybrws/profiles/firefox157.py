@@ -172,6 +172,19 @@ H1_HEADERS = [
 # which HPACK makes worthwhile.
 
 H2_COOKIE_BEFORE = "upgrade-insecure-requests"
+
+
+# --- Request bodies -------------------------------------------------------
+# UNMEASURED, and currently wrong rather than merely absent. A POST sent by
+# this client carries the navigation header set with Content-Type bolted on,
+# which produces a combination no browser emits: a navigation never posts
+# JSON, an XHR never sends Sec-Fetch-User, and neither omits Origin.
+#
+# Two captures close it, and they are different header sets:
+#   tools/catch_request.py fixtures/reference-firefox-157-post-form.txt --post form
+#   tools/catch_request.py fixtures/reference-firefox-157-post-fetch.txt --post fetch
+#
+# The TLS and HTTP/2 layers are unaffected: neither changes with the method.
 H1_COOKIE_BEFORE = "Upgrade-Insecure-Requests"
 
 

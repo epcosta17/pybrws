@@ -1152,3 +1152,40 @@ does. A 200 KB body now posts in half a second and 500 KB works; 1 MB returns
 header set Firefox sends with a POST, which differs from a navigation in
 `Content-Type`, `Origin` and the `Sec-Fetch-*` values. Both need a capture
 that `tools/catch_request.py` can take.
+
+---
+
+## 2026-10-07 — The POST is only half impersonating
+
+Asked whether a POST impersonates Firefox too. Measured what this client
+actually sends:
+
+    Content-Type: application/json
+    Sec-Fetch-Dest: document
+    Sec-Fetch-Mode: navigate
+    Sec-Fetch-User: ?1
+    Priority: u=0, i
+    (no Origin)
+
+The TLS handshake and the HTTP/2 connection are unaffected by the method, so
+those two layers are still Firefox exactly. The header set is not. It is the
+navigation set with `Content-Type` and `Content-Length` appended, and that
+combination is one no browser produces: a navigation POST comes from a form
+and carries form encoding, never JSON; a JSON POST comes from `fetch` and
+sends `Sec-Fetch-Dest: empty`, `Sec-Fetch-Mode: cors`, an `Origin` and a
+`Referer`, and never `Sec-Fetch-User`, which means the user activated the
+request.
+
+The missing `Origin` is the loudest of them. A browser sends it on every
+non-GET request.
+
+So the project reproduced, in its own code, the cross-layer inconsistency it
+exists to study: two layers right and the third a combination that cannot
+occur. Writing the earlier entry as "unmeasured" understated it; it is wrong,
+not absent.
+
+`tools/catch_request.py --post form` and `--post fetch` now answer the first
+request with a page that submits a form or calls `fetch`, then capture the
+POST that follows. Two captures, because the two are different header sets.
+Smoke tested end to end against a scripted client; the browser captures are
+still to take.
