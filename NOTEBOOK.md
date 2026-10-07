@@ -1583,10 +1583,19 @@ The HTTP/2 layer is rebuilt too: stream id 1 rather than 3, no PRIORITY flag
 on the HEADERS frame, INITIAL_WINDOW_SIZE 1048576 against Firefox's 131072,
 WINDOW_UPDATE 983041 against 12517377.
 
-So something terminates both layers and re-originates them: an interception
-proxy, most likely antivirus HTTPS scanning or something on the network. It
-fits the earlier anomaly, where the TCP signature briefly read Linux from a
-different exit address.
+So something terminates both layers and re-originates them. The cause turned
+out to be NordVPN's Threat Protection, which installs a local proxy and a
+root certificate to inspect HTTPS and runs **while the VPN is not connected
+to anything**. The app being open was enough. The earlier anomaly, where the
+TCP signature briefly read Linux from a different exit address, fits the VPN
+itself connecting for a moment.
+
+Worth sitting with. This is ordinary consumer software, sold as a security
+feature, and its effect is identical to the free proxy caught earlier in the
+project: a third party replaces the TLS and HTTP fingerprints of every
+request and nothing anywhere reports a problem. Any machine running one of
+these is a bad place to capture a reference from, and most people have no
+idea theirs does it.
 
 **What matters for the fixtures.** The stored references were captured
 before this appeared and carry the five NSS extensions, so they are the real
