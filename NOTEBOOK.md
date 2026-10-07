@@ -1070,3 +1070,47 @@ served homepage as a challenge page. The marker list includes "enable
 javascript", which appears somewhere in almost any 493 KB page. Content
 heuristics need to be anchored to the small refusal pages they are meant to
 catch, not matched anywhere in a document.
+
+---
+
+## 2026-10-06 — A cookie earned here cannot be spent elsewhere
+
+The session experiment, replicated over four interleaved rounds against
+`etsy.com/`, reached after `/c/jewelry`. No variance in any arm:
+
+| Arm | |
+|---|---|
+| pybrws, cold | 0/4 served |
+| pybrws, cookies only, fresh connection | 4/4 |
+| pybrws, warm, reused connection | 4/4 |
+| httpx, cold | 0/4 |
+| **httpx, handed the cookies pybrws earned** | **0/4** |
+
+Three things, in order of how much they change.
+
+**Cookies unlock the refused endpoint.** Eight of them arrive from the
+category page, and the homepage that refuses a cold request serves a request
+carrying them.
+
+**It is the cookies, not the connection.** The arm that drops the pool
+between the two requests and opens a fresh one does exactly as well as the
+arm that reuses it, so connection reuse contributes nothing here. That arm
+exists only because a session changes both at once and a result that mixed
+them would have been unreadable.
+
+**The cookies are not transferable.** The same values, sent by a client whose
+fingerprint differs, are refused every time. The token is bound to whoever
+earned it.
+
+That last one rules out the cheapest architecture in this field: a browser
+collects a clearance cookie and anything at all spends it. It does not work
+against this protection. What remains does work, but the client spending the
+token has to carry the fingerprint too, which is the thing this project
+builds.
+
+g2 was in the same run and refuses all three pybrws arms, consistent with
+every other measurement of it.
+
+Also fixed while here: `verdict()` lived in the sweep cell, so section 6
+could not run without section 3. Helpers now live in the setup cell and every
+section stands alone, which matters for a notebook presented live.
