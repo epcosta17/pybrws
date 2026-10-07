@@ -125,10 +125,21 @@ the suite from the binder length rather than naming it.
    half: Firefox shuffles over QUIC, because that is neqo and not NSS. So
    shuffling is a property of a *stack*, not of a browser, and a Chrome
    profile should not assume one rule covers both of its protocols either.
-2. **TLS 1.2 is advertised and not implemented**, because Firefox advertises
+2. **CertificateRequest is not handled.** A server that asks for a client
+   certificate gets `unexpected handshake message 0x0d` and the connection
+   dies; `ulta.com` is one. A browser with no matching certificate sends an
+   empty Certificate message and continues, which is all this needs. Found
+   by accident during a WAF sweep, which is to say it had been silently
+   making hosts unreachable.
+
+   Related and unknown: `iberia.com`, `swisscom.ch` and `aena.es` fail
+   certificate chain validation. Could be odd chains, could be how
+   intermediates are handled here. Not investigated.
+
+3. **TLS 1.2 is advertised and not implemented**, because Firefox advertises
    it and removing it would change the fingerprint. httpbin.org declines TLS
    1.3 and so is unreachable.
-3. **HTTP/3.** Reading and writing both work. The reading side: `pybrws/quic.py`
+4. **HTTP/3.** Reading and writing both work. The reading side: `pybrws/quic.py`
    recovers a ClientHello from Initial packets, which need no secret --
    RFC 9001 publishes the salt and the header carries the connection ID --
    and `tools/read_quic.py` gets them out of a pcap or pcapng.

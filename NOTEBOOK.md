@@ -2350,3 +2350,80 @@ What the difference comes from is not cleverness. They configure a fixed
 order because a fixed order is what their architecture exposes; we draw one
 because six captures said Firefox draws one. The measurement is the whole
 advantage.
+
+## 2026-10-07 — A WAF being present is not a WAF being on
+
+Ernesto asked whether anything had been tested against Imperva. Nothing had,
+so `tools/detect_waf.py` went looking -- detecting the vendor from the
+response rather than guessing which sites use which, since guessing is how a
+results table ends up measuring something other than what it says. Imperva
+leaves `X-Iinfo`, `X-CDN: Incapsula` or `visid_incap_` cookies; every other
+vendor leaves something too.
+
+Twenty-five large retail and listing sites: no Imperva at all. CloudFront,
+DataDome, Akamai, Cloudflare, Fastly, PerimeterX. A second and third list
+found five: `imperva.com` itself, `endesa.com`, `lineadirecta.com`,
+`zurich.es`, `generali.es`.
+
+Then the A/B, three rounds, interleaved:
+
+      endesa.com        3/3 served    httpx 3/3 served    no difference
+      generali.es       3/3 served    httpx 3/3 served    no difference
+      imperva.com       3/3 served    httpx 3/3 served    no difference
+      lineadirecta.com  3/3 served    httpx 3/3 served    no difference
+      zurich.es         3/3 served    httpx 3/3 served    no difference
+
+I was about to write that down as five more wins. Ernesto pointed out why it
+is not: a vendor sitting in front of a site says nothing about whether bot
+protection is switched on, and a page on a random site can be configured
+loosely or not at all. The table shows exactly that -- httpx passed all five
+too. **The measurement is uninformative, and reporting it as a result would
+have been reporting the absence of a gate as the defeat of one.**
+
+The right target for a question like that is a page that demonstrably
+challenges, which is the other thing he supplied.
+
+### Where the project ends, measured
+
+`scrapingcourse.com/cloudflare-challenge`, both arms:
+
+      pybrws  403, 5771 bytes, challenge markers, passed=False
+      httpx   403, 5601 bytes,                    passed=False
+
+Cloudflare says what it is in its own headers: `cf-mitigated: challenge`,
+`/cdn-cgi/challenge-platform`, `managed`, and the tokens `cf_chl_tk`,
+`cf_chl_opt`, `cf_chl_f_tk`, `cf_chl_rt_tk`. A Managed Challenge, which
+challenges everything that arrives, a real Firefox included.
+
+So this is not a fingerprint failure. A browser gets through by fetching the
+challenge script, running it, and posting back what it computes -- the script
+reading runtime signals rather than network ones. No ClientHello is good
+enough to skip that, and the fingerprint's job is one step earlier: deciding
+whether a challenge is served at all. The sites in the results table serve us
+and block httpx *without* challenging either, which is the layer this project
+works at.
+
+Worth being plain that this is the boundary and always was. It is the gap that
+was named at the start of the project -- driving real browsers over CDP, and
+deobfuscating the challenge script to see what it collects -- except that it
+is now measured instead of assumed.
+
+### Two gaps the sweep found by accident
+
+`ulta.com` fails with `unexpected handshake message 0x0d`. That is
+CertificateRequest: the server asks for a client certificate and the
+handshake has no case for it. A browser with no matching certificate answers
+with an empty Certificate message and carries on, and we do not, so the host
+is simply unreachable. Cheap to fix and now in HANDOFF.
+
+`iberia.com`, `swisscom.ch` and `aena.es` fail certificate chain validation.
+Could be genuinely odd chains, could be a gap in how intermediates are
+handled. Unknown, and not investigated.
+
+### And a check that passed
+
+He also asked whether the baseline is httpx with HTTP/2 rather than
+HTTP/1.1 -- a fair thing to distrust, since an HTTP/1.1 baseline would make
+every result in the table look better than it is. `ab_test.py` has
+`http2=True` and a live check confirms it negotiates `HTTP/2`. Verified
+rather than taken from reading the flag.

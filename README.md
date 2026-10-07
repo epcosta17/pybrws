@@ -7,23 +7,31 @@ to a real browser's.
 
 `tools/ab_test.py`, four interleaved rounds per target, both clients
 following redirects, with crunchbase.com as a negative control. `httpx` is a
-mature HTTP/2 client over the stdlib TLS stack; `pybrws` differs from it only
-in protocol fingerprint.
+mature HTTP/2 client over the stdlib TLS stack, running with `http2=True` and
+verified to negotiate it; `pybrws` differs from it only in protocol
+fingerprint.
 
-| Target | Protection | httpx | pybrws |
+The protection column is **detected, not assumed** -- `tools/detect_waf.py`
+reads each vendor's own markers out of the response, which corrected two
+rows here. It says which vendor is *present*, which is not the same as which
+one is enforcing: a vendor can sit in front of a site with bot protection off
+or in monitor mode, so presence explains nothing on its own. What the two
+result columns do is measure enforcement directly.
+
+| Target | Protection (detected) | httpx | pybrws |
 |---|---|---|---|
 | www.zillow.com | CloudFront | 0/3 served | **3/3 served** |
-| www.etsy.com/c/jewelry | DataDome | 0/3 | **3/3** |
-| www.yelp.com | DataDome | 0/3 | **3/3** |
+| www.etsy.com/c/jewelry | DataDome, Fastly | 0/3 | **3/3** |
+| www.yelp.com | DataDome, Fastly | 0/3 | **3/3** |
 | www.homedepot.com | Akamai | 0/3 | **3/3** |
 | www.macys.com | Akamai | 0/3 | **3/3** |
 | www.sephora.com | Akamai | 0/3 | **3/3** |
 | www.stubhub.com | CloudFront | 0/3 | **3/3** |
 | www.quora.com | Cloudflare | 0/3 | **3/3** |
-| www.ticketmaster.com | - | 0/4 | **4/4** |
+| www.ticketmaster.com | Fastly | 0/4 | **4/4** |
 | www.indeed.com | Cloudflare | 0/4 | **4/4** |
-| www.etsy.com/ | DataDome | 0/4 | 0/4 |
-| www.g2.com | Cloudflare | 0/4 | 0/4 |
+| www.etsy.com/ | DataDome, Fastly | 0/4 | 0/4 |
+| www.g2.com | Cloudflare **and DataDome** | 0/4 | 0/4 |
 | example.com | - | served | served (control) |
 
 Ten of twelve discriminating targets stop blocking, across four protection
@@ -31,6 +39,12 @@ vendors, with no flapping in any cell. What still blocks is specific rather
 than general: on etsy the homepage and the search parameter `?q=` are refused
 while an ordinary category page is served, so the strictest rules sit on the
 endpoints worth scraping.
+
+Both corrections came from measuring instead of remembering. ticketmaster was
+listed as unprotected and is behind Fastly. g2 was listed as Cloudflare and
+carries DataDome as well -- which matters, because g2 is one of the two
+targets that still blocks us, and two vendors in series is a better account
+of that than one.
 
 g2 is worth its own line. It serves a request carrying any query string, and
 so does httpx, so the query opens it for everybody and this client adds
@@ -301,6 +315,17 @@ the connection ID its own header carries in the clear. So the ClientHello is
 as readable there as it is on TCP, by anyone, with no server and no
 certificate for a browser to object to -- and every extension-order question
 this project answers for TCP applies unchanged.
+
+Find out what a host is actually behind, from its own answer:
+
+    python tools/detect_waf.py
+    python tools/detect_waf.py --urls targets.txt --vendor imperva
+
+Guessing which site uses which vendor is how a results table ends up
+measuring something other than what it says, and it already corrected two
+rows of the one above. It also found two bugs by accident: a host that asks
+for a client certificate kills the handshake, and three hosts fail chain
+validation.
 
 Compare the live fingerprint against the reference capture:
 
