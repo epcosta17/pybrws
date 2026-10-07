@@ -1025,3 +1025,48 @@ block either. None of those are evidence and none were kept.
 
 The sweep in the demo now carries a protection column, so the spread across
 vendors is visible rather than asserted.
+
+---
+
+## 2026-10-06 — Protection is per endpoint, not per site
+
+Asked why the homepages fail. Four of the passing targets are homepages, so
+they do not: zillow, yelp, homedepot and quora all serve `/`. Only etsy and
+g2 refuse theirs, and for unrelated reasons.
+
+**etsy refuses exactly two endpoints**, two rounds each:
+
+| Path | |
+|---|---|
+| `/` | blocked |
+| `/search?q=ring` | blocked |
+| `/?x=` | served |
+| `/c/jewelry` | served |
+| `/c/jewelry?x=` | served |
+| `/market/handmade_gifts` | served |
+| `/featured/gifts-for-her` | served |
+
+The homepage and search, which are the two most worth scraping and the two
+most expensive to serve. The rest of the catalogue is open. This also
+replaces the reading from two entries ago that the rule was "the bare path":
+`/search?q=ring` has a path and is refused, `/market/handmade_gifts` has one
+and is not.
+
+**g2 is the opposite shape.** It refuses `/`, `/categories/crm`,
+`/products/slack/reviews`, with or without a query, and serves only `/?x=`,
+which it also serves to httpx. So g2 blocks this client nearly everywhere and
+the one gap is not earned. Why that one URL slips through is not observable
+from outside and is not worth guessing at.
+
+**The operational point:** choosing the URL matters as much as the
+fingerprint. `etsy.com/` returns 1.7 KB of refusal and `etsy.com/c/jewelry`
+returns 985 KB of catalogue, same client, same second, same domain. Testing
+only the homepage would have concluded that etsy blocks us while most of the
+site was open. That is why `tools/ab_test.py` takes full URLs rather than
+hosts.
+
+**A measurement bug worth recording:** the throwaway probe flagged g2's
+served homepage as a challenge page. The marker list includes "enable
+javascript", which appears somewhere in almost any 493 KB page. Content
+heuristics need to be anchored to the small refusal pages they are meant to
+catch, not matched anywhere in a document.
