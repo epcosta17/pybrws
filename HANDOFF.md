@@ -63,11 +63,27 @@ enough HTTP/2 to decode a browser's HEADERS frame. Nothing in the profile is
 inferred any more.
 
 Unmeasured, and marked: the pattern of later WINDOW_UPDATE frames, which
-Firefox batches and this client does not; where a browser puts the cookie
-extension in the ClientHello after a HelloRetryRequest; and **the resumed
-ClientHello**, which carries a pre_shared_key and therefore a second JA4.
-That one matters: resuming is now the default for a Session, so most
-requests after the first send a fingerprint no capture covers.
+Firefox batches and this client does not; and where a browser puts the cookie
+extension in the ClientHello after a HelloRetryRequest.
+
+**The resumed ClientHello** is half measured. Our own side is verified: it
+adds pre_shared_key and nothing else, keeps the relative order of the other
+seventeen extensions, puts the binder last as RFC 8446 4.2.11 requires, and a
+real server accepts it -- `resumed=True` against tls.peet.ws on rounds two and
+three, which a wrong binder would answer with decrypt_error rather than 200.
+It is a genuinely distinct identity: JA4 goes t13d1517h2 -> t13d1518h2, and
+the JA3, peetprint and JA4 hashes all change with it.
+
+What is still missing is the *browser's* resumed hello to compare against.
+`tools/catch_resumed.py` captures it; it needs a browser, which is the only
+reason it has not been done. It runs TLS over memory BIOs so the handshake can
+complete -- a ticket has to be issued for the browser to come back with one --
+while the raw ClientHello bytes are still recorded, which a terminated
+handshake would otherwise consume. It is tested by driving it with pybrws
+itself, and it reports the fresh and resumed hellos side by side:
+
+    python tools/catch_resumed.py --fresh fixtures/firefox-157-fresh.hex \
+                                  --resumed fixtures/firefox-157-resumed.hex
 
 ## Known gaps, roughly by value
 

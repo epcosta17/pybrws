@@ -1700,3 +1700,82 @@ releases the stream, which the `finally` handles but nothing proved.
 
 Disabling the truncation check fails 5 of the 16. Worth running: a guard
 whose tests pass with it removed is not a guard.
+
+## 2026-10-07 — The second fingerprint nobody had looked at
+
+`Session` resumes by default. That was recorded as a feature and it is also a
+hole: a resumed ClientHello carries `pre_shared_key`, so every request after
+the first was sending a fingerprint that no capture and no test covered. The
+feature shipped; the measurement did not.
+
+How much does resuming change? Two connections from one Session to
+`tls.peet.ws`, the second forced onto a new socket with `_discard` so the
+ticket is actually used:
+
+| | fresh | resumed |
+|---|---|---|
+| ja4 | t13d1517h2_8daaf6152771_3cbfd9057e0d | t13d1518h2_8daaf6152771_5dff20295fdc |
+| ja3_hash | 9d42e90b0225e779f03141ddcd699df2 | d592459dbfefa4b91d9cba9f926808cf |
+| peetprint_hash | a4bbbc7e3adf3db97d276fd0adb1efc4 | 56519330ce41b30eb57ebdf5188a32da |
+
+Every hash changes. `1517` to `1518` is the extension count going from 17 to
+18, and `0029` appears in the sorted list — 0x29 is 41, `pre_shared_key`. So
+this is not a variant of the fingerprint, it is a second one. Anything that
+has a rule for `t13d1517h2` has a separate rule, or no rule, for
+`t13d1518h2`.
+
+### Our side checks out
+
+Three things were worth proving before worrying about the browser.
+
+The hello is well formed: `pre_shared_key` is added, nothing is dropped, the
+other seventeen extensions keep their relative order, and the binder sits
+last, which RFC 8446 4.2.11 requires rather than suggests.
+
+The binder arithmetic is right, which is the part that could silently be
+wrong. Sending a PSK is not the same as a server taking it, and a bad binder
+is answered with `decrypt_error`, not with a fallback:
+
+      round 1: resumed=False status=200
+      round 2: resumed=True  status=200
+      round 3: resumed=True  status=200
+
+A real server behind Cloudflare accepted it twice. The ClientHello signing
+itself works.
+
+### Capturing the browser's version
+
+What is left is the comparison, and that needs Firefox's resumed hello.
+Neither existing tool can get it, for opposite reasons. `catch_hello.py`
+dumps raw bytes and lets the handshake die, so no ticket is ever issued and
+the browser has nothing to resume with. `catch_request.py` completes the
+handshake through `ssl.wrap_socket`, so a ticket goes out, but by then the
+raw ClientHello has been consumed inside OpenSSL.
+
+Both halves are needed at once, so `tools/catch_resumed.py` owns the byte
+stream: TLS runs over a pair of `ssl.MemoryBIO`s, every inbound byte is
+recorded on its way into OpenSSL, and the first TLS record is sliced off by
+its own length prefix. The handshake still completes, the ticket still goes
+out, and the hello survives. The reply says `Connection: close` and the page
+reloads itself, so the browser opens a fresh socket and resumes on it.
+
+Two bugs on the way, both already in this notebook under other dates.
+
+The first: I wrote the reply immediately after the handshake and closed, so
+the server closed a socket that still held the client's unread request.
+Windows answers that with an RST, which discards whatever was queued to go
+out — the reply and the ticket with it. `catch_request.py` has a comment
+about exactly this, which I had read and not applied. Reading the request
+before answering fixes it.
+
+The second was `extension.kind`, which does not exist; the field is `type`.
+Caught instantly because the tool was driven by pybrws before any browser was
+involved, which is the only reason this entry is not a list of guesses about
+why Firefox would not come back.
+
+Driving it with our own client is also the test: fresh at 1,887 bytes with 17
+extensions, resumed at 2,174 with 18, `added: pre_shared_key (41)`,
+`dropped: nothing`, shared order preserved. The same thing peet.ws said,
+measured locally.
+
+The browser capture itself is the one step that needs a person to click.
