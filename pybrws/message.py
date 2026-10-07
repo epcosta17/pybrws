@@ -23,8 +23,19 @@ def decompress(body: bytes, encoding: str) -> bytes:
 
         return brotli.decompress(body)
     if encoding == "zstd":
-        from compression import zstd
-
+        # Standard library from Python 3.14; the package covers older ones.
+        try:
+            from compression import zstd
+        except ImportError:
+            try:
+                import zstandard
+            except ImportError:
+                raise ContentEncodingError(
+                    "zstd response but no decoder: needs Python 3.14 or the "
+                    "zstandard package. The profile advertises zstd because "
+                    "Firefox does, so servers will use it."
+                )
+            return zstandard.ZstdDecompressor().decompress(body)
         return zstd.decompress(body)
     raise ContentEncodingError("unsupported content-encoding " + encoding)
 

@@ -49,6 +49,41 @@ it was worse than an ordinary domestic line.
 So this project buys one of two things a request needs, and `tools/isolate.py`
 exists to keep that honest.
 
+## Running it elsewhere
+
+Python 3.14, or add the `zstd` extra: the profile advertises zstd because
+Firefox does, so servers send it, and the decoder only reached the standard
+library in 3.14.
+
+    python -m venv .venv
+    .venv/bin/pip install -e ".[client,dev]"     # .venv\Scripts\pip on Windows
+    .venv/bin/python -m unittest discover -s tests -t . -v
+
+Two things are tied to the machine the references were captured on, which was
+Windows:
+
+- **`tools/verify.py` checks `tcpip.p0f`** against a Windows Firefox capture.
+  On any other operating system that one check fails while the other
+  seventeen pass. The TCP stack is below the socket, so it is not something
+  this client controls.
+- **The profile says Windows.** Running it on a Mac leaves the TCP/IP layer
+  saying macOS while every layer above says Windows, which is the
+  cross-layer inconsistency this project is about. Either know it is there,
+  or capture a macOS reference: `tools/catch_hello.py` and
+  `tools/catch_request.py` both run anywhere, and the fixtures and profile
+  are the only things that change.
+
+The captured requests are stored with the CRLF that HTTP requires, pinned by
+`.gitattributes`, so the byte-identity tests hold on every platform.
+
+## Demo
+
+`demo.ipynb` fetches one URL twice, with a plain client and with this one,
+renders both results, and shows what the server saw. Outputs are stripped;
+run it to fill them in.
+
+    .venv/bin/jupyter lab demo.ipynb
+
 ## Clean-room rule
 
 The problem is reconstructed without reading existing solutions.
