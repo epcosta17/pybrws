@@ -95,6 +95,8 @@ run it to fill them in.
 
     .venv/bin/jupyter lab demo.ipynb
 
+Picking this up after a break, or on another machine: read `HANDOFF.md`.
+
 ## Clean-room rule
 
 The problem is reconstructed without reading existing solutions.
