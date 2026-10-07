@@ -156,6 +156,11 @@ and the source of NSS, Firefox and OpenSSL.
 | 7 | Outbound proxies, HTTP CONNECT and SOCKS5 | done |
 | 8 | Sessions: cookie jar and connection reuse | done |
 | 9 | Methods, request bodies, header merging | done |
+| 10 | Session resumption, PSK binders | done |
+| 11 | Streaming responses, incremental decoding | done |
+| 12 | Reading a ClientHello out of QUIC Initial packets | done |
+| 13 | Firefox's ClientHello over QUIC, via aioquic | done |
+| 14 | An HTTP/3 request path worth the name | not started |
 
 Phases 0 through 2 are standard library only.
 
@@ -244,10 +249,51 @@ the CA it prints on startup, or skip verification. A plain CONNECT tunnel
 would leave the caller performing its own handshake, which is the fingerprint
 this project replaces.
 
+Speak HTTP/3 with Firefox's ClientHello:
+
+    import asyncio
+    from aioquic.asyncio import connect
+    from pybrws import quic_impersonate
+
+    quic_impersonate.install()
+
+    async def main():
+        host = "cloudflare-quic.com"
+        config = quic_impersonate.configuration(host)
+        async with connect(host, 443, configuration=config) as connection:
+            await connection.wait_connected()
+
+    asyncio.run(main())
+
+The hello matches the capture at 1931 bytes, and seven hosts out of seven
+connect, six of them selecting X25519MLKEM768. aioquic provides the transport
+and knows nothing about impersonation; five of its private functions are
+patched to carry the profile, each named in `pybrws/quic_impersonate.py` and
+each asserted by a test, so an upgrade breaks a test rather than a
+connection. The handshake is done and the request path is not: there is no
+`client.get` over QUIC yet, and no measurement of what Firefox puts in an
+HTTP/3 request, which is QPACK rather than HPACK and a separate fingerprint.
+
+Two of those patches exist only because the impersonation works. Asking for
+`compress_certificate` because Firefox does means servers reply with an RFC
+8879 compressed certificate, which aioquic names and does not handle; and
+Firefox's connection ids are asymmetric, three bytes out and at least eight
+in, where aioquic has one setting for both.
+
 Recover a browser's ClientHello from a QUIC capture:
 
     # capture UDP 443 while the browser visits a site that speaks HTTP/3
     python tools/read_quic.py capture.pcapng --host www.google.com
+    python tools/read_quic.py capture.pcapng --all
+
+`--all` groups the connections by extension set before saying anything about
+order, because a capture of port 443 holds whatever the machine was doing.
+That matters here: over QUIC Firefox **shuffles its extension order per
+connection**, which is the opposite of its behaviour on TCP -- its QUIC stack
+is neqo, in Rust, not NSS. Six captured connections gave six distinct orders
+over identical sets, with only `quic_transport_parameters` and
+`encrypted_client_hello` pinned at the end. Reading a second browser's
+connections as the same client is what made that look like noise at first.
 
 QUIC carries TLS 1.3 inside rather than running over it, and an Initial
 packet is protected with keys derived from a salt published in RFC 9001 and
