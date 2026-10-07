@@ -962,3 +962,33 @@ the other direction too: the subresource had both, this has neither.
 
 Three header sets are now measured rather than assumed: navigation,
 navigation with cookies, and an image subresource.
+
+---
+
+## 2026-10-06 — The same trick, two sites, opposite meanings
+
+Reported: g2.com serves a request with a random query string, the way etsy
+does. The reading offered was that this is another target the client beats.
+
+Five interleaved rounds, the same parameter on both sites:
+
+| | pybrws | httpx |
+|---|---|---|
+| `g2.com/?x=` | 5/5 served | **5/5 served** |
+| `etsy.com/?x=` | 5/5 served | 0/5 served |
+
+Zero variance in any arm. The observation was right and the reading was not.
+On g2 the query string opens the door to everybody, this client included but
+not because of it. On etsy the same parameter is not enough on its own, and
+the fingerprint is what decides.
+
+Without the httpx column both rows look identical, and adding g2 to the demo
+would have shown a green row earned by nothing. The baseline arm is the only
+thing that separates them, which is the third time in this session it has
+changed a conclusion.
+
+Also measured: `g2.com/products/slack/reviews` refuses both clients, so the
+rule is not simply "a path other than the homepage".
+
+Added to the demo as its own section rather than dropped, since the pair is a
+better argument for running a control than any explanation of one.
