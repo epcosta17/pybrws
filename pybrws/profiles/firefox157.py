@@ -39,19 +39,29 @@ ECH_OUTER = 0x00
 ECH_KDF_ID = 0x0001
 ECH_AEAD_IDS = (0x0001, 0x0003)
 ECH_ENC_SIZE = 32
+# The greased ECH payload does not depend on the server name, which is worth
+# stating because it easily could have. The payload stands in for an encrypted
+# inner ClientHello, and that inner hello carries the real name, so a longer
+# name could have lengthened it -- and this constant was measured at one
+# 23-character name while every host actually fetched has a different one.
+# Measured against a 66-character name: the hello grew by exactly the 43 bytes
+# the name added and the ECH payload stayed at 240. So the constant holds for
+# any host.
 ECH_PAYLOAD_SIZE = 240
 
-# Resuming lengthens the greased ECH payload. The payload stands in for an
-# encrypted inner ClientHello, and that inner hello now carries the
-# pre_shared_key extension, so it grows by about the size of one.
+# Resuming does lengthen it. The inner ClientHello now carries a
+# pre_shared_key of its own, so the payload grows by about the size of one:
 #
-# Measured, once: the fresh capture carries a 282-byte ECH extension and the
-# resumed one 570, a difference of 288, against a pre_shared_key extension of
-# 287 bytes on the wire. One byte is left over and is not explained -- it could
-# be a constant, or it could be padding rounding up, which a single sample
-# cannot distinguish. Fitted to that one observation on the grounds that being
-# a byte wrong beats being 288 wrong, and marked here so the next capture is
-# known to be worth taking.
+#   ech payload grew by         288
+#   pre_shared_key on the wire  287
+#   residual                      1
+#
+# The residual is still not explained. What it is *not* is padding keyed to the
+# hello's size: the 66-character-name capture has a hello 43 bytes longer and
+# reports the same residual of 1. What remains untested is a different
+# pre_shared_key size, which needs a ticket of a different length -- see
+# HANDOFF for the two levers that did not work. So this is fitted to a
+# constant, now with two observations behind it rather than one.
 #   fixtures/reference-firefox-157-windows-fresh.hex
 #   fixtures/reference-firefox-157-windows-resumed.hex
 ECH_PSK_GROWTH_RESIDUAL = 1

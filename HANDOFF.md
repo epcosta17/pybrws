@@ -83,14 +83,22 @@ encrypted inner ClientHello which now carries a PSK itself, so the growth is
 expected; the leftover byte is not explained. A single capture cannot
 separate a constant from padding rounding up.
 
-**The capture that would settle it** is a resumed hello whose pre_shared_key
-is a different size. Two levers failed: `--alpn h2` changes the ticket but
-the tool only speaks HTTP/1.1, so the browser never reloads, and
+The longer-hostname capture has since been taken, with a 66-character name
+against the original 23, and it settled the half of this that mattered most.
+The ECH payload stayed at 240 bytes in the fresh hello and the whole hello
+grew by exactly the 43 bytes the name added. So `ECH_PAYLOAD_SIZE` does not
+track the server name, and the constant measured at one name is right for
+every host -- which was the real risk here, since a name-dependent payload
+would have made our fresh hello wrong on every fetch, not just on resumption.
+
+That capture also reported the same residual of 1 against a hello 43 bytes
+longer, which rules out padding keyed to the hello's size. What is still
+untested is a *different pre_shared_key size*, which needs a ticket of
+another length. Two levers failed: `--alpn h2` changes the ticket but the
+tool only speaks HTTP/1.1, so the browser never reloads, and
 `SSLContext.set_ciphers` cannot pin a TLS 1.3 suite, which OpenSSL keeps
-behind `SSL_CTX_set_ciphersuites`. The cheapest remaining lever is a longer
-`--hostname`, which changes the hello's size without touching the ticket: if
-the residual stays at one it is a constant, if it tracks the hello it is
-padding.
+behind `SSL_CTX_set_ciphersuites`. Teaching `catch_resumed.py` enough HTTP/2
+to answer would unlock the first.
 
 Note that the existing capture resumed under `TLS_AES_256_GCM_SHA384`, so its
 binder is 48 bytes and its pre_shared_key extension is sixteen longer than a

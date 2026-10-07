@@ -92,9 +92,19 @@ class TestEmitter(unittest.TestCase):
         self.assertEqual(seen, set(firefox157.ECH_AEAD_IDS))
 
     def test_hostname_changes_only_the_sni_length(self):
+        # Measured, not assumed: a capture with a 66-character name against
+        # the reference 23 grew by exactly the 43 bytes the name added, and
+        # its greased ECH payload stayed at 240. The payload stands in for an
+        # inner ClientHello carrying the real name, so it could have tracked
+        # it -- and ECH_PAYLOAD_SIZE was measured at one name while every host
+        # fetched has a different one. A name-dependent payload would have put
+        # our fresh hello wrong on every request.
         short = build_client_hello("a.test")
         long = build_client_hello("a.test" + "x" * 10)
         self.assertEqual(len(long) - len(short), 10)
+        for hello in (short, long):
+            ech = parse_client_hello(hello).extension(65037).data
+            self.assertEqual(len(ech), 42 + firefox157.ECH_PAYLOAD_SIZE)
 
     def test_output_round_trips_through_the_parser(self):
         raw = build_client_hello(REFERENCE_HOSTNAME)
