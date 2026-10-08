@@ -213,12 +213,28 @@ def reading_for(host: str, cells: dict) -> str:
         served, total, _ = cells.get(arm, (0, 0, []))
         return served, total
 
+    def unreachable(arm) -> bool:
+        """Did this arm never get an HTTP response at all?
+
+        A host that does not speak h3 refuses the connection, and counting
+        that as "blocked over h3" manufactures the mirror image of the
+        finding we are looking for. Not reachable and not served are
+        different claims and only one of them is about detection.
+        """
+        _served, total, results = cells.get(arm, (0, 0, []))
+        return bool(total) and not any(isinstance(r, int) for r in results)
+
     plain, plain_n = rate("httpx")
     h2, h2_n = rate("pybrws")
     h3, h3_n = rate("pybrws-h3")
 
     if plain_n and plain == plain_n:
         return "host serves a plain client too -- discriminates on nothing here"
+
+    if unreachable("pybrws-h3"):
+        return "no HTTP/3 here -- not a transport comparison"
+    if unreachable("pybrws"):
+        return "no answer over TCP at all -- check the network, not the host"
 
     # With the h3 arm present the interesting pair is h2 against h3, because
     # it is the only pair where the single variable is the transport.
