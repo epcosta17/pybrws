@@ -18,12 +18,14 @@
 <p class="meta">Ernesto P&eacute;rez Costa &middot; October 2026</p>
 
 <p>
-  Short version of how this started: I had a dozen URLs to fetch once a day,
-  four of them returned 403 immediately, and copying the browser's headers
-  exactly did not help at all. It turns out a server can tell what program
-  you are from the shape of your TLS handshake, before any HTTP happens, and
-  there is nothing you can do about that from Python's <code>ssl</code>
-  module.
+  Short version of how this started: a URL that a plain Python client gets a
+  403 on loads fine in Firefox, on the same machine, over the same
+  connection. I copied the browser's headers out of devtools until a
+  field-by-field diff of the two requests came back empty, and it was still
+  a 403. So the server was not reacting to anything <em>in</em> the request.
+  It had decided earlier &mdash; from the shape of the TLS handshake, before
+  any HTTP exists, which is not something you can change from Python's
+  <code>ssl</code> module.
 </p>
 
 <p>

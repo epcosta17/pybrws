@@ -51,9 +51,12 @@
   </p>
   <p>
     So I wrote the handshake myself, and after a few days of diffing it
-    against a Firefox 157 capture it matched byte for byte. Ten of twelve sites that had
-    been refusing me started answering. Along the way I found out my own
-    antivirus had been rewriting the browser's fingerprint the whole time.
+    against a Firefox 157 capture it matched byte for byte. Ten public sites
+    that refuse a plain Python client now serve this one, measured over
+    interleaved rounds with a control. An outside fingerprinting service
+    computes the same <code>ja4</code> for it as for a real Firefox. Along
+    the way I found out my own antivirus had been rewriting the browser's
+    fingerprint the whole time.
   </p>
 </div>
 
@@ -357,16 +360,85 @@ key_share ......... <span class="a">differs</span> <span class="c">must (fresh k
 ECH payload ....... <span class="a">differs</span> <span class="c">must (drawn per connection)</span></code></pre>
 
 <p>
-  Same <code>ja4</code> as a real Firefox 157. Against a mature Python HTTP/2
-  client on the same targets, same headers, same proxy, alternating rounds:
-  ten of twelve sites that had been refusing started serving.
+  Same <code>ja4</code> as the capture. Which is a weaker sentence than it
+  sounds, and it took me a while to admit why: the capture is mine, the
+  parser that reads it is mine, and the server that reports what arrived is
+  <em>also mine</em>. Three instruments, one author. Writing a thing and
+  then grading it with a rig you built yourself is how you convince
+  yourself and nobody else.
+</p>
+
+<h2>Asking someone else</h2>
+
+<p>
+  So, two outside sources. The first is
+  <a href="https://thumbprint.me/">thumbprint.me</a>, which reflects the
+  caller's own fingerprints back as JSON at
+  <code>/api/v1/probe</code> &mdash; someone else's edge, someone else's
+  parser, across a real network path. It computes:
+</p>
+
+<pre><code>t13d1517h2_8daaf6152771_3cbfd9057e0d</code></pre>
+
+<p>
+  Character for character what my own server reported. That is the number
+  going external, and it is the single most useful thing in this post.
+</p>
+
+<p>
+  The better part is a thing I did not know the service did. It keeps
+  captures of real browsers, taken on its own machines, with client, version
+  and OS recorded. The probe tells you how many of those recorded sessions
+  share your fingerprint:
+</p>
+
+<pre><code>TLS ClientHello ..... 29 sessions   <span class="c">firefox 152.0.5 … 156.0</span>
+HTTP/2 settings ..... 11 sessions
+request headers ..... 10 sessions</code></pre>
+
+<p>
+  So the handshake does not merely match <em>my</em> Firefox. It collides
+  with other people's Firefoxes, on other machines, across five versions,
+  and it does so at three layers independently. Two caveats I cannot
+  dissolve: the versions named stop at 156, and from this response alone I
+  cannot tell whether the catalogue has no 157 capture yet or whether 157
+  sends something different &mdash; though one fingerprint shared by five
+  versions is itself evidence that the shape does not move per release. And
+  it is one service's capture set, not the internet.
+</p>
+
+<p>
+  The second source is the only one that actually pays rent: servers that
+  did not ask to be measured. Ten public sites serve this client and refuse
+  a mature Python HTTP/2 client, same address, same headers, same rounds,
+  interleaved so that neither arm gets a quiet minute to itself:
+</p>
+
+<pre><code>zillow  ticketmaster  indeed  yelp  homedepot
+macys  sephora  stubhub  quora  seatgeek</code></pre>
+
+<p>
+  Three to four rounds each, no variance in any cell, across Cloudflare,
+  Akamai, DataDome and CloudFront. <code>crunchbase.com</code> rides along
+  in every round as a control: it serves both arms, so a run where this
+  client passes everything would show up as a broken experiment rather than
+  a triumph.
+</p>
+
+<p>
+  And the four I threw out, which is the part that makes the other ten worth
+  anything. <code>redfin.com</code> answered 405 Method Not Allowed, which
+  my own helper scored as a pass because it only tested for 403, 429 and
+  503. <code>expedia</code>, <code>vrbo</code> and <code>wayfair</code> had
+  the plain client at 429, which is rate limiting and not a judgement about
+  the client &mdash; and quite possibly caused by my own scan. Not evidence,
+  not kept.
 </p>
 
 <h2>What this does not do</h2>
 
 <p>
-  Two of the twelve never budged, and I want to be clear about why, because
-  it is the limit of this entire approach.
+  Now the limit, which is not a detail.
 </p>
 
 <p>
@@ -381,6 +453,16 @@ ECH payload ....... <span class="a">differs</span> <span class="c">must (drawn p
   or get sent to the challenge at all. That is a real difference and it is
   worth the work, but if someone tells you their TLS library defeats bot
   protection, that is the part they are not telling you.
+</p>
+
+<p>
+  There is also a site that simply wins. <code>g2.com</code> refuses this
+  client on <code>/</code>, on <code>/categories/crm</code>, on
+  <code>/products/slack/reviews</code>, with or without a query string. The
+  one URL it does serve, <code>/?x=</code>, it serves to the plain Python
+  client too &mdash; so that gap is not earned and I have no idea what it
+  is. Why one path slips through is not observable from outside and I am not
+  going to guess at it in public.
 </p>
 
 <p>

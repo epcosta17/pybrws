@@ -314,6 +314,106 @@
   behaviour, I would like to hear about it.
 </p>
 
+<h2>Asking a stranger</h2>
+
+<p>
+  Everything above was read off my own capture with my own parser, and
+  checked against my own QUIC server. Which is the weakness of this whole
+  post: I wrote the thing, I wrote the ruler, and I wrote the examiner.
+</p>
+
+<p>
+  <a href="https://thumbprint.me/">thumbprint.me</a> serves HTTP/3 and
+  reflects the caller's fingerprints back as JSON, which makes it the first
+  outside party that could be asked the QUIC question at all. Over TCP it
+  reports <code>t13d1517h2_…</code>. Over QUIC, from the same client, the
+  same machine, the same minute:
+</p>
+
+<pre><code>q13d0315h3_55b375c5d22e_dc5437974b47
+                   ciphers: 1301,1302,1303</code></pre>
+
+<p>
+  Read the prefix: <code>q</code> for QUIC where TCP said <code>t</code>,
+  TLS 1.3, SNI present, <strong>three</strong> cipher suites where the TCP
+  arm sends fifteen, fifteen extensions, ALPN <code>h3</code>. The three are
+  exactly the TLS 1.3 suites. Until this run, "QUIC forbids TLS 1.2, so the
+  list collapses to three" was a claim resting on my own parser reading my
+  own bytes. Now a stranger says it.
+</p>
+
+<p>
+  It also reports how many of its own recorded Firefox sessions share each
+  of our fingerprints: 103 for the QUIC ClientHello, 18 for the transport
+  parameters. Which is the number I would have least expected to be
+  non-zero, because <code>quic_transport_parameters</code> is the surface I
+  spent the most of this post being wrong about.
+</p>
+
+<p>
+  One honest residual, since it is the kind of thing this post has been
+  about. We send <code>Alt-Used</code> over HTTP/3 because that is what the
+  capture contained &mdash; but Firefox sends it precisely because it
+  reached h3 the long way, via <code>Alt-Svc</code> on an earlier TCP
+  connection. This client dials QUIC directly, so it announces having used
+  an alternative service that was never offered to it. The server knows
+  whether it ever advertised h3 to you. Every individual header correct, the
+  combination describing something that did not happen.
+</p>
+
+<h2>A server that cares which transport you used</h2>
+
+<p>
+  Fingerprint services tell you what you look like. They do not tell you
+  whether it matters. For that you need somebody who did not agree to be
+  measured, so: <code>indeed.com</code>, four interleaved rounds, three arms
+  on the same address within the same minutes.
+</p>
+
+<pre><code>pybrws over TCP ...... 0/4 served
+pybrws over QUIC ..... <span class="g">4/4 served</span>
+httpx over TCP ....... 0/4 served</code></pre>
+
+<p>
+  Same library, same profile family, same machine. The transport flipped the
+  outcome.
+</p>
+
+<p>
+  My first instinct was that the QUIC arm had simply been redirected
+  somewhere unprotected, which would make the whole thing a bookkeeping
+  error. So, one direct fetch of <code>mx.indeed.com</code>, no redirect
+  following, bodies kept:
+</p>
+
+<pre><code>over TCP    403   "Security Check"      27,708 bytes
+over QUIC   200   the actual page      591,241 bytes</code></pre>
+
+<p>
+  Same URL. One of them is a refusal, the other is half a megabyte of job
+  listings. That killed the alternative explanation and the finding
+  survived.
+</p>
+
+<p>
+  What it does <em>not</em> establish is that QUIC is the reason. The QUIC
+  profile differs from the TCP one in far more than transport: three cipher
+  suites instead of fifteen, a drawn extension order instead of a fixed one,
+  three extensions missing, its own header set. "The transport" here means
+  the entire presentation that comes with it, and I cannot decompose that
+  from outside.
+</p>
+
+<p>
+  Nor do I know whose doing the TCP refusal is. The test that would settle
+  it needs no code at all: a real Firefox with
+  <code>network.http.http3.enable</code> set to false, pointed at indeed. If
+  a genuine browser over TCP also gets the Security Check, then indeed
+  challenges TCP broadly and my fingerprint was never the reason. I have not
+  run it. It is the most valuable thing left on the list and it is one
+  checkbox.
+</p>
+
 <h2>What I would take from this</h2>
 
 <p>

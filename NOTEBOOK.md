@@ -2845,3 +2845,100 @@ TCP profile has a tell that the QUIC one does not. Not run yet.
 
 One host, one machine, one address, one day.
 
+
+---
+
+## 2026-10-08 — An oracle that is not ours
+
+Every instrument in this repo until now was one we wrote. `catch_hello.py`,
+`catch_h2.py` and `catch_quic.py` report what arrived at a server we
+control, parsed by a parser we control, against a capture we took. That
+answers "what did we put on the wire", which no third party will tell you,
+and it cannot answer "does the real world see Firefox".
+
+`thumbprint.me/api/v1/probe` reflects the caller's own fingerprints as JSON
+and serves HTTP/3, which makes it the first external party that can be asked
+the QUIC question at all. `tools/probe_fingerprint.py` asks it over both
+transports and puts the answers side by side. Fields are discovered, not
+assumed: the response is flattened to dotted paths, so a schema change
+prints rather than breaks.
+
+**The TCP JA4 matched character for character.** `t13d1517h2_8daaf6152771_`
+`3cbfd9057e0d`, identical to what our own server reported. Someone else's
+edge, someone else's parser, across a real network path.
+
+**The QUIC JA4 confirms externally what only our parser had claimed.**
+`q13d0315h3_55b375c5d22e_dc5437974b47`, with `ja4_r` listing the suites as
+`1301,1302,1303`. Three where the TCP arm sends fifteen. "QUIC forbids TLS
+1.2 so the list collapses" had been resting on our own reading of our own
+bytes.
+
+**The unexpected part: the service keeps its own captures of real browsers**
+with client, version and OS provenance, and reports how many of its recorded
+sessions share each of our fingerprints.
+
+| Signal | Matching sessions | Identities |
+|---|---|---|
+| TLS ClientHello, TCP | 29 | firefox 152.0.5 … 155.0.1 |
+| TLS ClientHello, QUIC | 103 | firefox 153.0 … 156.0 |
+| HTTP/2 settings | 11 | firefox |
+| QUIC transport parameters | 18 | firefox 155.0.1, 156.0 |
+| Request headers | 10 | firefox |
+
+This is a different claim from anything we had. Not "we reproduced our own
+capture" but "we collide with other people's Firefoxes, on other machines,
+across five versions, at four layers independently".
+
+**What it does not establish.** The identities stop at 156; from this
+response alone there is no way to tell whether the catalogue holds no 157
+capture or whether 157 sends something different. One fingerprint shared by
+five versions is evidence that the shape does not move per release, which
+favours the first, but it is a reading. `/api/v1/catalog` would settle it and
+is 5 MB, so it needs a script rather than a glance. And it is one service's
+capture set.
+
+**`tcp_family: Windows`, `tcp_ja4t 65535_2-1-3-1-1-4_1412_8`.** We never
+wrote a SYN. This is the kernel's, and it comes out consistent for free
+because the profile claims the OS we are running on. The inverse is a real
+exposure: the same profile on Linux would present a Linux SYN under a
+Windows User-Agent, and no layer we control could fix it from userland. MSS
+1412 is this link, not Firefox.
+
+### The ja4h difference, diagnosed offline
+
+`ja4h` differed between the arms beyond the version digit: `ge20nn11enus_`
+`3901d4197baf` against `ge30nn11enus_c87d53636918`. Same method, no cookie,
+no referer, eleven headers each, `en-US` each.
+
+Diffing the two lists in the profiles needed no network. The difference is
+two headers: the HTTP/2 set ends with `te: trailers`, which HTTP/3 does not
+carry; the HTTP/3 set has `Alt-Used` after `accept-encoding`, which TCP does
+not. Same count, different names and positions, so a different hash. Both
+were measured from real captures. Not a bug.
+
+The residual is the one already noted in `firefox157_quic.py`: Firefox sends
+`Alt-Used` because it reached h3 via `Alt-Svc` on an earlier TCP connection.
+This client dials QUIC directly, so it announces having used an alternative
+service that was never offered to it. A server knows whether it ever
+advertised h3 to that address. Every header individually correct, the
+combination describing something that did not happen. indeed did not care —
+it served the QUIC arm 4/4.
+
+This is the shape of what is left. The single-layer work is done; what
+remains is consistency *between* layers, which is not a layer further down.
+
+### Correction: a number in a published post was never measured
+
+`docs/firefox.html` claimed "ten of twelve sites that had been refusing
+started serving", in the TL;DR, in the results section, and as "two of the
+twelve never budged". There is no twelve-site run anywhere in this notebook.
+The count was residue from an invented opening anecdote that was removed
+from `firefox.html` and survived intact in `docs/index.html` ("a dozen URLs
+to fetch once a day, four of them returned 403").
+
+Both are gone. The posts now carry the measured results instead: ten hosts
+served here and refused to httpx over three to four interleaved rounds with
+`crunchbase.com` as a serving control, the four candidates rejected from the
+sweep named individually, and g2 as a site that wins. The irony is not lost:
+the post arguing that a self-built oracle proves nothing was itself carrying
+a number with no oracle at all.
