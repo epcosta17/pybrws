@@ -2737,3 +2737,24 @@ Chrome field by field, which it was not before, and five things that could
 have been wrong are known not to be. But the question they were answering was
 one I had invented. Measuring carefully in the wrong direction is still the
 wrong direction, and the cheap guard against it was one clarifying question.
+
+
+## 2026-10-08 — yelp, confirmed
+
+Asked directly, and the answer is yes: a verification screen appears before
+the page loads in his own Chrome, as an ordinary human visitor.
+
+So the table from the previous entry is the explanation and not a
+hypothesis. yelp challenges Chromium-shaped clients, a real Chrome passes by
+running the JavaScript, and our Chrome and curl_cffi's Chromium both fail at
+the same wall for the same reason. There is no tell in the profile, which is
+consistent with every fingerprint matching a real Chrome 155 field by field.
+
+The question is closed, and it was closed by asking one question that could
+have been asked before the six hypotheses rather than after them. The six
+eliminations stand as verification of the profile, which is worth having,
+but they were not the way to the answer and were never going to be.
+
+Nothing to change in the code. `docs/chrome.html` now states this as
+established rather than as the reading that fits.
+
