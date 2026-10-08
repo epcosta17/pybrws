@@ -148,10 +148,20 @@ ECH_ENC_SIZE = 32
 # as undermeasured. More captures of the hello alone would settle it.
 ECH_PAYLOAD_SIZES = (144, 208, 240)
 
-# This carries the locale of the machine it was captured on, which is a
-# fingerprint of a person rather than of a browser. The measured value is
-# kept so the fixture tests compare like with like; change it for real use.
-ACCEPT_LANGUAGE = "en-MX,en-GB;q=0.9,en-US;q=0.8,en;q=0.7"
+# Two constants, not one, because they are two different facts.
+#
+# CAPTURED_ACCEPT_LANGUAGE is what the capture holds, and the fixture tests
+# compare against it. It is the locale of the machine the capture was taken
+# on, which makes it a fingerprint of a person rather than of a browser:
+# shipping it would mark every request as coming from one particular Chrome
+# in Mexico.
+#
+# ACCEPT_LANGUAGE is what this profile actually sends. The common default,
+# which is the point -- a header meant to blend in should not be unusual.
+# Overwriting the captured value with it would have lost the measurement and
+# quietly broken the comparison the tests do.
+CAPTURED_ACCEPT_LANGUAGE = "en-MX,en-GB;q=0.9,en-US;q=0.8,en;q=0.7"
+ACCEPT_LANGUAGE = "en-US,en;q=0.9"
 
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36")

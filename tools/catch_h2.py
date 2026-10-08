@@ -83,10 +83,12 @@ class Stream:
 class Session:
     """One HTTP/2 connection, serving whatever the capture needs."""
 
-    def __init__(self, tls: ssl.SSLSocket, mode: str | None, set_cookie: bool) -> None:
+    def __init__(self, tls: ssl.SSLSocket, mode: str | None, set_cookie: bool,
+                 subresources: bool = False) -> None:
         self.tls = tls
         self.mode = mode
         self.set_cookie = set_cookie
+        self.subresources = subresources
         self.decoder = Decoder()
         self.encoder = Encoder()
         self.buffer = bytearray()
@@ -134,6 +136,11 @@ class Session:
             return fields.get(":method", "").upper() == "POST"
         if self.set_cookie:
             return "cookie" in fields and dest == "document"
+        if self.subresources:
+            # A subresource rather than the document: an image request
+            # differs from a navigation in Accept, in all three Sec-Fetch
+            # values and in Priority, so it is its own measurement.
+            return dest not in ("", "document")
         return dest == "document"
 
     def page_for(self, headers: list[tuple[str, str]]) -> bytes | None:
@@ -142,6 +149,8 @@ class Session:
             return None
         if self.mode:
             return PAGES[self.mode]
+        if self.subresources:
+            return IMAGE_PAGE
         return RELOADING_PAGE
 
     def handle_complete(self, stream_id: int, stream: Stream) -> bool:
@@ -241,6 +250,14 @@ class Session:
 FRAME_FINGERPRINT: dict = {}
 
 
+IMAGE_PAGE = (
+    b"<!doctype html><meta charset=utf-8><title>pybrws</title>"
+    b"<body style='font:16px system-ui;padding:3rem'>"
+    b"<p>Fetching a subresource&hellip;</p>"
+    b"<img src='/favicon.png' width=1 height=1 alt=''>"
+)
+
+
 def render(headers: list[tuple[str, str]], body: bytes) -> str:
     lines = [name + ": " + value for name, value in headers]
     text = "\n".join(lines)
@@ -260,6 +277,10 @@ def main() -> int:
     parser.add_argument("--wait", type=float, default=120.0)
     parser.add_argument("--set-cookie", action="store_true",
                         help="answer with Set-Cookie and capture the reload")
+    parser.add_argument("--any-request", dest="subresources",
+                        action="store_true",
+                        help="capture a subresource instead of the document, "
+                             "which is how an image request gets measured")
     parser.add_argument("--post", choices=["form", "form-click", "fetch"],
                         dest="mode", help="answer with a page that posts")
     args = parser.parse_args()
@@ -294,7 +315,8 @@ def main() -> int:
                 continue
             with tls:
                 tls.settimeout(15)
-                session = Session(tls, args.mode, args.set_cookie)
+                session = Session(tls, args.mode, args.set_cookie,
+                                  args.subresources)
                 try:
                     if session.run(deadline):
                         captured = session

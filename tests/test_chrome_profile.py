@@ -312,8 +312,28 @@ class TestTheHeaderCaptures(unittest.TestCase):
     def test_every_http2_value_matches(self):
         captured = dict(self.parse("reference-chrome-155-h2.txt", False))
         for name, value in profile.H2_NAVIGATION_HEADERS:
+            if name == "accept-language":
+                continue          # deliberately not the captured locale
             with self.subTest(header=name):
                 self.assertEqual(value, captured[name])
+
+    def test_the_captured_locale_is_recorded_and_not_sent(self):
+        # The capture holds the locale of the machine it was taken on. That
+        # is a fingerprint of a person rather than of a browser, so the
+        # measurement is kept and something ordinary is sent.
+        captured = dict(self.parse("reference-chrome-155-h2.txt", False))
+        self.assertEqual(profile.CAPTURED_ACCEPT_LANGUAGE,
+                         captured["accept-language"])
+        self.assertEqual(profile.ACCEPT_LANGUAGE, "en-US,en;q=0.9")
+        self.assertNotEqual(profile.ACCEPT_LANGUAGE,
+                            profile.CAPTURED_ACCEPT_LANGUAGE)
+
+    def test_what_is_sent_matches_firefox_which_is_the_point(self):
+        # Two browsers agreeing on this header is a feature: it is the one
+        # value in either profile chosen to be unremarkable rather than
+        # faithful.
+        self.assertEqual(profile.ACCEPT_LANGUAGE,
+                         dict(firefox157.H2_NAVIGATION_HEADERS)["accept-language"])
 
     def test_the_http1_order_and_casing_match(self):
         # The casing is measured: the client hints are lower case and
@@ -328,6 +348,8 @@ class TestTheHeaderCaptures(unittest.TestCase):
         for name, value in profile.H1_HEADERS:
             if value.startswith("{"):     # filled per request
                 continue
+            if name == "Accept-Language":
+                continue                  # deliberately not the captured one
             with self.subTest(header=name):
                 self.assertEqual(value, captured[name])
 
@@ -355,16 +377,6 @@ class TestTheHeaderCaptures(unittest.TestCase):
         self.assertEqual(profile.H2_HEADERS_PRIORITY["exclusive"],
                          recorded["headers_priority"]["exclusive"])
 
-    def test_the_accept_language_is_flagged_as_machine_specific(self):
-        # It carries the locale of the machine it was captured on, which is a
-        # fingerprint of a person rather than of a browser. Kept so the
-        # comparison above is like for like, and named so nobody ships it by
-        # accident.
-        self.assertEqual(profile.ACCEPT_LANGUAGE,
-                         "en-MX,en-GB;q=0.9,en-US;q=0.8,en;q=0.7")
-        self.assertNotEqual(profile.ACCEPT_LANGUAGE,
-                            dict(firefox157.H2_NAVIGATION_HEADERS)
-                            .get("accept-language"))
 
 class TestWhatIsNotMeasured(unittest.TestCase):
     """A profile holds what was captured, and says so about the rest."""
