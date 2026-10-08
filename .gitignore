@@ -16,3 +16,6 @@ fixtures/*.hex
 build/
 dist/
 transport-*.html
+
+# third-party data downloaded by tools/catalog.py
+.cache/
