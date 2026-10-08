@@ -2523,3 +2523,93 @@ Four hosts that were unreachable this morning, and the TLS 1.3 path
 unchanged -- which has its own test now, against the same harness, because
 the two paths share everything up to the ServerHello and a change to one can
 break the other in silence.
+
+## 2026-10-08 — Why yelp refuses Chrome, as far as it can be established
+
+The three-arm sweep in the demo's new section turned up one cell that did not
+fit: yelp serves the Firefox profile and refuses the Chrome one. Five
+interleaved rounds, alternating which arm went first: 5 of 5 against 0 of 5.
+Not transient.
+
+### It is a challenge, not a block
+
+      status 403
+      server: DataDome
+      x-datadome: protected
+      body: "Please enable JS and disable any ad blocker"
+             dd={'rt':'i','cid':...,'hsh':...}
+
+A DataDome JavaScript challenge, the same shape as the Cloudflare one tested
+earlier. And not a soft one: carried through a Session with its `datadome`
+cookie it is still 3 of 3 refused, while the Firefox arm earns the full set a
+served visitor gets -- `bse`, `bsi`, `datadome`, `hl`, `location`, `wdi` --
+against Chrome's one challenge cookie. The decision is made on the first
+request, from the fingerprint.
+
+### A hypothesis, tested and refuted
+
+The Chrome captures were all taken on a reload, so all six
+navigation-shaped sets carried `Cache-Control: max-age=0`. Chrome sends that
+on a reload and Firefox does not. A client sending it on every request
+describes someone who reloads every page they visit, which is anomalous
+enough to be a candidate.
+
+Removing it changed nothing: 0 of 4 either way. The header is still a defect
+on its own merits and is now separated from what goes on the wire, but it is
+not the cause, and presenting it as one would have been a convenient story
+rather than a result.
+
+### Isolating the layer, and why that failed
+
+A 2x2 crossing the TLS layer against the HTTP layer gave 403 on both mixed
+arms and 200 only on all-Firefox. That looks decisive and is not: a Chrome
+ClientHello carrying a Firefox User-Agent is precisely the contradiction
+these systems look for, so crossing the layers introduces a third variable.
+The experiment is confounded by construction and establishes nothing about
+which layer matters.
+
+### What three other Chromium clients say
+
+      pybrws firefox157 (Windows)            3/3 served
+      pybrws chrome155  (Windows)            0/3
+      curl_cffi edge101 (Windows, Chromium)  0/3
+      curl_cffi chrome + Windows UA          0/3
+
+Every Chromium-shaped arm is refused; the only Firefox-shaped one is served.
+curl_cffi's targets all claim macOS except edge101, which would be a
+contradiction on this Windows machine, so the comparison was made fair two
+ways -- edge101, and chrome with the User-Agent overridden -- and both fail.
+
+That rules out the leading suspicion. If our Chrome profile had a defect,
+curl_cffi's mature Chromium impersonations would not fail identically.
+
+### And the part that undoes the tidy conclusion
+
+"DataDome challenges Chromium" was the obvious next claim, and it is wrong.
+The same two profiles across five targets:
+
+      yelp.com         firefox 200 200   chrome 403 403
+      etsy/c/jewelry   firefox 200 200   chrome 200 200
+      zillow.com       firefox 200 200   chrome 200 200
+      homedepot.com    firefox 200 200   chrome 200 200
+      quora.com        firefox 200 200   chrome 200 200
+
+etsy is DataDome too and Chrome passes it. So this is **yelp's configuration
+specifically**, not a vendor behaviour and not a general cost of looking like
+Chromium. One site, one address, one afternoon.
+
+### What is established and what is not
+
+Established: yelp challenges Chromium-shaped clients and serves
+Firefox-shaped ones, from here, today, repeatably, across four independent
+Chromium implementations. Not our profile's defect.
+
+Not established: whether a **real** Chrome passes yelp. If it does, every
+Chromium impersonation shares a tell none of them has found. If it does not,
+yelp simply challenges Chrome users and there is nothing to fix. That is one
+browser visit, and it is the only question here worth the next measurement.
+
+The useful thing either way: which browser you choose to impersonate is a
+decision with a measurable cost, and the industry default of Chrome is not
+free. Nobody tests that because nobody has two profiles measured the same
+way.
