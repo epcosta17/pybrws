@@ -3127,3 +3127,52 @@ headless population that every scraper and every published capture set
 draws from. If a detector keys on this, it keys in our favour. A library
 whose Chrome profile was built from a headless capture would be on the
 wrong side of it.
+
+---
+
+## 2026-10-08 — The headless reading was not controlled, and had to be withdrawn
+
+The entry above concluded that the window was the variable behind `0x12e0`.
+It is not supported, and the fault is in the instrument.
+
+Both arms of `headless_tell.py` launched Chrome with `--user-data-dir`
+pointing at a new temporary folder. The hand measurement used this
+machine's normal profile. So two things differed between them, not one: the
+window, and the profile directory. Chrome's field trial state lives in the
+profile — `Local State` plus `Variations`, `VariationsSeedV2` and
+`VariationsSafeSeedV2` at the root of the user data directory — and a new
+profile is handed a fresh seed. "Headless omits the extension" and "a new
+profile did not join a trial this install is in" both fit every observation
+made so far.
+
+The arithmetic from that entry stands: the headless list plus `0x12e0`
+hashes to the windowed value, and plus `0x0029` to the catalogue's
+resumption capture, both exactly. One extension is still the whole
+difference. What does not stand is the claim about *why*.
+
+**The script also could not produce the windowed arm at all.**
+`--dump-dom` is a headless switch; with a window Chrome ignores it and
+writes nothing to stdout. It exited with `chrome produced nothing`, and the
+JSON that came back on screen could not be attributed to an arm with
+confidence. That is the second time this project has had an arm that
+returned a wrong answer rather than an error.
+
+**Rebuilt so the seed is the variable.** Every arm now runs headless, so
+the page is captured by the script instead of read off a screen. The arms
+differ only in trial state: a fresh profile, a fresh profile carrying this
+install's four seed files, and the same seed with
+`--disable-field-trial-config` set.
+
+If the seeded arm sends `0x12e0`, the seed was the variable, the window was
+never involved, and this profile imitates one Chrome population rather
+than Chrome — presence would imply membership of that population and
+absence would imply nothing. If the seeded arm does not, the seed is
+controlled and the window is the only difference left from the hand
+measurement. Not run yet.
+
+Worth keeping in view: three hours of findings today, four of them
+retracted or corrected within the hour by the next measurement. The
+catalogue said our Chrome was broken; the browser said it was not; the
+headless run said the window explained it; the profile directory said that
+was uncontrolled. Each correction came from printing one more thing, not
+from a better idea.
