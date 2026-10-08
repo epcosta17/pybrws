@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Cloning a Firefox ClientHello, byte for byte</title>
-<meta name="description" content="What a server knows about you before HTTP exists, and what it takes to reproduce a browser's TLS handshake from packet captures.">
+<title>Making Python impersonate Firefox</title>
+<meta name="description" content="A 403 that my headers could not explain, and the weeks of packet captures it took to work out why.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,30 +12,64 @@
 
 <p class="site"><a href="index.html">&larr; <b>pybrws</b></a></p>
 
-<h1>Cloning a Firefox ClientHello, byte for byte</h1>
-<p class="sub">Part one: what a server knows about you before HTTP exists,
-   and what it takes to reproduce it from packet captures.</p>
-<p class="meta">Ernesto P&eacute;rez Costa &middot; October 2026 &middot; ~10 min</p>
+<h1>Making Python impersonate Firefox</h1>
+<p class="sub">Part one: a 403 my headers could not explain, and what it
+   took to work out why.</p>
+<p class="meta">Ernesto P&eacute;rez Costa &middot; October 2026 &middot; ~11 min</p>
 
 <p>
-  This started with something stupid. Same URL, two Python clients, same
-  headers. One gets the page, one gets a 403. I diffed the requests field by
-  field, lower-cased names, order included. Identical.
+  I write scrapers for a living, which in practice has meant reaching for
+  whichever library is currently winning. A target starts refusing you, you
+  swap <code>requests</code> for something with a browser mode, it works
+  again, you move on. That worked for years and I never once asked what the
+  library was doing differently.
 </p>
 
 <p>
-  Which meant the server was not reacting to anything <em>in</em> my request.
-  It had decided earlier. So I stopped looking at HTTP and opened Wireshark,
-  and every number below comes out of what I found in there.
+  What finally bothered me was how easy the refusals are to reproduce. Take a
+  URL that a plain Python client gets a 403 on. Open the same URL in Firefox
+  on the same machine over the same connection: it loads. Copy the browser's
+  headers out of devtools, all of them, in order, lower-cased, until a
+  field-by-field diff of the two requests comes back empty.
 </p>
 
-<h2>The first packet is 1,901 bytes and has no HTTP in it</h2>
+<p class="fail">Still 403.</p>
 
 <p>
-  Filter <code>tls.handshake.type == 1</code>, load a page in Firefox 157,
-  and there it is. No URL, no User-Agent, nothing you can set from Python.
-  What is in there is a list of cipher suites the browser supports, a list of
-  extensions <em>in a particular order</em>, and some crypto key material:
+  Which is the interesting part, because it means the server is not reacting
+  to anything <em>in</em> the request. It decided earlier. So what did I send
+  before the request that gave me away?
+</p>
+
+<div class="tldr">
+  <span class="lbl">TL;DR</span>
+  <p>
+    Before any HTTP exists, your TLS library sends a ClientHello, and its
+    shape is specific enough to identify which program you are. Python's
+    <code>ssl</code> module says "OpenSSL" in a way you cannot turn off from
+    Python.
+  </p>
+  <p>
+    So I wrote the handshake myself, and after a few days of diffing it
+    against a Firefox 157 capture it matched byte for byte. Ten of twelve sites that had
+    been refusing me started answering. Along the way I found out my own
+    antivirus had been rewriting the browser's fingerprint the whole time.
+  </p>
+</div>
+
+<h2>Opening Wireshark</h2>
+
+<p>
+  I had never looked at a TLS handshake before. The filter is
+  <code>tls.handshake.type == 1</code>. Load a page in Firefox and there it
+  is: the very first thing the browser sends, before anything else, 1,901
+  bytes of it.
+</p>
+
+<p>
+  There is no HTTP in that packet. No URL, no User-Agent, no cookies. What is
+  in it is a list of cipher suites the browser supports, a list of extensions
+  in a particular order, and a lot of crypto key material:
 </p>
 
 <pre><code>total                       1,901 bytes
@@ -46,10 +80,15 @@
     encrypted_client_hello    282</code></pre>
 
 <p>
-  All of that is stable per browser build, so a server can hash it into a
-  short string and look it up. These have names &mdash; JA3, JA4 &mdash; and
-  they work about how you would expect. Measured against
-  <a href="https://tls.peet.ws/api/all">tls.peet.ws</a>:
+  Then I ran the same filter against my Python script, and the two messages
+  did not look remotely alike. Different ciphers, a different number of them,
+  different extensions, a different order.
+</p>
+
+<p>
+  This turns out to be well known to everyone except me. There is a service,
+  <a href="https://tls.peet.ws/api/all">tls.peet.ws</a>, that tells you what
+  it saw. Both of these are measured, not copied from anywhere:
 </p>
 
 <pre><code>Firefox 157   <span class="g">t13d1517h2</span>_8daaf6152771_3cbfd9057e0d
@@ -61,54 +100,109 @@ httpx         <span class="a">t13d1712h1</span>_ab0a1bf427ad_8e6e362c5eac
               <span class="c">└ TLS 1.3, SNI present</span></code></pre>
 
 <p>
-  They agree on the protocol version and nothing else. No header changes any
-  of it, which is why sending perfect browser headers over a Python handshake
-  fools nobody.
+  That is a JA4 fingerprint. There is an older one called JA3 that does the
+  same job with an MD5. Either way the server computes it from the handshake,
+  looks it up, and can decide everything before you have asked for anything.
 </p>
 
-<div class="note cool">
-  <span class="lbl">A detail worth knowing</span>
-  <p>
-    JA4 <strong>sorts</strong> the cipher and extension lists before hashing
-    them, and strips GREASE. That is deliberate: JA3 hashed them in wire
-    order, so when Chrome started shuffling its extensions per connection in
-    2023, every Chrome produced a different JA3 and the fingerprint became
-    useless for it. Sorting fixed that. If you want the order back there are
-    the <code>ja4_o</code> and <code>ja4_ro</code> variants.
-  </p>
-</div>
+<p>
+  So my scraper was introducing itself as a Python script in the first packet
+  it ever sent, and no amount of header copying was ever going to help.
+</p>
 
-<h2>Five captures: what moves and what doesn't</h2>
+<h2>First idea: just configure Python's <code>ssl</code></h2>
 
 <p>
-  Before you can clone something you have to know which parts of it are
-  allowed to differ. Five consecutive captures under the same conditions, all
-  1,901 bytes:
+  My first thought was that this must be a settings problem. Python lets you
+  set the cipher list, so I set it to Firefox's. Wireshark confirmed the
+  ciphers now matched.
+</p>
+
+<p class="fail">Still 403. And the fingerprint still did not match.</p>
+
+<p>
+  The extension count was wrong, the extension <em>order</em> was wrong, and
+  there is no API for either one. OpenSSL emits its extensions in the order
+  OpenSSL emits them. It is not trying to be Firefox and there is no flag
+  that asks it to.
+</p>
+
+<p>
+  I spent a while looking for a way around this before accepting there isn't
+  one from Python. You can patch OpenSSL &mdash; that is roughly what
+  <a href="https://github.com/lwthiker/curl-impersonate">curl-impersonate</a>
+  does, and if you just want this to work, go use it or
+  <code>curl_cffi</code> and stop reading. I wanted to know how it worked, so
+  I took the other route and wrote the message myself.
+</p>
+
+<h2>Getting a capture I could trust</h2>
+
+<p>
+  To copy a ClientHello you need one, and you need it not to have been
+  touched on the way. So: a tiny TLS server on localhost with a self-signed
+  certificate, open it in Firefox, click through the warning, and dump the
+  raw first packet to a hex file.
+</p>
+
+<p>
+  That sounds like overkill when Wireshark is right there, but having the
+  bytes in a file is what makes the rest of this possible &mdash; every claim
+  below is a diff against that file, and the tests still run against it
+  today.
+</p>
+
+<h2>Which bytes am I allowed to change?</h2>
+
+<p>
+  Before you can copy something you have to know which parts of it are
+  supposed to vary. Five captures in a row, same conditions, all 1,901 bytes:
 </p>
 
 <table>
-  <tr><th>Field</th><th>Behaviour across five captures</th></tr>
-  <tr><td>extension order</td><td><strong>identical</strong> &mdash; Firefox does not shuffle on TCP</td></tr>
+  <tr><th>Field</th><th>Across five captures</th></tr>
+  <tr><td>extension order</td><td><strong>identical</strong></td></tr>
   <tr><td>cipher list</td><td>identical</td></tr>
   <tr><td><code>random</code></td><td>varies, 32 bytes</td></tr>
   <tr><td><code>session_id</code></td><td>varies, 32 bytes</td></tr>
   <tr><td><code>key_share</code></td><td>payload varies, length stable at 1,327</td></tr>
   <tr><td><code>encrypted_client_hello</code></td><td>payload varies, length stable at 282</td></tr>
-  <tr><td>every other payload</td><td>constant</td></tr>
+  <tr><td>everything else</td><td>constant</td></tr>
 </table>
 
 <p>
-  A fixed extension order is good news: it makes byte-identity a well-defined
-  goal rather than a distribution to match. (Chrome is the opposite case, and
-  it gets <a href="chrome.html">its own post</a>.)
+  A fixed extension order was the best news in this project. It means
+  "identical to the capture" is a target you can actually hit, rather than a
+  distribution you have to imitate. Chrome is not like this at all, which is
+  <a href="chrome.html">the next post</a>.
 </p>
 
-<h2>The 1,327 bytes you cannot copy</h2>
+<h2>The 1,327-byte extension</h2>
 
 <p>
-  <code>key_share</code> is the client's half of a Diffie-Hellman exchange,
-  sent speculatively in the first message so the handshake can finish in one
-  round trip instead of two. Firefox sends three of them:
+  Seventy percent of the message is one field, <code>key_share</code>, and my
+  first attempt at it was to paste the captured bytes into my client. Why
+  not? They were valid bytes from a real browser.
+</p>
+
+<p class="fail">
+  The handshake ran all the way to the end and then failed, with no error
+  saying which part was wrong.
+</p>
+
+<p>
+  This took me an embarrassingly long time to understand, so here it is
+  plainly. <code>key_share</code> is the client's half of a key exchange. The
+  server takes it, combines it with its own half, and both sides end up with
+  the same secret without ever sending it. If I paste a capture, I am sending
+  a public key whose private half I do not have. The server does its side
+  correctly. I cannot do mine. Everything after that is encrypted with keys
+  that do not match, and TLS does not tell you which byte was wrong &mdash;
+  it just fails the final check.
+</p>
+
+<p>
+  Firefox sends three of these:
 </p>
 
 <table>
@@ -119,17 +213,11 @@ httpx         <span class="a">t13d1712h1</span>_ab0a1bf427ad_8e6e362c5eac
 </table>
 
 <p>
-  It <em>advertises</em> five groups and sends shares for three. That
-  asymmetry is itself part of the fingerprint, and it is not an oversight:
-  the server may answer with a HelloRetryRequest asking for any group you
-  advertised, so you have to be able to produce a share for all five.
-</p>
-
-<p>
-  The 1,216 are <code>1184 + 32</code>: an ML-KEM-768 encapsulation key
-  first, an X25519 public key second. That order is from the hybrid draft and
-  I confirmed it against the capture. Both keypairs are generated per
-  connection:
+  The big one is post-quantum, and 1,216 is <code>1184 + 32</code>: an
+  ML-KEM-768 key first, an X25519 key second. I got that order wrong on the
+  first try and it is not guessable, you just compare against the capture
+  until the lengths line up. Both keypairs have to be generated fresh on
+  every connection:
 </p>
 
 <pre><code>self._x25519[group] = x25519.X25519PrivateKey.generate()
@@ -140,33 +228,20 @@ return (self._mlkem[group].public_key().public_bytes_raw()
         + self._x25519[group].public_key().public_bytes(*_RAW))</code></pre>
 
 <p>
-  Hybrid means an attacker has to break both: X25519 today, ML-KEM when a
-  quantum computer exists. It is aimed at "harvest now, decrypt later".
+  One more thing that confused me: Firefox <em>advertises</em> five groups but
+  only sends shares for three. That is not a bug. The server is allowed to
+  come back and say "none of those, use this other one you mentioned", so you
+  have to be able to produce a share for all five even though you normally
+  send three. The asymmetry itself is part of the fingerprint.
 </p>
 
-<p>
-  And it is the reason a captured hello cannot simply be replayed. The
-  server's reply is computed against <em>your</em> public key. Paste someone
-  else's and you do not hold the private half, decapsulation returns garbage,
-  and the handshake dies at the Finished check with no useful error. The
-  clone has to be <strong>structural</strong> &mdash; same shape, same order,
-  same sizes &mdash; with live crypto inside.
-</p>
-
-<h2>Firefox sends no GREASE, except where it does</h2>
+<h2>The extension I assumed was noise</h2>
 
 <p>
-  GREASE (RFC 8701) is deliberate garbage: reserved values like
-  <code>0x0A0A</code> that clients sprinkle through their cipher and
-  extension lists so that any peer which chokes on an unknown value is found
-  out now, rather than on the day a real new extension ships. Chrome invented
-  it and uses it heavily.
-</p>
-
-<p>
-  Firefox puts none in its cipher list and none in its extension list. But it
-  greases its <code>encrypted_client_hello</code>, and decoding that across
-  the five captures gives:
+  Extension 65037 is 282 bytes that change completely between captures, and
+  for a day I treated it as random padding. It is not. It is
+  <code>encrypted_client_hello</code>, and decoding it across the five
+  captures gives this:
 </p>
 
 <table>
@@ -180,106 +255,93 @@ return (self._mlkem[group].public_key().public_bytes_raw()
 </table>
 
 <p>
-  Encrypted Client Hello exists because the SNI &mdash; the one field that
-  says <em>which site</em> you are visiting &mdash; is the last thing in TLS
-  still sent in the clear. ECH encrypts an inner hello carrying the real name
-  against a key the server publishes in DNS.
+  ECH exists because the SNI &mdash; the field naming which site you want
+  &mdash; is the last part of TLS still sent in the clear. ECH encrypts an
+  inner hello carrying the real name, against a key the server publishes in
+  DNS.
 </p>
 
 <p>
-  But if only ECH users sent the extension, the extension itself would be the
-  signal. So browsers send a decoy of the right shape whether or not they are
-  doing real ECH. Firefox does this by default, and this is that decoy.
+  But if only ECH users sent the extension, sending it would itself be the
+  signal. So browsers send a decoy of exactly the right shape whether or not
+  they are doing real ECH. Firefox does this by default. This is the decoy.
 </p>
 
 <div class="note">
-  <span class="lbl">Why this matters for an imitation</span>
+  <span class="lbl">Why I am glad I decoded it</span>
   <p>
-    Hardcoding one <code>aead_id</code> and one <code>config_id</code>
-    produces a client that is correct on any single connection and
-    distinguishable over many, because a real Firefox varies both. Same
-    failure mode as emitting a fixed GREASE value. "Correct once" and
-    "correct repeatedly" are different targets, and only the second one is
-    the job.
+    My plan had been to hardcode the whole 282 bytes from one capture. That
+    produces a client which is perfectly correct on any single connection and
+    completely obvious over a hundred of them, because a real Firefox varies
+    <code>aead_id</code> and <code>config_id</code> and I would have varied
+    nothing.
+  </p>
+  <p>
+    "Correct once" and "correct repeatedly" are different targets. I only
+    noticed because I happened to diff two captures against each other
+    instead of against my code.
   </p>
 </div>
 
 <p>
-  One assumption I checked rather than assumed: a real ECH payload would
-  contain the inner hello, which contains the real server name, so a longer
-  hostname could in principle lengthen it. Measured against a 66-character
-  name, the hello grew by exactly the 43 bytes the name added and the ECH
-  payload stayed at 240. The constant holds for any host.
+  One assumption I did check rather than assume: a real ECH payload contains
+  the inner hello, which contains the real hostname, so a longer hostname
+  might make it longer. Tried it with a 66-character name. The hello grew by
+  exactly the 43 bytes the name added and the ECH payload stayed at 240. So
+  the constant is safe for any host.
 </p>
 
-<h2>The method, which is the only part that transfers</h2>
-
-<ol>
-  <li><strong>Capture.</strong> A local TLS server with a self-signed cert.
-    Open it in Firefox, accept the warning, save the raw first packet as hex.
-    No proxy in the middle to rewrite anything &mdash; see below for why that
-    matters more than it sounds.</li>
-  <li><strong>Parse.</strong> Walk the message field by field. Every length
-    is written in the bytes before the thing it measures, so there is nothing
-    to infer: you either decode all 1,901 or you have a bug.</li>
-  <li><strong>Rebuild.</strong> A profile of measured values &mdash; 15
-    suites in order, 17 extensions in order, every payload verbatim. No
-    constant that did not come off the wire.</li>
-  <li><strong>Diff.</strong> Our bytes against the captured bytes, with the
-    four genuinely-varying fields excluded by name. Everything else has to
-    match exactly, and a test holds it there.</li>
-</ol>
+<h2>Then my own browser started lying to me</h2>
 
 <p>
-  Step 4 is the whole method. Steps 1 to 3 can be done from a blog post and
-  feel finished while being wrong. The diff is what tells you, and in this
-  project it caught every mistake worth catching.
-</p>
-
-<h2>The afternoon my own browser was lying to me</h2>
-
-<p>
-  Partway through, a fresh look at tls.peet.ws from Firefox reported a
-  fingerprint matching neither my stored reference nor my client:
+  Partway through, I re-checked Firefox against tls.peet.ws, expecting
+  the reference I had been building against. I got this:
 </p>
 
 <pre><code>stored reference  t13d1517h2_8daaf6152771_3cbfd9057e0d
-this client now   t13d1517h2_8daaf6152771_3cbfd9057e0d
-the browser now   <span class="a">t13d2713h2_bd9791dd9fd6_ecd0401ec68b</span></code></pre>
+my client now     t13d1517h2_8daaf6152771_3cbfd9057e0d
+<span class="a">the browser now   t13d2713h2_bd9791dd9fd6_ecd0401ec68b</span></code></pre>
 
 <p>
-  That is not Firefox's stack. Twenty-seven ciphers instead of fifteen, every
-  one listed twice, which NSS never does. <code>encrypt_then_mac</code>
-  present, which is an OpenSSL extension. <code>renegotiation_info</code>
-  ahead of <code>server_name</code>, the reverse of Firefox's order. And none
-  of the five extensions I had been using since the first capture to tell NSS
-  from BoringSSL. The HTTP/2 layer was rebuilt too: stream id 1 rather than
-  3, no priority flag on the HEADERS frame, different window sizes.
+  My client matched the reference. The browser did not match either. Which
+  made no sense for about ten minutes, until I looked at what the browser was
+  supposedly sending: twenty-seven ciphers instead of fifteen, every one of
+  them listed twice, which Firefox's TLS library never does.
+  <code>encrypt_then_mac</code>, which is an OpenSSL thing.
+  <code>renegotiation_info</code> before <code>server_name</code>, the
+  reverse of Firefox's order. And none of the five extensions I had been
+  using all along to tell Firefox's stack from Chrome's.
 </p>
 
 <p>
-  Something was terminating both layers and re-originating them. It was
-  NordVPN's Threat Protection, which installs a local proxy and a root
-  certificate to inspect HTTPS &mdash; and runs <strong>while the VPN is not
-  connected to anything</strong>. Having the app open was enough.
+  The HTTP/2 layer was rebuilt too, different stream id, different window
+  sizes. Something was terminating both layers and re-originating them.
 </p>
 
 <p>
-  Worth sitting with. This is ordinary consumer software sold as a security
-  feature, and its effect is identical to a malicious proxy: a third party
-  replaces the TLS and HTTP fingerprints of every request you make, and
-  nothing anywhere reports a problem. Nothing broke. No error appeared. Every
-  page rendered normally.
+  It was NordVPN's Threat Protection. It installs a local proxy and a root
+  certificate to inspect HTTPS, and it runs <strong>while the VPN is
+  disconnected</strong>. Having the app open was enough.
 </p>
 
 <p>
-  The only reason it surfaced is that something in this project reports back
-  what the server <em>actually received</em>. If you are capturing reference
-  fingerprints on a machine running one of these, you are not measuring your
-  browser. And most people have no idea theirs does this.
+  I still find this one a bit much. It is ordinary consumer software, sold as
+  a security feature, and what it does is indistinguishable from a malicious
+  proxy: it replaces the TLS and HTTP fingerprint of every request you make.
+  Nothing broke. No warning appeared. Every page rendered normally. The only
+  reason I saw it at all is that this project's whole point is asking a
+  server what it actually received.
 </p>
 
-<h2>Where it ended up</h2>
+<p>
+  If you ever capture reference fingerprints, check this first. On a machine
+  running one of these you are not measuring your browser, you are measuring
+  your antivirus. The captures I already had predated it and still carry the
+  real markers, so I kept them and did not re-capture anything until the
+  certificate on an ordinary site was issued by a public CA again.
+</p>
+
+<h2>Where it got to</h2>
 
 <pre><code>ours   1901 bytes
 real   1901 bytes
@@ -295,17 +357,45 @@ key_share ......... <span class="a">differs</span> <span class="c">must (fresh k
 ECH payload ....... <span class="a">differs</span> <span class="c">must (drawn per connection)</span></code></pre>
 
 <p>
-  Same <code>ja4</code> as a real Firefox 157. Which is the easy half: the
-  hello is one message, and <a href="quic.html">the same browser plays by
-  different rules over QUIC</a>.
+  Same <code>ja4</code> as a real Firefox 157. Against a mature Python HTTP/2
+  client on the same targets, same headers, same proxy, alternating rounds:
+  ten of twelve sites that had been refusing started serving.
+</p>
+
+<h2>What this does not do</h2>
+
+<p>
+  Two of the twelve never budged, and I want to be clear about why, because
+  it is the limit of this entire approach.
+</p>
+
+<p>
+  A JavaScript challenge &mdash; the "checking your browser" interstitial
+  &mdash; does not care about your handshake. It challenges a real Chrome
+  too. A real Chrome gets through by <em>running the script</em>, which is a
+  capability, not a disguise. No ClientHello on earth skips that step.
+</p>
+
+<p>
+  What a fingerprint decides is one layer earlier: whether you get the page
+  or get sent to the challenge at all. That is a real difference and it is
+  worth the work, but if someone tells you their TLS library defeats bot
+  protection, that is the part they are not telling you.
+</p>
+
+<p>
+  Also: I got the ClientHello right, and the ClientHello is one message. The
+  rest of the handshake has its own behaviour, HTTP/2 has an entirely
+  separate fingerprint, and the same browser
+  <a href="quic.html">does something different again over QUIC</a>.
 </p>
 
 <div class="src">
   <h3>From the repository</h3>
   <ul>
     <li><code>fixtures/reference-firefox-157-windows-fresh.hex</code> &mdash; the capture every number here comes from</li>
-    <li><code>fixtures/firefox-1.hex</code> … <code>firefox-5.hex</code> &mdash; the five used for the variance table</li>
-    <li><code>pybrws/profiles/firefox157.py</code> &mdash; the measured values, including the greased ECH builder</li>
+    <li><code>fixtures/firefox-1.hex</code> … <code>firefox-5.hex</code> &mdash; the five behind the variance table</li>
+    <li><code>pybrws/profiles/firefox157.py</code> &mdash; the measured values and the greased ECH builder</li>
     <li><code>pybrws/keyexchange.py</code> &mdash; the hybrid key share</li>
     <li><code>tests/test_emitter.py</code>, <code>tests/test_parser.py</code> &mdash; the byte-identity tests</li>
   </ul>
@@ -313,9 +403,8 @@ ECH payload ....... <span class="a">differs</span> <span class="c">must (drawn p
 
 <footer class="end">
   <p>
-    Part one of three. Next:
-    <a href="chrome.html">Chrome, where the order is drawn</a> and
-    <a href="quic.html">QUIC, where one browser has two fingerprinting rules</a>.
+    Part one of three. Next: <a href="chrome.html">Chrome, which refuses to
+    send the same thing twice</a>.
   </p>
 </footer>
 

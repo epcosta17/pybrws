@@ -143,3 +143,23 @@ footer.end {
   h2 { font-size: 21px; }
   pre { font-size: 12.5px; }
 }
+
+/* --- TL;DR block ------------------------------------------------------ */
+.tldr {
+  background: var(--panel); border: 1px solid var(--rule);
+  border-left: 3px solid var(--blue);
+  border-radius: 8px; padding: 20px 24px; margin: 30px 0 36px;
+  font-size: 17.5px; line-height: 1.6;
+}
+.tldr .lbl {
+  display: block; font: 700 11px/1 var(--mono);
+  letter-spacing: 1.6px; color: var(--blue); margin-bottom: 11px;
+}
+.tldr p { margin-bottom: 14px; }
+.tldr p:last-child { margin-bottom: 0; }
+
+/* A failed attempt, shown as it happened. */
+.fail {
+  font: 600 16px/1.5 var(--sans); color: var(--accent);
+  margin: -8px 0 24px;
+}

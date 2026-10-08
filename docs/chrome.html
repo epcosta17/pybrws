@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Chrome shuffles, and a question I could not answer</title>
-<meta name="description" content="Adding a second browser profile broke the abstraction that worked for the first, and produced one result I spent a day failing to explain.">
+<title>Impersonating Chrome, which never sends the same thing twice</title>
+<meta name="description" content="Chrome draws a new extension order on every connection. Reproducing that broke the design that had worked fine for Firefox.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,106 +12,168 @@
 
 <p class="site"><a href="index.html">&larr; <b>pybrws</b></a></p>
 
-<h1>Chrome shuffles, and a question I could not answer</h1>
-<p class="sub">Part two: what adding a second browser does to code that
-   worked perfectly for the first, and a day spent eliminating hypotheses
-   for a question I had invented.</p>
-<p class="meta">Ernesto P&eacute;rez Costa &middot; October 2026 &middot; ~9 min</p>
+<h1>Impersonating Chrome, which never sends the same thing twice</h1>
+<p class="sub">Part two: the profile format that worked perfectly for one
+   browser and fell apart on the second.</p>
+<p class="meta">Ernesto P&eacute;rez Costa &middot; October 2026 &middot; ~10 min</p>
 
 <p>
-  <a href="firefox.html">Part one</a> ended with a Firefox ClientHello
-  reproduced byte for byte. The profile that produced it was a flat list:
-  fifteen cipher suites, seventeen extensions, each payload a literal
-  captured off the wire. Emitting it was a loop.
+  This continues <a href="firefox.html">the previous post</a>. If you have
+  not read it, the short version is: a server can identify your HTTP client
+  from the shape of its TLS handshake before any HTTP happens, and I spent a few
+  days reproducing Firefox 157's handshake in Python until it matched a
+  capture byte for byte.
 </p>
 
 <p>
-  Then I added Chrome, and almost none of that survived.
+  Firefox was the easy one, although I did not know that at the time. The
+  reason I moved on to Chrome is boring and practical: Firefox is a few
+  percent of the web. If a site decides to get strict about Firefox-shaped
+  clients, a scraper pretending to be one has nowhere to go. Most of the
+  world looks like Chrome, so a Chrome profile is the one that actually gets
+  used.
 </p>
 
-<h2>There is no "Chrome's extension order"</h2>
-
-<p>
-  Firefox sends the same extension order on every connection. Chrome draws a
-  new one each time. Capture it six times and you get six orders, which means
-  the target is not a sequence to copy but a distribution to reproduce.
-</p>
-
-<p>
-  Not quite uniformly, though. Chrome pins one extension at each end of the
-  list, and both of them are GREASE.
-</p>
-
-<div class="note">
-  <span class="lbl">GREASE</span>
+<div class="tldr">
+  <span class="lbl">TL;DR</span>
   <p>
-    Generate Random Extensions And Sustain Extensibility, RFC 8701. Sixteen
-    reserved values following the pattern <code>0x0A0A</code>,
-    <code>0x1A1A</code> … <code>0xFAFA</code>, which clients send on purpose
-    in their cipher lists, extension lists, supported groups and ALPN.
+    Chrome draws a new TLS extension order on every single connection, with
+    one GREASE extension pinned at each end. My Firefox profile was a list of
+    constants, which is the wrong shape for that, so the design had to change.
   </p>
   <p>
-    It is a vaccine against ossification. If some middlebox hardcodes "I know
-    every valid extension" and breaks on an unknown one, you want to find
-    that out continuously, not on the day you ship a real new extension.
-    Chrome invented it for exactly that reason, and it has to be stripped
-    before computing JA3 or JA4 or the fingerprint would change every
-    connection.
+    It now matches a real Chrome 155 on every fingerprint I can measure. And
+    one site still refuses it, which cost me a day and turned out not to be
+    about fingerprints at all.
   </p>
 </div>
 
-<p>
-  So Chrome's hello is: a GREASE extension, eighteen real ones in a drawn
-  order, another GREASE extension. Twenty in total. Reproducing that needs
-  a per-connection draw, not a list.
-</p>
-
-<h2>The one-in-sixteen bug</h2>
+<h2>Six captures, six different hellos</h2>
 
 <p>
-  The first version drew each pinned GREASE value independently. Which is
-  fine fifteen times out of sixteen, and on the sixteenth both draws return
-  the same value &mdash; and now the hello has two extensions of the same
-  type.
+  Same procedure as before: local TLS server, self-signed certificate, open
+  it in Chrome, dump the raw bytes. I did it six times because I had done it
+  five times for Firefox and five had been enough.
 </p>
 
 <p>
-  That is an outright RFC 8446 violation ("there MUST NOT be more than one
-  extension of the same type"), and it has a second tell that is worse,
-  because it is quiet: a hello one byte shorter than any real capture. A
-  conforming server may reject it. A fingerprinting service will just record
-  it.
+  Then I diffed capture one against capture two expecting the handful of
+  fields that have to change, and got a wall of differences instead.
+</p>
+
+<p class="fail">
+  Not the payloads. The extensions were in a different order.
+</p>
+
+<p>
+  Six captures, six orders, no repeats. There is no "Chrome's extension
+  order" to copy. The thing I had built the entire Firefox profile around
+  &mdash; a fixed sequence you can assert byte-identity against &mdash; does
+  not exist here.
+</p>
+
+<p>
+  Except for two of them. Positions one and twenty never move, and the
+  extensions sitting in them are not real extensions at all.
+</p>
+
+<h2>The two that never move</h2>
+
+<p>
+  They are GREASE, and if you have not run into it: GREASE is RFC 8701,
+  "Generate Random Extensions And Sustain Extensibility". There are sixteen
+  reserved values following the pattern <code>0x0A0A</code>,
+  <code>0x1A1A</code>, up to <code>0xFAFA</code>, and clients send them on
+  purpose, as garbage, scattered through their cipher lists and extension
+  lists.
+</p>
+
+<p>
+  The reason is ossification. If some middlebox hardcodes "I know every valid
+  extension" and falls over on an unknown one, you want to discover that
+  continuously, on ordinary traffic, instead of on the day you ship a real
+  new extension and a chunk of the internet stops working. Chrome invented
+  this and Chrome uses it the most, which is why it has one at each end: the
+  first and last positions are exactly where a lazy parser is most likely to
+  be special-cased.
+</p>
+
+<p>
+  Firefox, for what it is worth, sends none at all in either list. Two
+  browsers, opposite policies, both perfectly conformant. This is the whole
+  reason fingerprinting works.
+</p>
+
+<p>
+  So Chrome's hello is: GREASE, eighteen real extensions in a drawn order,
+  GREASE. And GREASE has to be stripped before computing JA3 or JA4, or the
+  fingerprint would change on every connection and be useless.
+</p>
+
+<h2>A bug that happens one time in sixteen</h2>
+
+<p>
+  My first version drew each of the two pinned values independently. Sixteen
+  possible values, two draws. You can see it coming; I did not.
+</p>
+
+<p>
+  Fifteen times out of sixteen it is fine. On the sixteenth, both draws
+  return the same value and the hello now contains two extensions of the same
+  type, which RFC 8446 says outright must not happen. A strict server can
+  reject it. Worse, a fingerprinting service will not reject it &mdash; it
+  will just record a client that no browser produces.
+</p>
+
+<p>
+  It has a second tell that is quieter and that I only noticed because of the
+  byte-identity test: a duplicate makes the hello one byte shorter than any
+  real capture. One byte. That is the kind of thing you ship forever if you
+  are eyeballing diffs instead of asserting lengths.
 </p>
 
 <p>
   The fix is to draw the second value from the fifteen that are not the
-  first. My first attempt at that was a redraw loop, which hung forever the
-  moment a test pinned the random number generator to a fixed value. Bounded
-  rejection sampling, 64 attempts, then fail loudly.
+  first. My first attempt at <em>that</em> was a redraw loop, which worked
+  fine until a test pinned the random number generator to a constant and the
+  loop span forever. It is bounded rejection sampling now, 64 tries, then
+  fail loudly.
 </p>
 
-<div class="note cool">
-  <span class="lbl">What this did to the design</span>
+<h2>What this did to the design</h2>
+
+<p>
+  Firefox's profile holds <code>EXTENSIONS</code>: a list of
+  <code>(type, bytes)</code>. The emitter walks it. Done.
+</p>
+
+<p>
+  Chrome needs <code>extension_order(ctx)</code>, a function, called once per
+  connection with a context that holds that connection's random draws. So the
+  field had to become "either a list or a callable". Then the cipher suites
+  needed the same treatment, because Chrome puts a GREASE value at the front
+  of those too. Then several payload builders.
+</p>
+
+<div class="note">
+  <span class="lbl">The part I would tell a younger me</span>
   <p>
-    Firefox's profile holds <code>EXTENSIONS</code>, a list. Chrome's needs
-    <code>extension_order(ctx)</code>, a function. So the field had to become
-    "either a list or a callable", the cipher suites too, and several payload
-    builders with it.
-  </p>
-  <p>
-    The abstraction was not correct until a second browser existed to break
-    it. One sample is not a design input &mdash; it is an example you have
-    mistaken for a design input, and you only find out when the second one
-    arrives.
+    I thought I had designed a profile format. What I had actually done was
+    write down one browser and mistake it for a format. There was no way to
+    know that from one browser, and no amount of care would have revealed it
+    &mdash; a second example is the only thing that finds this class of
+    mistake.
   </p>
 </div>
 
-<h2>Nothing above TLS matches either</h2>
+<h2>Nothing above TLS matched either</h2>
 
 <p>
-  I assumed the HTTP/2 layer would be free. It is the same protocol; how
-  different can two implementations be? Captured side by side:
+  Having fixed the handshake I assumed HTTP/2 would be free. It is the same
+  RFC. How different can two implementations be?
 </p>
+
+<p>Captured side by side:</p>
 
 <table>
   <tr><th>HTTP/2 opening</th><th>Firefox 157</th><th>Chrome 155</th></tr>
@@ -123,17 +185,17 @@
 </table>
 
 <p>
-  Not one field matches, and they do not even send the same settings:
-  Firefox sends number 5 where Chrome sends number 6. There is a fingerprint
-  built from exactly this &mdash; Akamai's &mdash; and it is as distinctive
-  as the TLS one.
+  Not one field is the same. They do not even send the same settings &mdash;
+  Firefox sends number 5 where Chrome sends number 6 instead. There is a
+  fingerprint built from exactly this, Akamai's, and it is as distinctive as
+  the TLS one and cheaper to collect.
 </p>
 
-<h2>Verified against a real Chrome, field by field</h2>
+<h2>Checking it against a real Chrome</h2>
 
 <p>
-  A real Chrome 155 against the same service, compared value by value rather
-  than by eye:
+  At this point I stopped trusting my own eye and compared values. A real
+  Chrome 155 and my client, same service, field by field:
 </p>
 
 <pre><code>ja4                  <span class="g">identical</span>
@@ -145,62 +207,102 @@ HTTP/2 header order  <span class="g">identical</span>
 HEADERS priority     <span class="g">identical</span>   <span class="c">weight 256, exclusive, depends_on 0</span></code></pre>
 
 <p>
-  <code>ja4_r</code> is the informative one: the raw sorted form with every
-  cipher, extension and signature algorithm spelled out rather than hashed.
-  It matches. So does the <code>trust_anchors</code> payload, 186 bytes byte
-  for byte, and the greased ECH length, 144, which is one of the three sizes
-  this profile draws from.
+  <code>ja4_r</code> is the one I care about: it is the raw form, with every
+  cipher, extension and signature algorithm spelled out instead of hashed, so
+  a match is not a hash collision, it is the actual lists agreeing.
 </p>
 
 <div class="note">
-  <span class="lbl">A thing I did and then undid</span>
+  <span class="lbl">Something I did that was simply wrong</span>
   <p>
-    That 186-byte <code>trust_anchors</code> payload: I first wrote it from
-    my own idea of what the structure should contain. It was invented. Not
-    wrong-in-a-detail &mdash; fabricated, 186 bytes of plausible-looking
-    structure that no browser ever sent.
+    Chrome sends an extension called <code>trust_anchors</code> with a
+    186-byte payload. I wrote that payload from my own idea of what the
+    structure ought to contain. Not a wrong detail &mdash; invented, 186
+    bytes of plausible-looking nonsense that no browser has ever sent.
   </p>
   <p>
-    It was replaced with the bytes extracted from the capture, and a test now
-    asserts the two are equal. If a value is in the profile and it did not
-    come off the wire, it is decoration.
+    It passed every test I had, because every test I had was about length. It
+    is extracted from the capture now, with an assertion that the two are
+    equal. If a value is in the profile and it did not come off the wire, it
+    is decoration.
   </p>
 </div>
 
-<h2>And then yelp</h2>
+<h2>And then there was yelp</h2>
 
 <p>
-  With every measurable fingerprint matching a real Chrome, one target still
-  refused: yelp.com served the Firefox profile 5 times out of 5 and refused
-  the Chrome profile 5 out of 5. Same machine, same proxy, same headers
-  logic, interleaved rounds.
+  With everything matching, one target still refused: <code>yelp.com</code>
+  served my Firefox profile 5 times out of 5 and refused my Chrome profile 5
+  out of 5. Same machine, same proxy, same code paths, interleaved rounds so
+  a bad minute on the network would hit both.
 </p>
 
 <p>
-  That is a strong signal, so I went looking for the tell. In order:
+  That is a clean signal and I was quite pleased with it, because it meant
+  there was something real to find. Here is everything I tried, in order.
 </p>
 
-<table>
-  <tr><th>Hypothesis</th><th>Result</th></tr>
-  <tr><td><code>Cache-Control: max-age=0</code>, an artefact of capturing on reloads</td><td>removed it; no change either way</td></tr>
-  <tr><td>The 2&times;2 crossing of TLS layer against HTTP layer</td><td>confounded by construction; it could not have answered</td></tr>
-  <tr><td>The HTTP/2 frame sequence</td><td>real Chrome sends exactly our three frames</td></tr>
-  <tr><td>The locale (we send <code>en-US</code>, the capture had <code>en-MX</code>)</td><td>sent the captured locale; 0 of 3 either way</td></tr>
-  <tr><td>The drawn extension order</td><td>replayed three <em>real captured orders</em> verbatim; 0 of 2 each</td></tr>
-  <tr><td>A defect in the profile</td><td>every fingerprint matches a real Chrome 155</td></tr>
-</table>
+<h3>The reload header</h3>
 
 <p>
-  The shuffle was the best remaining idea, and it is a good one:
-  <code>ja4_r</code> and <code>peetprint</code> both sort the extension list,
-  so the wire order is the one property of the hello that none of the
-  matching hashes capture. If anything was going to be the invisible
-  difference, that was it. Replaying real captured orders killed it.
+  All six captures were taken on page reloads, because the little page I
+  serve reloads itself to trigger the capture. Chrome sends
+  <code>Cache-Control: max-age=0</code> on a reload and Firefox does not, so
+  my Chrome profile was sending it on every request &mdash; describing a
+  client that reloads every page it has ever visited. A genuine bug.
+</p>
+
+<p class="fail">Removed it. No change, either way.</p>
+
+<h3>Crossing the layers</h3>
+
+<p>
+  Next idea: run the Chrome TLS layer with the Firefox HTTP layer and vice
+  versa, and see which combination fails. Two by two, four cells, the answer
+  falls out.
+</p>
+
+<p class="fail">
+  It cannot. ALPN is negotiated inside the handshake, so "Chrome's TLS" and
+  "Chrome's HTTP/2" are not independent variables. The experiment was
+  confounded by construction and I had designed it without noticing.
+</p>
+
+<h3>The frame sequence</h3>
+
+<p>
+  Maybe a real Chrome sends some frame we do not, or in a different order. I
+  taught the capture tool to log every frame a client sends, in arrival
+  order, instead of only the ones it had a branch for.
+</p>
+
+<p class="fail">Real Chrome sends exactly our three frames, in our order.</p>
+
+<h3>The locale</h3>
+
+<p>
+  One value in the profile was deliberately not the captured one: the capture
+  came from a Mexican address and said
+  <code>en-MX,en-GB;q=0.9,…</code>, and I had changed it to
+  <code>en-US,en;q=0.9</code> as a sensible default.
+</p>
+
+<p class="fail">Sent the captured locale instead. 0 of 3 either way.</p>
+
+<h3>The shuffle</h3>
+
+<p>
+  This was my best idea and I was fairly confident. Both <code>ja4_r</code>
+  and <code>peetprint</code> <em>sort</em> the extension list before hashing
+  it. Which means the wire order is the one property of the hello that none
+  of my matching fingerprints can see. If anything was going to be the
+  invisible difference, it was the order: I draw uniformly, and maybe Chrome
+  does not.
 </p>
 
 <p>
-  I also checked whether the draw itself looked wrong, by recording the
-  position each of the eighteen shuffled extensions took across six captures:
+  I checked the distribution first, recording where each of the eighteen
+  shuffled extensions landed across the six captures:
 </p>
 
 <pre><code>psk_key_exchange_modes   [10, 6, 5, 10, 5, 6]     span 5-10
@@ -208,29 +310,35 @@ server_name              [ 8, 10, 15, 8, 12, 11]  span 8-15
 signature_algorithms     [17, 0, 17, 11, 13, 17]  span 0-17</code></pre>
 
 <p>
-  Every span is wide and the narrowest covers six positions. The draw looks
-  uniform. Six samples cannot prove that it is &mdash; but there is no
-  evidence against it, and inventing structure to fit a theory is the thing
-  a notebook exists to prevent.
+  Wide spans, nothing suspicious, though six samples cannot prove much. So I
+  tested it directly instead: replay three <em>real captured orders</em>
+  verbatim, no drawing at all.
 </p>
+
+<p class="fail">0 of 2 each. The order is not it.</p>
 
 <h2>The answer was in a sentence I had already been given</h2>
 
 <p>
-  Before all of that, I had asked whether the page loaded in a real Chrome on
-  the same machine. The answer came back: <em>"the page comes up in Chrome,
-  it verifies and loads."</em>
+  Before any of that, I had asked whether the page loaded in a real Chrome on
+  the same machine. The answer came back, in Spanish: <em>"the page comes up
+  in Chrome, it verifies and loads."</em>
 </p>
 
 <p>
-  I read that as <em>no challenge</em>, and spent the rest of the day on the
-  difference between a browser that sails through and clients that do not.
+  I read that as <em>no challenge, it just loads</em>, and spent the rest of
+  the day on the difference between a browser that sails through and clients
+  that do not.
 </p>
 
 <p>
-  <strong>"It verifies."</strong> If a verification screen appears before the
-  page, then a real Chrome is challenged too and gets through by running the
-  JavaScript. Every observation then fits, with nothing left to explain:
+  <strong>"It verifies."</strong>
+</p>
+
+<p>
+  If a verification screen appears before the page, a real Chrome is being
+  challenged too, and gets through by running the JavaScript. Then everything
+  fits and there is nothing left to explain:
 </p>
 
 <pre><code>real Chrome          challenged, solves it, loads
@@ -239,50 +347,42 @@ curl_cffi Chromium   challenged, cannot solve it, 403
 our Firefox          <span class="g">not challenged</span>, 200</code></pre>
 
 <p>
-  There is no tell. The profile is correct. yelp challenges Chromium-shaped
-  clients and serves Firefox-shaped ones, and a JavaScript challenge is a
-  boundary no fingerprint crosses &mdash; a real browser passes it by
-  executing the script, which is a different capability, not a better
-  disguise.
+  There is no tell. The profile is fine. yelp challenges Chromium-shaped
+  clients and serves Firefox-shaped ones, and a JavaScript challenge is the
+  wall every fingerprint hits &mdash; a browser passes it with a capability I
+  do not have, not with a better disguise.
 </p>
 
 <p>
-  I have not independently watched that verification screen appear, so I am
+  I have not watched that verification screen with my own eyes, so I am
   calling this the explanation that fits rather than the confirmed one.
 </p>
 
-<div class="note">
-  <span class="lbl">The lesson, which is not technical</span>
-  <p>
-    Six hypotheses, each properly tested and properly eliminated, all
-    downstream of misreading one word in a one-line report from the person
-    holding the browser.
-  </p>
-  <p>
-    The eliminations were not wasted &mdash; the profile is now verified
-    against a real Chrome field by field, which it was not before. But the
-    question they answered was one I invented. Measuring carefully in the
-    wrong direction is still the wrong direction, and the cheap guard
-    against it was one clarifying question I did not ask.
-  </p>
-</div>
+<p>
+  The eliminations were not wasted. The profile is now verified against a
+  real Chrome field by field, which it was not before, and five things that
+  could have been wrong are known not to be. But the question they answered
+  was one I invented by misreading one word, and the guard against that was
+  a single clarifying question I did not ask. That was the most expensive
+  mistake of the whole project and it was not a technical one.
+</p>
 
 <div class="src">
   <h3>From the repository</h3>
   <ul>
-    <li><code>fixtures/chrome-1.hex</code> … <code>chrome-6.hex</code> &mdash; the six captures behind the shuffle analysis</li>
-    <li><code>pybrws/profiles/chrome155.py</code> &mdash; the drawn order, the pinned GREASE pair, the greased lists</li>
-    <li><code>pybrws/emitter.py</code> &mdash; <code>ctx.grease(slot)</code> and the per-connection draws</li>
-    <li><code>tests/test_chrome_profile.py</code> &mdash; including the byte-identity test on <code>trust_anchors</code></li>
-    <li><code>NOTEBOOK.md</code> &mdash; the eliminations in full, with what each one does and does not establish</li>
+    <li><code>fixtures/chrome-1.hex</code> … <code>chrome-6.hex</code> &mdash; the six captures</li>
+    <li><code>pybrws/profiles/chrome155.py</code> &mdash; the drawn order and the pinned GREASE pair</li>
+    <li><code>pybrws/emitter.py</code> &mdash; <code>ctx.grease(slot)</code>, memoised per connection</li>
+    <li><code>tests/test_chrome_profile.py</code> &mdash; including the <code>trust_anchors</code> byte-identity test</li>
+    <li><code>NOTEBOOK.md</code> &mdash; the eliminations in full, with what each does and does not establish</li>
   </ul>
 </div>
 
 <footer class="end">
   <p>
-    Part two of three. Next:
-    <a href="quic.html">QUIC, where the same browser plays by different rules</a>.
-    Or back to <a href="firefox.html">part one</a>.
+    Part two of three. Next: <a href="quic.html">QUIC, where the same browser
+    plays by different rules</a>. Or back to
+    <a href="firefox.html">part one</a>.
   </p>
 </footer>
 

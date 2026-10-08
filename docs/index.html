@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>pybrws — imitating browsers without browsers</title>
-<meta name="description" content="Three write-ups on TLS and HTTP fingerprinting, measured from packet captures: Firefox, Chrome, and QUIC.">
+<title>pybrws — making Python look like a browser</title>
+<meta name="description" content="Three write-ups on TLS and HTTP fingerprinting, measured from my own packet captures: Firefox, Chrome, and QUIC.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,64 +12,65 @@
 
 <p class="site"><b>pybrws</b></p>
 
-<h1>Imitating browsers without browsers</h1>
-<p class="sub">An HTTP client in Python where the fingerprint is a
-   parameter rather than a side effect of whichever TLS library you
-   happened to import.</p>
+<h1>Making Python look like a browser</h1>
+<p class="sub">Three write-ups about a thing I did not know existed until
+   a scraper of mine started getting 403s it should not have.</p>
 <p class="meta">Ernesto P&eacute;rez Costa &middot; October 2026</p>
 
 <p>
-  A server decides what you are from bytes you send before any HTTP exists.
-  Not your headers &mdash; the shape of your TLS handshake, and then the
-  shape of the HTTP itself. A Python client with perfect browser headers
-  announces itself as a Python client in the first packet it ever sends.
+  Short version of how this started: I had a dozen URLs to fetch once a day,
+  four of them returned 403 immediately, and copying the browser's headers
+  exactly did not help at all. It turns out a server can tell what program
+  you are from the shape of your TLS handshake, before any HTTP happens, and
+  there is nothing you can do about that from Python's <code>ssl</code>
+  module.
 </p>
 
 <p>
-  So I wrote the handshake. TLS 1.2 and 1.3 from scratch, then HTTP/1.1,
-  HTTP/2 and HTTP/3 over QUIC, with profiles for Firefox 157 and Chrome 155
-  built from my own packet captures. These three write-ups are what the
-  measuring turned up.
+  So I wrote the handshake. Then TLS 1.2 as well, then HTTP/1.1, HTTP/2, and
+  eventually HTTP/3 over QUIC, with profiles for Firefox 157 and Chrome 155
+  built out of my own packet captures. These three posts are the parts worth
+  telling, including the bits I got wrong.
 </p>
 
 <div class="posts">
 
   <a class="post" href="firefox.html">
     <span class="n">PART ONE</span>
-    <h2>Cloning a Firefox ClientHello, byte for byte</h2>
+    <h2>Making Python impersonate Firefox</h2>
     <p>
-      1,901 bytes, 70% of them a single extension. What varies between
-      captures and what must not. Why a key share cannot be copied. And the
-      afternoon I discovered my own antivirus was replacing the fingerprint
-      of every request I made.
+      1,901 bytes, 70% of them one extension I could not simply copy. Which
+      fields are allowed to vary and how I found out. And the afternoon I
+      discovered my own antivirus had been rewriting the browser's
+      fingerprint the whole time.
     </p>
   </a>
 
   <a class="post" href="chrome.html">
     <span class="n">PART TWO</span>
-    <h2>Chrome shuffles, and a question I could not answer</h2>
+    <h2>Impersonating Chrome, which never sends the same thing twice</h2>
     <p>
-      A drawn extension order, GREASE pinned at both ends, and a
-      one-in-sixteen collision that produced an invalid hello. Then six hypotheses
-      eliminated on a target that still refused us &mdash; and the answer
+      Six captures, six different extension orders, and two GREASE values
+      pinned at the ends that collide one time in sixteen. Then a day of
+      failed hypotheses on a site that still refused me, and the answer
       sitting in a sentence I had already been given.
     </p>
   </a>
 
   <a class="post" href="quic.html">
     <span class="n">PART THREE</span>
-    <h2>One browser, two fingerprinting rules</h2>
+    <h2>Firefox has two TLS fingerprints, and they disagree</h2>
     <p>
-      Firefox keeps a fixed extension order over TCP and shuffles it over
-      QUIC, because NSS and neqo are different programs. Read out of Initial
-      packets, which anyone can decrypt. Plus the three conclusions I had to
-      take back.
+      QUIC handshakes can be decrypted by anyone, with a key printed in the
+      RFC. I read my own network for a few minutes and found that Firefox
+      shuffles over QUIC and not over TCP &mdash; plus three readings I had
+      to take back.
     </p>
   </a>
 
 </div>
 
-<h2>What the client is</h2>
+<h2>The client itself</h2>
 
 <pre><code>import pybrws
 r = pybrws.get("https://example.com", profile="chrome155")</code></pre>
@@ -83,34 +84,25 @@ r = pybrws.get("https://example.com", profile="chrome155")</code></pre>
 </table>
 
 <p>
-  Built on two libraries and nothing else: <code>cryptography</code> for the
-  primitives and <code>aioquic</code> for QUIC's transport. Every byte whose
-  <em>shape</em> is a fingerprint is written here.
+  It is built on <code>cryptography</code> for the primitives and
+  <code>aioquic</code> for QUIC's transport, and nothing else. Everything
+  whose <em>shape</em> is a fingerprint is written here.
+</p>
+
+<p>
+  If you just want working requests, use
+  <a href="https://github.com/lexiforest/curl_cffi">curl_cffi</a> &mdash; it
+  links the actual libraries browsers use, and it is faster and more
+  complete than this will ever be. I wrote this to understand the problem,
+  and because when a target starts keying on something your library does not
+  reproduce, somebody has to be able to work out what.
 </p>
 
 <p>
   It does not run JavaScript, so a "checking your browser" page is out of
-  reach by design, not by accident. That boundary matters and it comes up in
-  <a href="chrome.html">part two</a>: a JavaScript challenge challenges a
-  real browser too, and the browser passes it by executing the script. What
-  a fingerprint decides is one layer earlier &mdash; whether you are sent
-  there at all.
-</p>
-
-<h2>On method</h2>
-
-<p>
-  Everything here was measured rather than recalled, and the uncomfortable
-  half of that is the retractions. Several findings in these posts are things
-  I published to my own notebook and then had to take back when more rounds
-  dissolved them, or when a column I had not thought to print turned out to
-  contain the answer.
-</p>
-
-<p>
-  They are included on purpose. A client that works is worth less than a
-  client whose author can tell you <em>why</em> it works and where the
-  evidence stops.
+  reach by design. That boundary comes up in
+  <a href="chrome.html">part two</a> and it is the honest limit of all of
+  this.
 </p>
 
 <footer class="end">
