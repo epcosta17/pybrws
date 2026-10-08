@@ -186,6 +186,12 @@ class Session:
 
         while time.monotonic() < deadline:
             frame_type, flags, stream_id, payload = self.next_frame()
+            FRAME_LOG.append({
+                "type": FRAME_NAMES.get(frame_type, "unknown(0x%02x)" % frame_type),
+                "flags": flags,
+                "stream": stream_id,
+                "length": len(payload),
+            })
 
             if frame_type == SETTINGS and not flags & FLAG_ACK:
                 # Recorded, not merely acknowledged. The values and their
@@ -248,6 +254,21 @@ class Session:
 
 
 FRAME_FINGERPRINT: dict = {}
+
+# Every frame type in RFC 9113 plus the extensions a browser uses, so an
+# unknown one is reported as unknown rather than ignored. The tool used to
+# ignore anything it had no branch for, which meant a frame type we do not
+# send could never be noticed -- and "what does the browser send that we do
+# not" is the question that matters.
+FRAME_NAMES = {
+    0x00: "DATA", 0x01: "HEADERS", 0x02: "PRIORITY", 0x03: "RST_STREAM",
+    0x04: "SETTINGS", 0x05: "PUSH_PROMISE", 0x06: "PING", 0x07: "GOAWAY",
+    0x08: "WINDOW_UPDATE", 0x09: "CONTINUATION", 0x0A: "ALTSVC",
+    0x0C: "ORIGIN", 0x10: "PRIORITY_UPDATE",    # RFC 9218
+}
+
+# Appended to in arrival order, one entry per frame the client sent.
+FRAME_LOG: list = []
 
 
 IMAGE_PAGE = (
@@ -338,12 +359,23 @@ def main() -> int:
     if frames is None:
         frames = FRAME_FINGERPRINT
     if frames:
+        frames = dict(frames)
+        frames["frame_log"] = FRAME_LOG
+        frames["frame_types_sent"] = sorted({entry["type"] for entry in FRAME_LOG})
         sidecar = Path(args.out).with_suffix(".frames.json")
         sidecar.write_text(json.dumps(frames, indent=2, sort_keys=True) + "\n",
                            encoding="utf-8")
         print("wrote " + str(sidecar))
         for key in sorted(frames):
+            if key == "frame_log":
+                continue
             print("  %-26s %s" % (key, frames[key]))
+        print()
+        print("  frames the client sent, in order:")
+        for entry in FRAME_LOG:
+            print("    %-18s stream %-3d flags 0x%02x  %d bytes"
+                  % (entry["type"], entry["stream"], entry["flags"],
+                     entry["length"]))
     print("wrote %s" % args.out)
     print()
     print(text)
