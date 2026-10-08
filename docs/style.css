@@ -1,0 +1,145 @@
+/* Shared styles for the pybrws write-ups. One stylesheet, no build step. */
+
+:root {
+  --bg: #fbfaf7;
+  --ink: #1f2228;
+  --soft: #55606e;
+  --faint: #8c96a3;
+  --rule: #e3e0d8;
+  --accent: #a8431f;
+  --blue: #2c5c84;
+  --panel: #fffefb;
+  --code-bg: #f2f0ea;
+  --sans: ui-sans-serif, "Segoe UI", system-ui, -apple-system, Helvetica, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 19px/1.68 Georgia, "Iowan Old Style", "Times New Roman", serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+main { max-width: 43rem; margin: 0 auto; padding: 58px 24px 120px; }
+
+/* --- site header ------------------------------------------------------ */
+.site {
+  font: 14px/1 var(--mono);
+  letter-spacing: .4px;
+  margin-bottom: 46px;
+}
+.site a { color: var(--faint); text-decoration: none; }
+.site a:hover { color: var(--accent); }
+.site b { color: var(--ink); font-weight: 700; }
+
+/* --- headings --------------------------------------------------------- */
+h1 {
+  font-size: 38px; line-height: 1.16; margin: 0 0 16px;
+  letter-spacing: -0.5px; font-weight: 600;
+}
+.sub { font-size: 20px; line-height: 1.5; color: var(--soft); margin: 0; font-style: italic; }
+.meta {
+  font: 13px/1.5 var(--sans); color: var(--faint);
+  margin: 22px 0 30px; letter-spacing: .3px;
+}
+
+h2 {
+  font: 600 25px/1.3 var(--sans);
+  margin: 52px 0 16px; letter-spacing: -0.2px;
+}
+h3 { font: 600 19px/1.35 var(--sans); margin: 34px 0 12px; }
+
+p { margin: 0 0 20px; }
+a { color: var(--accent); }
+em { font-style: italic; }
+strong { font-weight: 600; }
+
+ul, ol { margin: 0 0 20px; padding-left: 26px; }
+li { margin-bottom: 9px; }
+
+hr { border: 0; border-top: 1px solid var(--rule); margin: 48px 0; }
+
+/* --- code ------------------------------------------------------------- */
+code {
+  font: 15px/1.5 var(--mono);
+  background: var(--code-bg); padding: 1px 5px; border-radius: 4px;
+}
+pre {
+  font: 14px/1.72 var(--mono);
+  background: #22262e; color: #dfe3e9;
+  border-radius: 8px; padding: 18px 22px; margin: 26px 0;
+  overflow-x: auto;
+}
+pre code { background: none; padding: 0; font-size: inherit; color: inherit; }
+pre .c { color: #868d99; }
+pre .a { color: #e8a66a; }
+pre .g { color: #8fc47a; }
+
+/* --- tables ----------------------------------------------------------- */
+table {
+  width: 100%; border-collapse: collapse; margin: 26px 0;
+  font: 15px/1.5 var(--sans);
+}
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th {
+  font-size: 12px; letter-spacing: 1.2px; text-transform: uppercase;
+  color: var(--soft); font-weight: 600;
+}
+td code { font-size: 13.5px; }
+
+/* --- callouts --------------------------------------------------------- */
+.note {
+  border-left: 3px solid var(--accent);
+  background: #f6f3ec;
+  padding: 18px 22px; margin: 28px 0;
+  font-size: 17px; line-height: 1.6;
+}
+.note.cool { border-left-color: var(--blue); }
+.note p:last-child { margin-bottom: 0; }
+.note .lbl {
+  display: block; font: 700 11px/1 var(--mono);
+  letter-spacing: 1.6px; text-transform: uppercase;
+  color: var(--accent); margin-bottom: 10px;
+}
+.note.cool .lbl { color: var(--blue); }
+
+/* --- source links ----------------------------------------------------- */
+.src {
+  font: 14px/1.7 var(--sans); color: var(--soft);
+  background: var(--panel); border: 1px solid var(--rule);
+  border-radius: 8px; padding: 18px 22px; margin: 32px 0 0;
+}
+.src h3 { margin: 0 0 10px; font-size: 15px; }
+.src ul { margin: 0; padding-left: 20px; }
+.src li { margin-bottom: 5px; }
+.src code { font-size: 13px; }
+
+/* --- post list (index) ------------------------------------------------ */
+.posts { margin: 36px 0 0; }
+.post {
+  display: block; text-decoration: none; color: inherit;
+  border: 1px solid var(--rule); background: var(--panel);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px; padding: 22px 24px; margin-bottom: 16px;
+}
+.post:hover { border-color: #cfc8b8; border-left-color: var(--accent); }
+.post .n { font: 700 11px/1 var(--mono); letter-spacing: 1.6px; color: var(--accent); }
+.post h2 { font-size: 22px; margin: 11px 0 8px; }
+.post p { font-size: 16px; line-height: 1.5; color: var(--soft); margin: 0; }
+
+footer.end {
+  font: 15px/1.6 var(--sans); color: var(--soft);
+  border-top: 1px solid var(--rule); margin-top: 52px; padding-top: 22px;
+}
+
+@media (max-width: 640px) {
+  body { font-size: 18px; }
+  main { padding: 40px 20px 80px; }
+  h1 { font-size: 29px; }
+  h2 { font-size: 21px; }
+  pre { font-size: 12.5px; }
+}

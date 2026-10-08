@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>One browser, two fingerprinting rules</title>
+<meta name="description" content="Firefox keeps a fixed TLS extension order over TCP and shuffles it over QUIC, because those are two different stacks. Measured from Initial packets.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+
+<p class="site"><a href="index.html">&larr; <b>pybrws</b></a></p>
+
+<h1>One browser, two fingerprinting rules</h1>
+<p class="sub">Part three: Firefox keeps a fixed TLS extension order over
+   TCP and shuffles it over QUIC. Same browser, same version, two different
+   stacks underneath.</p>
+<p class="meta">Ernesto P&eacute;rez Costa &middot; October 2026 &middot; ~9 min</p>
+
+<p>
+  <a href="firefox.html">Part one</a> rested on a convenient fact: Firefox
+  sends its seventeen TLS extensions in the same order on every connection,
+  which makes byte-identity a well-defined goal. I had that written down as a
+  property of Firefox.
+</p>
+
+<p>
+  It is a property of Firefox <em>over TCP</em>. Over QUIC the same browser
+  draws a new order every connection, like Chrome. Here is how that turned
+  up and what else came with it.
+</p>
+
+<h2>Anyone can read a QUIC handshake</h2>
+
+<p>
+  QUIC does not run <em>over</em> TLS. It carries TLS <em>inside</em>, in
+  CRYPTO frames inside Initial packets. Those packets are encrypted &mdash;
+  with keys derived from a salt <strong>published in RFC 9001</strong>,
+  because their purpose is integrity and version negotiation, not secrecy.
+</p>
+
+<p>
+  So reading a stranger's QUIC ClientHello off the wire is not an attack, it
+  is the intended behaviour, and it takes about an afternoon:
+</p>
+
+<ol>
+  <li>Derive the initial secrets from the published salt and the
+    connection's destination id.</li>
+  <li>Remove header protection &mdash; the packet number is masked with a
+    sample of the ciphertext, which is a small chicken-and-egg you unwind in
+    a fixed order.</li>
+  <li>Decrypt the payload, parse the frames, reassemble the CRYPTO stream by
+    offset.</li>
+  <li>Out comes an ordinary ClientHello.</li>
+</ol>
+
+<p>
+  The decoder needs nothing but a crypto primitives library &mdash; there is
+  a test asserting it imports with the QUIC library hidden &mdash; which
+  matters, because a measuring instrument that depends on an implementation
+  inherits that implementation's opinions.
+</p>
+
+<h2>The finding</h2>
+
+<p>
+  First real capture: 231 UDP datagrams, 12 long-header connections, seven
+  ClientHellos recovered. Six of them carry an identical set of fifteen
+  extensions:
+</p>
+
+<pre><code>0  5  10  13  16  23  27  28  34  43  45  51  57  65037  65281</code></pre>
+
+<p>
+  …and <strong>a different order every time</strong>. Six connections, six
+  orders, no repeats. Two never move: <code>quic_transport_parameters</code>
+  then <code>encrypted_client_hello</code>, in that order, pinned at the end
+  in all six.
+</p>
+
+<p>
+  One of the six is <code>incoming.telemetry.mozilla.org</code>, which
+  nothing but Firefox contacts, and the other five share its exact transport
+  parameter sequence. So this is one client, and that client shuffles.
+</p>
+
+<p>
+  Which is the opposite of its behaviour on TCP. Firefox's QUIC stack is
+  neqo, written in Rust; its TLS-over-TCP stack is NSS, written in C. Two
+  implementations in one browser, two fingerprinting rules, and no reason
+  they should agree.
+</p>
+
+<div class="note cool">
+  <span class="lbl">The practical consequence</span>
+  <p>
+    The fixture captured an hour earlier was one sample of a distribution,
+    not a reference, and no test may assert its order. What a test
+    <em>can</em> assert is the relationship between samples: same set every
+    time, different order every time, exactly two pinned at the end. That is
+    what the test holds now.
+  </p>
+</div>
+
+<h2>Three more things QUIC changes</h2>
+
+<p><strong>Three cipher suites instead of fifteen.</strong>
+  <code>0x1301 0x1303 0x1302</code>, the TLS 1.3 suites only, because QUIC
+  forbids TLS 1.2 outright. This is the cheapest QUIC tell there is: a client
+  offering the TLS 1.2 suites over QUIC has not thought about it for one
+  second, and it costs a server nothing to notice.</p>
+
+<p><strong>Three extensions disappear.</strong>
+  <code>ec_point_formats</code>, <code>session_ticket</code> and
+  <code>signed_certificate_timestamp</code>. The first two follow from TLS
+  1.2 being unavailable. The third does not obviously follow from anything,
+  and I have it written down as an observation rather than an explanation.</p>
+
+<p><strong>The transport parameters are not sorted.</strong>
+  <code>reset_stream_at</code> (0x1d) and a GREASE id come before
+  <code>max_datagram_frame_size</code> (0x20). The QUIC library I was using
+  as an oracle sorts them. Firefox does not. Which is a whole second
+  fingerprint surface that only exists on this transport: which parameters,
+  in what order, with what values.</p>
+
+<h2>Three things I got wrong, which is the useful part</h2>
+
+<h3>1. The capture was two browsers</h3>
+
+<p>
+  The seventh connection, to <code>www.bing.com</code>, is not Firefox.
+  Eleven extensions instead of fifteen, and missing every NSS marker the
+  others have &mdash; <code>renegotiation_info</code>,
+  <code>delegated_credentials</code>, <code>status_request</code>,
+  <code>extended_master_secret</code>, <code>record_size_limit</code>. Its
+  transport parameters are <code>google_connection_options</code>,
+  <code>initial_rtt</code>, <code>google_version</code>. Chromium-shaped.
+</p>
+
+<p>
+  My first reading had all seven as one client, so the report said "7
+  distinct orders across 7 connections" and I nearly wrote down that
+  <em>the extension set varies too</em>. It does not. The sets split cleanly
+  into two clients. A capture of UDP 443 holds whatever the machine was
+  doing, which is obvious once stated and was not obvious while reading the
+  output.
+</p>
+
+<p>
+  The tool now groups by extension set before saying anything about order, so
+  a second client shows up as a second client instead of as noise inside the
+  first one's measurement.
+</p>
+
+<h3>2. Then I made the same mistake again, one report later</h3>
+
+<p>
+  I wrote that Firefox draws its GREASE transport parameter per connection,
+  "with an eight-byte one observed". It does not. <code>0xff02de1a</code>
+  appears in all six Firefox connections; the eight-byte one belongs to the
+  other client. I had mixed the two together again, in exactly the way I had
+  just finished fixing the tool to prevent.
+</p>
+
+<p>
+  And the constant is more interesting than the variation would have been. A
+  value that never changes is not greasing anything, and this one carries the
+  varint 1000, which is a plausible <code>min_ack_delay</code>. The
+  registered codepoint for that is <code>0xff04de1b</code>, one of a family
+  of <code>0xff0?de1?</code> draft codepoints &mdash; so this is most likely
+  an old draft of it that satisfies the reserved 31N+27 pattern by
+  coincidence. The tool still labels it GREASE because the formula says so,
+  and labels it as unidentified, because it is.
+</p>
+
+<h3>3. The elegant hypothesis was wrong</h3>
+
+<p>
+  One host, <code>cloudflare-ech.com</code>, has Firefox's exact extension
+  set and Firefox's pinned tail but sends <strong>three</strong> transport
+  parameters where the other five send fourteen &mdash; no flow control
+  credit at all, which is not a functioning set.
+</p>
+
+<p>
+  I had a tidy explanation ready: the host publishes a real ECH config, so
+  what I captured is the <em>outer</em> decoy hello with the working
+  parameters encrypted inside. It would have been the first real-ECH hello in
+  the project.
+</p>
+
+<p>
+  Its ECH extension is 282 bytes. The same greased length as every other
+  connection in the capture. No real ECH anywhere.
+</p>
+
+<p>
+  The guess was plausible and fitted the evidence I had and was simply wrong,
+  which is the argument for <em>printing the column</em> rather than
+  reasoning about what it would contain. What held instead was arithmetic:
+  three parameters measure about 26 bytes on the wire against 86 for
+  fourteen, a difference of 60 &mdash; and two hosts with server names of
+  equal length produced hellos of 1,900 and 1,840 bytes. Sixty, predicted
+  from the parameter count alone, confirmed by a measurement that does not
+  depend on the decoder that produced the count.
+</p>
+
+<p>
+  What Firefox is doing differently with that one host is still unknown. It
+  is one connection in six and nothing rests on it.
+</p>
+
+<div class="note">
+  <span class="lbl">And one from the writing desk</span>
+  <p>
+    I wrote the transport parameter table from memory and it was wrong where
+    it mattered: <code>0x1d</code> is <code>reset_stream_at</code>, not
+    unknown, and <code>min_ack_delay</code> is <code>0xff04de1b</code>, not
+    what I had. The IANA registry settled it in one fetch. The only reason I
+    checked at all is that the arithmetic on the GREASE pattern was cheap
+    enough to do, and it disagreed with me.
+  </p>
+</div>
+
+<h2>Why any of this matters</h2>
+
+<p>
+  If you are building an imitation, the headline is that a browser is not one
+  fingerprint. It is one fingerprint per transport, and the transports do not
+  share code, so they do not share habits. Test your HTTP/3 path separately
+  or you are shipping a client whose two halves describe different programs.
+</p>
+
+<p>
+  If you are on the detection side, the inverse: QUIC hands you a second
+  independent signal for free, legible without a key, and
+  <code>quic_transport_parameters</code> is a surface most imitation tools
+  have not got to yet. The TLS 1.2 cipher suite check alone catches anything
+  careless.
+</p>
+
+<p>
+  And for everyone: the most productive hour of this whole project was the
+  one where a tool printed a column I had not thought to ask for. Every
+  mistake above was caught by data that was already there and not being
+  shown. Print the column.
+</p>
+
+<div class="src">
+  <h3>From the repository</h3>
+  <ul>
+    <li><code>pybrws/quic.py</code> &mdash; Initial packet decryption, header unprotection, CRYPTO reassembly, the IANA parameter table</li>
+    <li><code>pybrws/quic_impersonate.py</code> &mdash; the write side</li>
+    <li><code>fixtures/reference-firefox-157-quic.hex</code> &mdash; one sample of the distribution, explicitly not a reference order</li>
+    <li><code>tests/test_read_quic.py</code> &mdash; asserts the relationship between samples, not the order</li>
+    <li><code>tests/test_quic.py</code> &mdash; includes the import test with the QUIC library hidden</li>
+  </ul>
+</div>
+
+<footer class="end">
+  <p>
+    Part three of three. Back to
+    <a href="firefox.html">Firefox</a> or
+    <a href="chrome.html">Chrome</a>.
+  </p>
+</footer>
+
+</main>
+</body>
+</html>
