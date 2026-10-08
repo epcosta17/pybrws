@@ -11,3 +11,12 @@ fixtures/*.jsonl          -text
 *.md      text eol=lf
 *.toml    text eol=lf
 *.json    text eol=lf
+
+# What the language bar should say. linguist counts bytes, and demo.ipynb
+# stores rendered page previews, so without this the repository reports
+# itself as 76% Jupyter Notebook and 23% Python -- which describes the
+# artefact's weight rather than the project.
+demo.ipynb        linguist-documentation
+presentation.html linguist-documentation
+docs/**           linguist-documentation
+
