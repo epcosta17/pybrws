@@ -27,8 +27,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import pybrws
 import pybrws.h3 as h3
+from pybrws.client import get
 
 DEFAULT_TARGETS = [
     "www.zillow.com",
@@ -50,8 +50,8 @@ def as_url(target: str) -> str:
 def over_h2(target: str, timeout: float) -> tuple[str, str]:
     """Status over TCP, and whether the response advertises h3."""
     try:
-        response = pybrws.get(as_url(target), timeout=timeout,
-                              follow_redirects=5)
+        response = get(as_url(target), timeout=timeout,
+                       follow_redirects=5)
     except Exception as exc:
         return type(exc).__name__[:14], "?"
     advertised = (response.header("alt-svc") or "")

@@ -72,8 +72,9 @@
 
 <h2>The client itself</h2>
 
-<pre><code>import pybrws
-r = pybrws.get("https://example.com", profile="chrome155")</code></pre>
+<pre><code>from pybrws.client import get
+
+r = get("https://example.com", profile="chrome155")</code></pre>
 
 <table>
   <tr><th>Layer</th><th>What is in it</th></tr>

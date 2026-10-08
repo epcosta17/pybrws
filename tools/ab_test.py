@@ -29,6 +29,7 @@ import sys
 import time
 from collections import defaultdict
 from pathlib import Path
+from urllib.parse import urljoin
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -90,7 +91,20 @@ def via_pybrws_h3(target: str, timeout: float) -> int:
     """
     import pybrws.h3 as h3
 
-    return h3.get(as_url(target), timeout=timeout).status
+    url = as_url(target)
+    response = None
+    for _ in range(MAX_REDIRECTS + 1):
+        response = h3.get(url, timeout=timeout)
+        if not 300 <= response.status < 400:
+            return response.status
+        location = response.header("location")
+        if not location:
+            return response.status
+        # A redirect may point somewhere that does not serve h3 at all, in
+        # which case the next call raises and the run records the error.
+        # That is the honest answer: the page did not arrive over h3.
+        url = urljoin(url, location)
+    return response.status
 
 
 # Keyed by arm name, which is what goes in the log, so a run with the h3 arm
@@ -108,6 +122,17 @@ PROFILES = {"pybrws-h3": "firefox157_quic"}
 
 def blocked(status) -> bool:
     return status in (403, 429, 503)
+
+
+def arrived(result) -> bool:
+    """Did the page itself come back?
+
+    Not blocked is not the same as arrived. A run that ends on a 3xx has
+    run out of redirects rather than reached anything, and counting it as
+    a success is exactly the way a block one hop later gets hidden.
+    """
+    return (isinstance(result, int) and not blocked(result)
+            and not 300 <= result < 400)
 
 
 def run(targets: list[str], rounds: int, timeout: float, pause: float) -> list[dict]:
@@ -161,7 +186,7 @@ def summarise(samples: list[dict]) -> None:
         cells = {}
         for client in CLIENTS:
             results = grouped.get((host, client), [])
-            served = sum(1 for r in results if isinstance(r, int) and not blocked(r))
+            served = sum(1 for r in results if arrived(r))
             cells[client] = (served, len(results), results)
 
         rendered = []
@@ -225,7 +250,7 @@ def show_history() -> None:
         sample = json.loads(line)
         cell = runs[sample["run"]][(sample["host"], sample["client"])]
         cell[1] += 1
-        if sample["status"] is not None and not blocked(sample["status"]):
+        if arrived(sample["status"]):
             cell[0] += 1
     for started in sorted(runs):
         print(started)
