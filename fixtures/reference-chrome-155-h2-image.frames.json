@@ -1,0 +1,28 @@
+{
+  "connection_window_update": 15663105,
+  "first_stream_id": 1,
+  "headers_flags": 37,
+  "headers_priority": {
+    "dependency": 0,
+    "exclusive": true,
+    "weight": 256
+  },
+  "settings": [
+    [
+      1,
+      65536
+    ],
+    [
+      2,
+      0
+    ],
+    [
+      4,
+      6291456
+    ],
+    [
+      6,
+      262144
+    ]
+  ]
+}

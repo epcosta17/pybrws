@@ -52,12 +52,18 @@ def merge(base: Headers, overrides: Overrides) -> list[tuple[str, str]]:
     return merged
 
 
-def insert_before(headers: Headers, name: str, value: str, anchor: str):
-    """Place a header immediately before `anchor`, or at the end if absent."""
+def insert_before(headers: Headers, name: str, value: str, anchor: str | None):
+    """Place a header immediately before `anchor`, or at the end if absent.
+
+    `anchor` may be None, which means the end on purpose rather than by
+    accident: Chrome puts Cookie last over HTTP/1.1, so there is no header
+    for it to precede, and saying so beats naming one that does not exist.
+    """
     return insert_all_before(headers, name, [value], anchor)
 
 
-def insert_all_before(headers: Headers, name: str, values, anchor: str):
+def insert_all_before(headers: Headers, name: str, values,
+                      anchor: str | None):
     """Place several headers of the same name at the anchor, in order.
 
     HTTP/2 lets a browser send one `cookie` field per cookie, and Firefox
@@ -67,7 +73,7 @@ def insert_all_before(headers: Headers, name: str, values, anchor: str):
     out = []
     placed = False
     for existing, existing_value in headers:
-        if not placed and existing.lower() == anchor.lower():
+        if not placed and anchor is not None and existing.lower() == anchor.lower():
             out.extend(added)
             placed = True
         if existing.lower() != name.lower():

@@ -139,14 +139,30 @@ the suite from the binder length rather than naming it.
    produced a hello one byte shorter than any capture. A length no browser
    produces is the cheapest possible tell.
 
-   What is **not** measured and is absent rather than guessed: an image
-   subresource, a form POST by click or by script, where a cookie header sits
-   in the order, resumption, HelloRetryRequest, and anything over QUIC.
-   Asking for one raises `client.Unmeasured`, which names the missing set and
-   the tool that takes it. The HTTP/2 POST set is *derived* from the HTTP/1.1
-   one and labelled as derived: Firefox's derivation was confirmed against a
-   capture and Chrome's is not, and it is known to be missing a `priority`
-   header whose value nothing here can supply.
+   Seven more captures closed most of the rest. Measured now: a form POST by
+   script and by click -- the click adds exactly `Sec-Fetch-User` and changes
+   nothing else, which is the only way to learn whether that header depends
+   on a real user activation; an image subresource over HTTP/2, where four
+   Sec-Fetch values and Accept differ from a navigation and `priority` is a
+   bare `i`; and where a cookie goes, which is before `priority` over HTTP/2
+   and last over HTTP/1.1, so `H1_COOKIE_BEFORE` is None and
+   `headers.insert_before` now reads that as the end on purpose rather than
+   by accident.
+
+   The HTTP/2 POST set was derived and is now measured, and **the capture
+   refuted the derivation**: the real set carries `priority: u=1, i`, which
+   the HTTP/1.1 POST has no equivalent of, and a derivation cannot know where
+   a cookie goes. That is the argument for labelling a derivation as one.
+
+   Still unmeasured, and absent rather than guessed: an **image subresource
+   over HTTP/1.1**, where `--any-request` returned the document again --
+   byte-identical to the navigation capture, so there was nothing to record,
+   and a test asserts that rather than letting the file look like a
+   measurement; a **form POST over HTTP/2**, either variant; resumption;
+   HelloRetryRequest; and anything over QUIC. Asking for one raises
+   `client.Unmeasured`, which names the missing set and the tool that takes
+   it. `catch_h2.py --post form` and `--post form-click` would close the
+   form POSTs.
 
    Also machine-specific and flagged: `ACCEPT_LANGUAGE` carries the locale of
    the machine it was captured on, `en-MX,en-GB;q=0.9,...`, which is a

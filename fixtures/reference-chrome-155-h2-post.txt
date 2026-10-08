@@ -1,0 +1,23 @@
+:method: POST
+:authority: pybrws.127.0.0.1.nip.io:4443
+:scheme: https
+:path: /submit
+content-length: 17
+sec-ch-ua-platform: "Windows"
+user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36
+sec-ch-ua: "Google Chrome";v="155", "Chromium";v="155", "Not(A:Brand";v="24"
+content-type: application/json
+sec-ch-ua-mobile: ?0
+accept: */*
+origin: https://pybrws.127.0.0.1.nip.io:4443
+sec-fetch-site: same-origin
+sec-fetch-mode: cors
+sec-fetch-dest: empty
+referer: https://pybrws.127.0.0.1.nip.io:4443/
+accept-encoding: gzip, deflate, br, zstd
+accept-language: en-MX,en-GB;q=0.9,en-US;q=0.8,en;q=0.7
+cookie: pybrws_probe=1
+cookie: pybrws_second=2
+priority: u=1, i
+
+{"field":"value"}

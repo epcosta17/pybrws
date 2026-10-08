@@ -405,25 +405,78 @@ class TestWhatIsNotMeasured(unittest.TestCase):
             with self.subTest(method=method, http2=http2):
                 self.assertTrue(header_set(profile, method, kind, http2))
 
-    def test_the_derived_http2_post_drops_host_and_connection(self):
+    def test_the_http2_post_is_measured_and_not_derived(self):
+        # It used to be derived from the HTTP/1.1 set, and the capture
+        # refuted the derivation in two ways: the real set carries
+        # `priority: u=1, i`, which the HTTP/1.1 POST has no equivalent of,
+        # and a derivation cannot know where a cookie goes. Both are why the
+        # derived version was labelled as derived rather than presented as a
+        # measurement.
         names = [n for n, _ in profile.H2_POST_XHR_HEADERS]
+        self.assertIn("priority", names)
+        self.assertEqual(dict(profile.H2_POST_XHR_HEADERS)["priority"], "u=1, i")
         self.assertNotIn("host", names)
         self.assertNotIn("connection", names)
-        self.assertEqual(names, [n.lower() for n, _ in
-                                 profile.H1_POST_XHR_HEADERS
-                                 if n.lower() not in ("host", "connection")])
+        self.assertNotIn("te", names)
+        self.assertIn("te", [n for n, _ in firefox157.H2_POST_XHR_HEADERS],
+                      "Firefox sends it and Chrome does not")
 
-    def test_the_derived_set_appends_no_te(self):
-        # Firefox's derivation appends `te: trailers`; Chrome's measured
-        # HTTP/2 navigation carries none, so the derivation must not add one.
-        self.assertNotIn("te", [n for n, _ in profile.H2_POST_XHR_HEADERS])
-        self.assertIn("te", [n for n, _ in firefox157.H2_POST_XHR_HEADERS])
+    def test_a_form_post_is_a_navigation_and_a_fetch_post_is_not(self):
+        form = dict(profile.H1_POST_FORM_SCRIPT_HEADERS)
+        fetch = dict(profile.H1_POST_XHR_HEADERS)
+        self.assertEqual((form["Sec-Fetch-Mode"], form["Sec-Fetch-Dest"]),
+                         ("navigate", "document"))
+        self.assertEqual((fetch["Sec-Fetch-Mode"], fetch["Sec-Fetch-Dest"]),
+                         ("cors", "empty"))
 
-    def test_the_derived_set_does_not_invent_a_priority(self):
-        # Chrome's HTTP/2 navigation adds `priority` that its HTTP/1.1 one
-        # has no equivalent of, so an HTTP/2 POST probably carries one too --
-        # with a value nothing here can supply. Omitted rather than guessed.
-        self.assertNotIn("priority", [n for n, _ in profile.H2_POST_XHR_HEADERS])
+    def test_a_click_adds_exactly_one_header(self):
+        # The two captures were compared field by field to establish it, and
+        # this is the only way to learn whether Sec-Fetch-User depends on a
+        # real user activation.
+        script = [n for n, _ in profile.H1_POST_FORM_SCRIPT_HEADERS]
+        click = [n for n, _ in profile.H1_POST_FORM_HEADERS]
+        self.assertEqual([n for n in click if n != "Sec-Fetch-User"], script)
+        self.assertEqual(len(click) - len(script), 1)
+        self.assertEqual(click[click.index("Sec-Fetch-User") + 1],
+                         "Sec-Fetch-Dest")
+
+    def test_the_image_set_differs_from_a_navigation_where_it_should(self):
+        image = dict(profile.H2_IMAGE_HEADERS)
+        nav = dict(profile.H2_NAVIGATION_HEADERS)
+        self.assertEqual(image["sec-fetch-dest"], "image")
+        self.assertEqual(image["sec-fetch-mode"], "no-cors")
+        self.assertEqual(image["sec-fetch-site"], "same-origin")
+        self.assertEqual(image["priority"], "i", "a bare i, with no u=")
+        self.assertNotEqual(image["accept"], nav["accept"])
+        self.assertNotIn("upgrade-insecure-requests",
+                         [n for n, _ in profile.H2_IMAGE_HEADERS])
+
+    def test_the_cookie_goes_last_over_http1_and_before_priority_over_http2(self):
+        from pybrws import headers as header_tools
+
+        self.assertEqual(profile.H2_COOKIE_BEFORE, "priority")
+        self.assertIsNone(profile.H1_COOKIE_BEFORE)
+
+        placed = header_tools.insert_before(
+            profile.H1_HEADERS, "Cookie", "a=1", profile.H1_COOKIE_BEFORE)
+        self.assertEqual(placed[-1], ("Cookie", "a=1"))
+
+        placed = header_tools.insert_all_before(
+            profile.H2_NAVIGATION_HEADERS, "cookie", ["a=1", "b=2"],
+            profile.H2_COOKIE_BEFORE)
+        names = [n for n, _ in placed]
+        self.assertEqual(names[names.index("cookie") + 2], "priority")
+        self.assertEqual(names.count("cookie"), 2,
+                         "one field per cookie, as HTTP/2 allows")
+
+    def test_the_http1_image_capture_failed_and_is_not_pretended_otherwise(self):
+        # `--any-request` returned the document again over HTTP/1.1, so the
+        # file is byte-identical to the navigation capture and holds no image
+        # request. Recording it as one would have been the worst outcome.
+        navigation = (FIXTURES / "reference-chrome-155-h1.txt").read_bytes()
+        attempt = (FIXTURES / "reference-chrome-155-image.txt").read_bytes()
+        self.assertEqual(navigation, attempt)
+        self.assertIn("H1_IMAGE_HEADERS", profile.UNMEASURED)
 
     def test_the_per_request_values_are_placeholders(self):
         # Empty strings would be sent as empty headers, which is how a POST

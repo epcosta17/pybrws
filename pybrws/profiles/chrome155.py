@@ -39,6 +39,7 @@ from __future__ import annotations
 import os
 from typing import Callable
 
+from .. import headers as header_tools
 from ..keyexchange import KeyExchange
 from ..model import GREASE_DRAW
 from ..wire import u8, u16, vector
@@ -383,39 +384,94 @@ H1_POST_XHR_HEADERS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _as_http2(headers):
-    """Derive an HTTP/2 set from an HTTP/1.1 one.
+ACCEPT_IMAGE = ("image/jxl,image/avif,image/webp,image/apng,image/svg+xml,"
+                "image/*,*/*;q=0.8")
 
-    Drop Host and Connection, lower-case the names, append nothing. Firefox's
-    equivalent appends `te: trailers`; Chrome's measured HTTP/2 navigation
-    carries no `te`, so this one does not either.
+# A form POST submitted by script. A form POST is a navigation, so
+# Sec-Fetch-Mode is `navigate` and Sec-Fetch-Dest `document`, where the
+# `fetch` POST says `cors` and `empty`.
+H1_POST_FORM_SCRIPT_HEADERS: tuple[tuple[str, str], ...] = (
+    ("Host", "{authority}"),
+    ("Connection", "keep-alive"),
+    ("Content-Length", "{content_length}"),
+    ("Cache-Control", "max-age=0"),
+    ("sec-ch-ua", SEC_CH_UA),
+    ("sec-ch-ua-mobile", "?0"),
+    ("sec-ch-ua-platform", '"Windows"'),
+    ("Upgrade-Insecure-Requests", "1"),
+    ("Content-Type", "{content_type}"),
+    ("User-Agent", USER_AGENT),
+    ("Origin", "{origin}"),
+    ("Accept", ACCEPT_NAVIGATION),
+    ("Sec-Fetch-Site", "same-origin"),
+    ("Sec-Fetch-Mode", "navigate"),
+    ("Sec-Fetch-Dest", "document"),
+    ("Referer", "{referer}"),
+    ("Accept-Encoding", "gzip, deflate, br, zstd"),
+    ("Accept-Language", ACCEPT_LANGUAGE),
+)
 
-    **The derivation is not confirmed for Chrome.** Firefox's was: its derived
-    XHR set reproduces a captured HTTP/2 POST field for field. Here there is
-    only the HTTP/1.1 POST to work from, and one thing is known to be
-    missing -- Chrome's HTTP/2 navigation adds `priority: u=0, i` that its
-    HTTP/1.1 navigation has no equivalent of, so an HTTP/2 POST probably
-    carries a priority too, with a value nothing here can supply. Rather than
-    invent one, the derived set omits it and says so.
+# A real click adds exactly one header and changes nothing else, which the
+# two captures were compared field by field to establish. Firefox behaves the
+# same way, with a different anchor.
+H1_POST_FORM_HEADERS = tuple(header_tools.insert_before(
+    H1_POST_FORM_SCRIPT_HEADERS, "Sec-Fetch-User", "?1", "Sec-Fetch-Dest"))
 
-    `tools/catch_h2.py --post fetch` would settle it.
-    """
-    dropped = {"host", "connection"}
-    return [(name.lower(), value) for name, value in headers
-            if name.lower() not in dropped]
+# Measured, replacing a derivation that got two things wrong: it omitted the
+# priority header, which Chrome's HTTP/1.1 POST has no equivalent of, and it
+# could not know where a cookie goes.
+H2_POST_XHR_HEADERS: tuple[tuple[str, str], ...] = (
+    ("content-length", "{content_length}"),
+    ("sec-ch-ua-platform", '"Windows"'),
+    ("user-agent", USER_AGENT),
+    ("sec-ch-ua", SEC_CH_UA),
+    ("content-type", "{content_type}"),
+    ("sec-ch-ua-mobile", "?0"),
+    ("accept", "*/*"),
+    ("origin", "{origin}"),
+    ("sec-fetch-site", "same-origin"),
+    ("sec-fetch-mode", "cors"),
+    ("sec-fetch-dest", "empty"),
+    ("referer", "{referer}"),
+    ("accept-encoding", "gzip, deflate, br, zstd"),
+    ("accept-language", ACCEPT_LANGUAGE),
+    ("priority", "u=1, i"),
+)
 
+# An image subresource over HTTP/2. Four Sec-Fetch and Accept values differ
+# from a navigation, and `priority` is a bare `i` with no `u=`.
+H2_IMAGE_HEADERS: tuple[tuple[str, str], ...] = (
+    ("sec-ch-ua-platform", '"Windows"'),
+    ("user-agent", USER_AGENT),
+    ("sec-ch-ua", SEC_CH_UA),
+    ("sec-ch-ua-mobile", "?0"),
+    ("accept", ACCEPT_IMAGE),
+    ("sec-fetch-site", "same-origin"),
+    ("sec-fetch-mode", "no-cors"),
+    ("sec-fetch-dest", "image"),
+    ("referer", "{referer}"),
+    ("accept-encoding", "gzip, deflate, br, zstd"),
+    ("accept-language", ACCEPT_LANGUAGE),
+    ("priority", "i"),
+)
 
-# Derived, not measured. See _as_http2.
-H2_POST_XHR_HEADERS = tuple(_as_http2(H1_POST_XHR_HEADERS))
+# Where a cookie goes. Over HTTP/2 it precedes `priority`, and as with
+# Firefox there is one `cookie` field per cookie rather than one joined
+# header. Over HTTP/1.1 it is last, after Accept-Language, so there is
+# nothing for it to precede -- hence None, which `insert_before` reads as the
+# end.
+H2_COOKIE_BEFORE = "priority"
+H1_COOKIE_BEFORE = None
 
-# Measured for neither protocol, and absent on purpose rather than guessed:
-# an image subresource, a form POST submitted by a click, a form POST
-# submitted by script, and where a cookie header sits in the order. Firefox
-# has all four because they were captured; asking for one of them here
-# raises, which is better than a plausible invention.
+# Still not measured, and absent rather than guessed: an image subresource
+# over HTTP/1.1, and a form POST over HTTP/2 either way.
+#
+# The HTTP/1.1 image capture was attempted and failed -- `--any-request`
+# returned the document again, byte-identical to the navigation capture, so
+# there was nothing to record. Over HTTP/2 the same flag worked, which is the
+# difference between a tool that selects on sec-fetch-dest and one that
+# happened to see the document first.
 UNMEASURED = (
-    "H1_IMAGE_HEADERS", "H2_IMAGE_HEADERS",
-    "H1_POST_FORM_HEADERS", "H2_POST_FORM_HEADERS",
-    "H1_POST_FORM_SCRIPT_HEADERS", "H2_POST_FORM_SCRIPT_HEADERS",
-    "H1_COOKIE_BEFORE", "H2_COOKIE_BEFORE",
+    "H1_IMAGE_HEADERS",
+    "H2_POST_FORM_HEADERS", "H2_POST_FORM_SCRIPT_HEADERS",
 )
