@@ -3076,3 +3076,54 @@ comparison should say that value is a Windows reading.
 on 2026-10-07. The middlebox's extension and signature-algorithm set is a
 stock OpenSSL client's, which confirms that diagnosis from a dataset that
 had nothing to do with it.
+
+---
+
+## 2026-10-08 — Headed Chrome sends an extension headless Chrome does not
+
+Ran this machine's Chrome headless against thumbprint's probe. The first
+attempt was scored wrong by the script, which did not pin the transport:
+Chrome answered over HTTP/3 and the comparison table held TCP values. The
+run was still decisive, because the QUIC values for both arms were in hand.
+
+    headed, by hand   q13d0313h3_55b375c5d22e_eb028bd37c08    13 extensions
+    headless          q13d0312h3_55b375c5d22e_178839b6cec1    12 extensions
+
+Three hashes, computed from the raw lists and checked against three
+independent measurements:
+
+| list | hash | reported by |
+|---|---|---|
+| headless, as measured | `178839b6cec1` | this run |
+| headless **+ 0x12e0** | `eb028bd37c08` | the headed browser |
+| headless + 0x0029 | `b0954bf1abdf` | the catalogue's resumption capture |
+
+All three reproduce. So the single extension is the entire difference
+between this machine's headed and headless Chrome, and the third row
+confirms the arithmetic on a list neither arm produced.
+
+Same binary, same version, same field trial state, same address, minutes
+apart. The only variable was the window. And it is consistent with the
+catalogue: 110 headless Chrome sessions across three operating systems,
+`0x12e0` in none of them.
+
+### What is not yet established, and it changes the value
+
+Two mechanisms fit. Headless may omit the extension as such, which would
+make its absence a tell readable at the ClientHello with no JavaScript
+anywhere. Or the extension sits behind a randomised field trial and
+headless does not join trials -- in which case only a fraction of headed
+Chromes carry it, presence implies not-headless, and absence implies
+nothing.
+
+`--disable-field-trial-config` turns the trials off without touching the
+window, so a windowed arm with trials off separates them. The script now
+runs the four-cell matrix and pins the transport by using the h2 and h3
+origins rather than hoping. Not run yet.
+
+**Either answer is good for this client and that is worth noticing.** The
+profile sends `0x12e0`, so it presents as a headed Chrome rather than the
+headless population that every scraper and every published capture set
+draws from. If a detector keys on this, it keys in our favour. A library
+whose Chrome profile was built from a headless capture would be on the
+wrong side of it.

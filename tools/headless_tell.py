@@ -1,33 +1,40 @@
 #!/usr/bin/env python3
-"""Does headless Chrome present a different ClientHello than headed Chrome?
+"""Why does headed Chrome send extension 0x12e0 and headless Chrome not?
 
-thumbprint.me's catalogue holds 110 Chrome sessions across 40 versions and
-three operating systems, and every one of them is headless. Extension
-0x12e0 appears in none of them. It appears in this machine's headed Chrome
-155, and in this project's chrome155 profile, which was built from captures
-of that browser.
+Established already, on this machine, with the binary, the version and the
+network held constant:
 
-Two explanations fit, and only one of them is interesting:
+    headed, by hand      q13d0313h3_55b375c5d22e_eb028bd37c08
+    headless             q13d0312h3_55b375c5d22e_178839b6cec1
 
-  * headless Chrome omits 0x12e0, which would make it a TLS-level tell for
-    headless -- readable before any HTTP, with no JavaScript involved; or
-  * this install joined a randomised field trial that fresh CI containers
-    do not, and the extension has nothing to do with headless.
+and the second list plus 0x12e0 hashes to the first exactly, so the single
+extension is the whole difference. thumbprint's catalogue holds 110 Chrome
+sessions, all headless, and none carries it.
 
-The difference is decidable on one machine, because everything else is held
-constant: same binary, same version, same profile directory, same field
-trial state, same network. Run the same browser headless and look.
+Two mechanisms fit that, and they are worth different amounts:
 
-    python tools/headless_tell.py
-    python tools/headless_tell.py --headed    # opens a window, for contrast
+  * headless omits the extension as such, which makes its absence a
+    headless tell at the ClientHello, readable with no JavaScript; or
+  * the extension sits behind a randomised field trial, and headless simply
+    does not join trials. Then only some headed Chromes send it, presence
+    implies not-headless, and absence implies nothing at all.
 
-The headed value this is compared against came from loading thumbprint.me
-in Chrome by hand, so it is not re-measured here.
+`--disable-field-trial-config` separates them, because it turns the trials
+off without touching the window. Four arms, one machine, one variable each:
+
+    python tools/headless_tell.py                  # the two new arms
+    python tools/headless_tell.py --arms all       # all four, opens windows
+    python tools/headless_tell.py --transport quic
+
+A headed arm opens a real window and closes it again. The transport is
+pinned, because the first version of this script did not and Chrome
+answered over HTTP/3 against a table of TCP values.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -37,7 +44,12 @@ import sys
 import tempfile
 from pathlib import Path
 
-PROBE = "https://thumbprint.me/api/v1/probe"
+# Separate origins, so the transport is chosen by the URL rather than hoped
+# for. thumbprint serves h2 and h3 on these names respectively.
+ORIGINS = {
+    "tcp": "https://h2.thumbprint.me/api/v1/probe",
+    "quic": "https://h3.thumbprint.me/api/v1/probe",
+}
 
 CANDIDATES = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -45,12 +57,23 @@ CANDIDATES = [
     os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
 ]
 
-# Measured by hand in a real Chrome window on this machine, and by
-# tools/ja4.py from the profile built out of its captures. Identical.
-HEADED = "t13d1518h2_8daaf6152771_4980c97edce0"
-OURS = "t13d1518h2_8daaf6152771_4980c97edce0"
-# What every headless Chrome 155 in thumbprint's catalogue presents.
-CATALOGUE = "t13d1517h2_8daaf6152771_cb7bf5808d99"
+# Measured, not computed here. The headed rows came from loading the site in
+# a Chrome window by hand; the catalogue rows are thumbprint's own captures.
+KNOWN = {
+    ("tcp", "headed"): "t13d1518h2_8daaf6152771_4980c97edce0",
+    ("tcp", "catalogue"): "t13d1517h2_8daaf6152771_cb7bf5808d99",
+    ("quic", "headed"): "q13d0313h3_55b375c5d22e_eb028bd37c08",
+    ("quic", "catalogue"): "q13d0312h3_55b375c5d22e_178839b6cec1",
+}
+
+# window?  trials?
+ARMS = {
+    "headless": (False, True),
+    "headless-no-trials": (False, False),
+    "headed": (True, True),
+    "headed-no-trials": (True, False),
+}
+DEFAULT_ARMS = ["headless", "headed-no-trials"]
 
 
 def find_chrome(given: str | None) -> str:
@@ -65,96 +88,115 @@ def find_chrome(given: str | None) -> str:
     raise SystemExit("could not find chrome.exe; pass --chrome")
 
 
-def run(chrome: str, headed: bool, timeout: float) -> str:
-    """Load the probe endpoint and return the page text."""
+def run(chrome: str, url: str, windowed: bool, trials: bool,
+        timeout: float) -> dict:
     profile_dir = tempfile.mkdtemp(prefix="headless-tell-")
-    command = [
-        chrome,
-        "--user-data-dir=" + profile_dir,
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--dump-dom",
-        "--virtual-time-budget=8000",
-    ]
-    if not headed:
-        command.insert(1, "--headless=new")
-    command.append(PROBE)
+    command = [chrome, "--user-data-dir=" + profile_dir,
+               "--no-first-run", "--no-default-browser-check",
+               "--dump-dom", "--virtual-time-budget=8000"]
+    if not windowed:
+        command.append("--headless=new")
+    if not trials:
+        # Chrome's own switch for "ignore the trial configuration you were
+        # handed". If the extension is gated on a trial, this drops it.
+        command.append("--disable-field-trial-config")
+    command.append(url)
 
-    print("running %s%s" % (Path(chrome).name,
-                            "" if headed else " --headless=new"),
-          file=sys.stderr)
     done = subprocess.run(command, capture_output=True, text=True,
                           timeout=timeout)
     shutil.rmtree(profile_dir, ignore_errors=True)
     if not done.stdout:
         raise SystemExit("chrome produced nothing; stderr was:\n"
                          + done.stderr[:2000])
-    return done.stdout
 
-
-def extract(page: str) -> dict:
-    """Pull the JSON back out of the DOM Chrome wrapped it in."""
-    text = re.sub(r"<[^>]+>", "", page)
-    text = (text.replace("&quot;", '"').replace("&amp;", "&")
-                .replace("&lt;", "<").replace("&gt;", ">"))
-    start = text.find("{")
-    end = text.rfind("}")
+    text = re.sub(r"<[^>]+>", "", done.stdout)
+    for entity, char in (("&quot;", '"'), ("&amp;", "&"),
+                         ("&lt;", "<"), ("&gt;", ">")):
+        text = text.replace(entity, char)
+    start, end = text.find("{"), text.rfind("}")
     if start < 0 or end < 0:
-        raise SystemExit("no JSON object in the page:\n" + text[:1000])
+        raise SystemExit("no JSON in the page:\n" + text[:1000])
     return json.loads(text[start:end + 1])
+
+
+def verdict(results: dict, transport: str) -> None:
+    headed = KNOWN[(transport, "headed")]
+    has = {name: "12e0" in (body.get("ja4_r") or "")
+           for name, body in results.items()}
+
+    print()
+    if "headed-no-trials" in has and "headless" in has:
+        if has["headed-no-trials"] and not has["headless"]:
+            print("Trials off and the window open still sends it; headless\n"
+                  "with trials on does not. So the window is the variable\n"
+                  "and 0x12e0 is a headless tell at the ClientHello --\n"
+                  "before any HTTP, with no JavaScript involved.")
+        elif not has["headed-no-trials"]:
+            print("Turning the trials off removed it from a windowed Chrome.\n"
+                  "So it is gated on a field trial, not on the window.\n"
+                  "Presence then implies the client is not headless;\n"
+                  "absence implies nothing. And this profile copies one\n"
+                  "Chrome population rather than Chrome.")
+        else:
+            print("Both arms carry it, which contradicts the earlier\n"
+                  "headless run. Read the raw lists before concluding.")
+    else:
+        print("Run both `headless` and `headed-no-trials` for a verdict.")
+
+    if results.get("headless", {}).get("ja4") == headed:
+        print("\nNote: the headless arm matched the headed value this time,\n"
+              "which the earlier run did not. Something else moved.")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--chrome", help="path to chrome.exe")
-    parser.add_argument("--headed", action="store_true",
-                        help="run with a window instead, as a control")
+    parser.add_argument("--chrome")
+    parser.add_argument("--transport", choices=["tcp", "quic"], default="quic",
+                        help="quic by default, because the headed and "
+                             "headless values already in hand were both "
+                             "measured over it")
+    parser.add_argument("--arms", nargs="+", choices=list(ARMS) + ["all"],
+                        default=DEFAULT_ARMS)
     parser.add_argument("--timeout", type=float, default=90.0)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
-    body = extract(run(find_chrome(args.chrome), args.headed, args.timeout))
+    arms = list(ARMS) if "all" in args.arms else args.arms
+    chrome = find_chrome(args.chrome)
+    url = ORIGINS[args.transport]
+    print("%s\n%s over %s\n" % (chrome, url, args.transport))
+
+    results = {}
+    for name in arms:
+        windowed, trials = ARMS[name]
+        print("  %-20s %s%s ..." % (name, "window" if windowed else "headless",
+                                    "" if trials else ", trials off"),
+              flush=True)
+        results[name] = run(chrome, url, windowed, trials, args.timeout)
+
     if args.json:
-        print(json.dumps(body, indent=2, sort_keys=True))
+        print(json.dumps(results, indent=2, sort_keys=True))
         return 0
 
-    ja4 = body.get("ja4", "?")
-    raw = body.get("ja4_r", "")
-
     print()
-    print("  %-28s %s" % ("this run", ja4))
-    print("  %-28s %s" % ("headed Chrome, by hand", HEADED))
-    print("  %-28s %s" % ("pybrws chrome155", OURS))
-    print("  %-28s %s" % ("catalogue, all headless", CATALOGUE))
-    print()
+    width = max(len(n) for n in list(results) + ["headed, by hand"]) + 2
+    print("%-*s %-38s %s" % (width, "arm", "ja4", "0x12e0"))
+    for name, body in results.items():
+        print("%-*s %-38s %s" % (width, name, body.get("ja4", "?"),
+                                 "yes" if "12e0" in (body.get("ja4_r") or "")
+                                 else "no"))
+    print("%-*s %-38s %s" % (width, "headed, by hand",
+                             KNOWN[(args.transport, "headed")], "yes"))
+    print("%-*s %-38s %s" % (width, "catalogue, headless",
+                             KNOWN[(args.transport, "catalogue")], "no"))
 
-    has_12e0 = "12e0" in raw
-    print("  0x12e0 in this run's extension list: %s"
-          % ("yes" if has_12e0 else "no"))
-    print()
+    verdict(results, args.transport)
 
-    if args.headed:
-        print("This was the headed arm, so it is the control, not the test.")
-    elif ja4 == CATALOGUE and not has_12e0:
-        print("Headless drops 0x12e0 on this machine, with the version, the\n"
-              "field trial state and the network all held constant. That\n"
-              "makes it a headless tell at the TLS layer: visible before any\n"
-              "HTTP, with no JavaScript. One machine, so it needs a second\n"
-              "before it is more than a strong lead.")
-    elif ja4 == HEADED:
-        print("Headless presents the same hello as headed, so 0x12e0 is not\n"
-              "about headless. The remaining explanation is a field trial\n"
-              "this install joined and their CI containers did not, which\n"
-              "would also mean our profile copies one Chrome population\n"
-              "rather than Chrome.")
-    else:
-        print("Neither known value. Worth reading the full --json before\n"
-              "concluding anything; the run may have differed in some other\n"
-              "way.")
-    if raw:
-        print("\n  ja4_r %s" % raw)
+    for name, body in results.items():
+        if body.get("ja4_r"):
+            print("\n  %s\n    %s" % (name, body["ja4_r"]))
     return 0
 
 
