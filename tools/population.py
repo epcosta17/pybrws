@@ -114,11 +114,22 @@ def count_of(row) -> int:
                 "total", "hits"):
         if isinstance(row.get(key), int) and not isinstance(row[key], bool):
             return row[key]
-    # Fall back to the largest integer in the row. A rank or a timestamp can
-    # outrank a count, so this is a guess and the schema dump below is the
-    # real answer when it matters.
-    found = [n for n in integers(row) if n > 0]
-    return max(found) if found else 0
+    # Deliberately no fall back to "the largest integer in the row". The
+    # first version did, and picked each fingerprint's dimension id, which
+    # is of the same magnitude as a count and is not one. Unknown is a
+    # better answer than a plausible wrong number.
+    return 0
+
+
+def sorted_by_count(counts: list[int]) -> bool:
+    """An endpoint called `top` returns its rows ranked.
+
+    So if the field we read is not non-increasing down the list, we are
+    reading the wrong field, and the service's own ordering is what says
+    so. This is the check the first version lacked.
+    """
+    present = [n for n in counts if n]
+    return all(a >= b for a, b in zip(present, present[1:]))
 
 
 def explain(row) -> None:
@@ -166,7 +177,15 @@ def main() -> int:
         explain(ranked[0])
         return 1
 
-    total = sum(count_of(r) for r in ranked) or 1
+    counts = [count_of(r) for r in ranked]
+    if not any(counts) or not sorted_by_count(counts):
+        print("\nThe field being read as a count is %s."
+              % ("missing" if not any(counts)
+                 else "not ranked, so it is not the count"))
+        explain(ranked[0])
+        return 1
+
+    total = sum(counts) or 1
     print()
 
     print("%-5s %-38s %9s %7s" % ("rank", "value", "count", "share"))
