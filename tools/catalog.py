@@ -164,6 +164,47 @@ def detail(sessions, client_filter: str, limit: int) -> None:
             break
 
 
+def wire(sessions, client_filter: str, version: str | None,
+         limit: int) -> None:
+    """Dump the raw per-capture data, unfiltered.
+
+    `fingerprints` and `ja4` are hashes, and a hash tells you two things
+    differ without telling you where. The `wire` object carries the raw
+    lists -- JA4_r and JA4_ro, the comma-separated cipher, extension and
+    signature-algorithm values -- which the JA4-shaped filter skips because
+    they contain commas. This is what a diff against our own profile needs.
+    """
+    picked = [s for s in sessions
+              if client_filter in str(s.get("client", "")).lower()
+              and (version is None
+                   or str(s.get("version", "")).startswith(version))]
+    picked.sort(key=lambda s: version_key(str(s.get("version", ""))),
+                reverse=True)
+    if not picked:
+        print("no %s session matching version %r" % (client_filter, version))
+        return
+
+    for session in picked[:limit]:
+        print("=== %s %s  %s %s ===" % (session.get("client"),
+                                        session.get("version"),
+                                        session.get("os", ""),
+                                        session.get("os_version", "")))
+        for capture in session.get("captures", []):
+            print("  transport=%s http=%s host=%s"
+                  % (capture.get("transport"), capture.get("http_version"),
+                     capture.get("host")))
+            for key in ("wire", "dims", "fingerprints"):
+                block = capture.get(key)
+                if not isinstance(block, dict):
+                    continue
+                for name in sorted(block):
+                    value = block[name]
+                    if isinstance(value, (dict, list)):
+                        value = json.dumps(value, separators=(",", ":"))
+                    print("    %-6s %-10s %s" % (key, name, value))
+            print()
+
+
 def find(sessions, wanted: str) -> None:
     hits = []
     for session in sessions:
@@ -198,6 +239,12 @@ def main() -> int:
                              "their fingerprints")
     parser.add_argument("--find", metavar="FINGERPRINT",
                         help="which sessions carry this exact value")
+    parser.add_argument("--wire", type=int, metavar="N", nargs="?", const=1,
+                        help="dump the raw capture data for N sessions of "
+                             "--client, which is where the sorted lists "
+                             "behind a hash actually live")
+    parser.add_argument("--version", help="restrict --wire to versions "
+                                          "starting with this prefix")
     args = parser.parse_args()
 
     catalog = load(args.url, args.cache, args.refresh, args.timeout)
@@ -206,6 +253,13 @@ def main() -> int:
 
     if args.find:
         find(sessions, args.find)
+        return 0
+
+    if args.wire:
+        if not args.client:
+            print("--wire needs --client")
+            return 2
+        wire(sessions, args.client.lower(), args.version, args.wire)
         return 0
 
     inventory(sessions, args.client.lower() if args.client else None)

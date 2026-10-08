@@ -392,19 +392,44 @@ ECH payload ....... <span class="a">differs</span> <span class="c">must (drawn p
   share your fingerprint:
 </p>
 
-<pre><code>TLS ClientHello ..... 29 sessions   <span class="c">firefox 152.0.5 … 156.0</span>
+<pre><code>TLS ClientHello ..... 29 sessions
 HTTP/2 settings ..... 11 sessions
 request headers ..... 10 sessions</code></pre>
 
 <p>
   So the handshake does not merely match <em>my</em> Firefox. It collides
-  with other people's Firefoxes, on other machines, across five versions,
-  and it does so at three layers independently. Two caveats I cannot
-  dissolve: the versions named stop at 156, and from this response alone I
-  cannot tell whether the catalogue has no 157 capture yet or whether 157
-  sends something different &mdash; though one fingerprint shared by five
-  versions is itself evidence that the shape does not move per release. And
-  it is one service's capture set, not the internet.
+  with other people's Firefoxes, on other machines, and it does so at three
+  layers independently.
+</p>
+
+<p>
+  Their catalogue is published, so the collision can be looked at rather
+  than trusted. 849 sessions, 133 of them Firefox across 32 versions. This
+  client's <code>ja4</code> appears in thirty of them:
+</p>
+
+<pre><code>firefox 157.0     linux
+firefox 156.0.1   windows
+firefox 156.0     windows, linux
+firefox 155.0.1   macos, windows
+firefox 155.0     linux
+firefox 154.0.1   macos, linux
+firefox 154.0     windows, linux</code></pre>
+
+<p>
+  Including a 157, which is the version this profile claims to be. And the
+  same hash on Windows, macOS and Linux &mdash; so the ClientHello carries
+  no trace of the operating system. The thing that does carry it is the TCP
+  handshake underneath, which no library writes and which reported
+  <code>Windows</code> about me correctly without being asked. If you run a
+  Windows profile from a Linux box, that is a contradiction nothing above
+  the kernel can fix.
+</p>
+
+<p>
+  Four versions, three operating systems, one fingerprint. Firefox's hello
+  does not move per release, which is the part that makes modelling it worth
+  the trouble at all.
 </p>
 
 <p>
