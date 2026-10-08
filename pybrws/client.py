@@ -67,6 +67,13 @@ def _set(profile, name: str):
 
 def header_set(profile, method: str, kind: str, http2: bool):
     """The profile's measured header list for this kind of request."""
+    if kind == "image":
+        # Measured in both profiles and, until now, unreachable: nothing in
+        # the library routed to it, so a client fetching an image sent the
+        # navigation headers. An image request differs in Accept, in all
+        # three Sec-Fetch values and in Priority, so that was a navigation
+        # claiming to be a subresource on every image a scraper pulled.
+        return _set(profile, "H2_IMAGE_HEADERS" if http2 else "H1_IMAGE_HEADERS")
     if method.upper() in ("GET", "HEAD"):
         return _set(profile, "H2_NAVIGATION_HEADERS" if http2 else "H1_HEADERS")
     if kind == "form":
@@ -133,10 +140,12 @@ def request(url: str, *, method: str = "GET", profile=firefox157,
         follow_redirects: how many redirects to follow. 0 returns the
             redirect itself, as curl does without -L.
         proxy: a proxy URL or Proxy, applied to every hop.
-        kind: for a request with a body, which header set to send. "xhr" is
-            what `fetch` produces and what an API client wants; "form" is a
-            person pressing a submit button; "form-script" is a page
-            submitting on their behalf, which omits Sec-Fetch-User.
+        kind: which header set to send. "xhr" is what `fetch` produces and
+            what an API client wants; "form" is a person pressing a submit
+            button; "form-script" is a page submitting on their behalf, which
+            omits Sec-Fetch-User; "image" is a subresource fetch, which
+            differs from a navigation in Accept, all three Sec-Fetch values
+            and Priority, and applies to a GET.
         referer: the page a browser would have come from. Defaults to the
             target's own origin, since every captured POST carries one.
         verify: check the server's certificate. Off makes the connection

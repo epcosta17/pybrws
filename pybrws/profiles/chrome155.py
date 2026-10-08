@@ -455,6 +455,36 @@ H2_IMAGE_HEADERS: tuple[tuple[str, str], ...] = (
     ("priority", "i"),
 )
 
+# A form POST over HTTP/2. A form POST is a navigation, so Accept and
+# the Sec-Fetch values are the navigation ones and `priority` is
+# `u=0, i` rather than the `u=1, i` a fetch POST carries.
+H2_POST_FORM_SCRIPT_HEADERS: tuple[tuple[str, str], ...] = (
+    ("content-length", "{content_length}"),
+    ("cache-control", "max-age=0"),
+    ("sec-ch-ua", SEC_CH_UA),
+    ("sec-ch-ua-mobile", "?0"),
+    ("sec-ch-ua-platform", '"Windows"'),
+    ("upgrade-insecure-requests", "1"),
+    ("content-type", "{content_type}"),
+    ("user-agent", USER_AGENT),
+    ("origin", "{origin}"),
+    ("accept", ACCEPT_NAVIGATION),
+    ("sec-fetch-site", "same-origin"),
+    ("sec-fetch-mode", "navigate"),
+    ("sec-fetch-dest", "document"),
+    ("referer", "{referer}"),
+    ("accept-encoding", "gzip, deflate, br, zstd"),
+    ("accept-language", ACCEPT_LANGUAGE),
+    ("priority", "u=0, i"),
+)
+
+
+# As over HTTP/1.1, a real click adds exactly `sec-fetch-user` and changes
+# nothing else -- checked field by field against both captures.
+H2_POST_FORM_HEADERS = tuple(header_tools.insert_before(
+    H2_POST_FORM_SCRIPT_HEADERS, "sec-fetch-user", "?1", "sec-fetch-dest"))
+
+
 # Where a cookie goes. Over HTTP/2 it precedes `priority`, and as with
 # Firefox there is one `cookie` field per cookie rather than one joined
 # header. Over HTTP/1.1 it is last, after Accept-Language, so there is
@@ -463,15 +493,11 @@ H2_IMAGE_HEADERS: tuple[tuple[str, str], ...] = (
 H2_COOKIE_BEFORE = "priority"
 H1_COOKIE_BEFORE = None
 
-# Still not measured, and absent rather than guessed: an image subresource
-# over HTTP/1.1, and a form POST over HTTP/2 either way.
-#
-# The HTTP/1.1 image capture was attempted and failed -- `--any-request`
-# returned the document again, byte-identical to the navigation capture, so
-# there was nothing to record. Over HTTP/2 the same flag worked, which is the
-# difference between a tool that selects on sec-fetch-dest and one that
-# happened to see the document first.
-UNMEASURED = (
-    "H1_IMAGE_HEADERS",
-    "H2_POST_FORM_HEADERS", "H2_POST_FORM_SCRIPT_HEADERS",
-)
+# One measurement is still missing, and it is absent rather than guessed: an
+# image subresource over HTTP/1.1. The capture was attempted and failed --
+# `--any-request` returned the document again, byte-identical to the
+# navigation capture, so there was nothing to record, and a test asserts the
+# two files are identical rather than letting one look like a measurement.
+# Over HTTP/2 the same flag worked, which is the difference between a tool
+# that selects on sec-fetch-dest and one that takes whatever arrived first.
+UNMEASURED = ("H1_IMAGE_HEADERS",)

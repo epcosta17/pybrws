@@ -391,11 +391,48 @@ class TestWhatIsNotMeasured(unittest.TestCase):
     def test_asking_for_one_names_it_and_says_how_to_take_it(self):
         from pybrws.client import Unmeasured, header_set
 
+        # The HTTP/1.1 image set is the one capture that failed, so it is the
+        # one that still refuses.
         with self.assertRaises(Unmeasured) as caught:
-            header_set(profile, "POST", "form", True)
+            header_set(profile, "GET", "image", False)
         message = str(caught.exception)
-        self.assertIn("H2_POST_FORM_HEADERS", message)
+        self.assertIn("H1_IMAGE_HEADERS", message)
         self.assertIn("catch_request.py", message)
+
+    def test_the_image_kind_routes_to_the_image_set(self):
+        # It was measured in both profiles and unreachable in both: nothing
+        # routed to it, so every image fetch sent navigation headers.
+        from pybrws.client import header_set
+
+        self.assertIs(header_set(profile, "GET", "image", True),
+                      profile.H2_IMAGE_HEADERS)
+        self.assertIs(header_set(firefox157, "GET", "image", True),
+                      firefox157.H2_IMAGE_HEADERS)
+        self.assertIs(header_set(firefox157, "GET", "image", False),
+                      firefox157.H1_IMAGE_HEADERS)
+
+    def test_the_form_posts_over_http2_are_measured_now(self):
+        from pybrws.client import header_set
+
+        self.assertIs(header_set(profile, "POST", "form", True),
+                      profile.H2_POST_FORM_HEADERS)
+        self.assertIs(header_set(profile, "POST", "form-script", True),
+                      profile.H2_POST_FORM_SCRIPT_HEADERS)
+
+    def test_a_form_post_carries_a_navigation_priority(self):
+        # `u=0, i` for a form POST, which is a navigation, against `u=1, i`
+        # for a fetch POST.
+        self.assertEqual(dict(profile.H2_POST_FORM_SCRIPT_HEADERS)["priority"],
+                         "u=0, i")
+        self.assertEqual(dict(profile.H2_POST_XHR_HEADERS)["priority"],
+                         "u=1, i")
+
+    def test_a_click_adds_one_header_over_http2_as_well(self):
+        script = [n for n, _ in profile.H2_POST_FORM_SCRIPT_HEADERS]
+        click = [n for n, _ in profile.H2_POST_FORM_HEADERS]
+        self.assertEqual([n for n in click if n != "sec-fetch-user"], script)
+        self.assertEqual(click[click.index("sec-fetch-user") + 1],
+                         "sec-fetch-dest")
 
     def test_the_measured_kinds_still_resolve(self):
         from pybrws.client import header_set

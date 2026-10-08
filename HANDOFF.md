@@ -154,15 +154,24 @@ the suite from the binder length rather than naming it.
    the HTTP/1.1 POST has no equivalent of, and a derivation cannot know where
    a cookie goes. That is the argument for labelling a derivation as one.
 
-   Still unmeasured, and absent rather than guessed: an **image subresource
-   over HTTP/1.1**, where `--any-request` returned the document again --
-   byte-identical to the navigation capture, so there was nothing to record,
-   and a test asserts that rather than letting the file look like a
-   measurement; a **form POST over HTTP/2**, either variant; resumption;
-   HelloRetryRequest; and anything over QUIC. Asking for one raises
-   `client.Unmeasured`, which names the missing set and the tool that takes
-   it. `catch_h2.py --post form` and `--post form-click` would close the
-   form POSTs.
+   The form POSTs over HTTP/2 are measured too, and the click adds exactly
+   `sec-fetch-user` there as well, with `priority: u=0, i` -- a navigation
+   priority, against the `u=1, i` a fetch POST carries.
+
+   **One measurement is missing: an image subresource over HTTP/1.1.** The
+   capture was attempted and `--any-request` returned the document again,
+   byte-identical to the navigation capture, so there was nothing to record.
+   A test asserts the two files are identical rather than letting one look
+   like a measurement, and `H1_IMAGE_HEADERS` stays in `UNMEASURED`. Asking
+   for it raises `client.Unmeasured`, which names it and the tool.
+   Resumption, HelloRetryRequest and QUIC are also unmeasured for Chrome.
+
+   Taking those captures exposed something older: **nothing in the library
+   routed to the image header sets.** They had been measured constants in the
+   Firefox profile since early on and were unreachable, so every image a
+   scraper fetched went out with navigation headers -- a request claiming to
+   be a document while asking for a PNG, which differs in Accept, all three
+   Sec-Fetch values and Priority. `header_set` now takes `kind="image"`.
 
    Also machine-specific and flagged: `ACCEPT_LANGUAGE` carries the locale of
    the machine it was captured on, `en-MX,en-GB;q=0.9,...`, which is a
