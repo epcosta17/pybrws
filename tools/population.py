@@ -94,13 +94,26 @@ def integers(value):
             yield from integers(inner)
 
 
+def folded(row):
+    """The row with lower-cased keys.
+
+    This service answers in PascalCase -- Key, Count, FPID, FirstSeen --
+    and the first version looked only for lower-case names, so it found
+    neither and fell back to guessing. Case is not a schema.
+    """
+    if not isinstance(row, dict):
+        return {}
+    return {str(k).lower(): v for k, v in row.items()}
+
+
 def value_of(row) -> str:
     """The fingerprint, by name if the name is one we know, else by shape."""
     if isinstance(row, str):
         return row
-    for key in ("value", "fingerprint", "ja4", "fp", "id", "name", "key"):
-        if isinstance(row.get(key), str) and row[key]:
-            return row[key]
+    flat = folded(row)
+    for key in ("key", "value", "fingerprint", "ja4", "fp", "name"):
+        if isinstance(flat.get(key), str) and flat[key]:
+            return flat[key]
     for text in strings(row):
         if JA4ISH.match(text):
             return text
@@ -108,12 +121,11 @@ def value_of(row) -> str:
 
 
 def count_of(row) -> int:
-    if not isinstance(row, dict):
-        return 0
+    flat = folded(row)
     for key in ("count", "sessions", "observations", "clients", "n",
                 "total", "hits"):
-        if isinstance(row.get(key), int) and not isinstance(row[key], bool):
-            return row[key]
+        if isinstance(flat.get(key), int) and not isinstance(flat[key], bool):
+            return flat[key]
     # Deliberately no fall back to "the largest integer in the row". The
     # first version did, and picked each fingerprint's dimension id, which
     # is of the same magnitude as a count and is not one. Unknown is a
@@ -130,6 +142,20 @@ def sorted_by_count(counts: list[int]) -> bool:
     """
     present = [n for n in counts if n]
     return all(a >= b for a, b in zip(present, present[1:]))
+
+
+def seen(row) -> tuple[str, str]:
+    """First and last observation, trimmed to the day.
+
+    Worth printing for its own sake: a fingerprint first seen months ago is
+    a population, and one first seen today might be nothing but our own
+    visit arriving in someone else's database.
+    """
+    flat = folded(row)
+    def day(key):
+        text = flat.get(key)
+        return text[:10] if isinstance(text, str) and len(text) >= 10 else "?"
+    return day("firstseen"), day("lastseen")
 
 
 def explain(row) -> None:
@@ -188,25 +214,29 @@ def main() -> int:
     total = sum(counts) or 1
     print()
 
-    print("%-5s %-38s %9s %7s" % ("rank", "value", "count", "share"))
+    print("%-5s %-38s %9s %7s  %-10s %-10s"
+          % ("rank", "value", "count", "share", "first seen", "last seen"))
     for index, row in enumerate(ranked[:args.limit], 1):
         value, count = value_of(row), count_of(row)
+        first, last = seen(row)
         mark = "*" if value in OURS else " "
-        print("%s%-4d %-38s %9d %6.2f%%"
-              % (mark, index, value, count, 100.0 * count / total))
+        print("%s%-4d %-38s %9d %6.2f%%  %-10s %-10s"
+              % (mark, index, value, count, 100.0 * count / total,
+                 first, last))
 
     wanted = args.rank or list(OURS)
     print("\nwhere the values this project presents sit:")
-    index = {value_of(r): (i, count_of(r))
+    index = {value_of(r): (i, count_of(r), seen(r))
              for i, r in enumerate(ranked, 1)}
     for value in wanted:
         label = OURS.get(value, "")
         if value in index:
-            place, count = index[value]
-            print("  %-38s rank %-5d %7d  %6.2f%%  %s"
-                  % (value, place, count, 100.0 * count / total, label))
+            place, count, (first, last) = index[value]
+            print("  %-38s rank %-4d %8d %6.2f%%  since %s  %s"
+                  % (value, place, count, 100.0 * count / total,
+                     first, label))
         else:
-            print("  %-38s not in the top %-4d %21s %s"
+            print("  %-38s not in the top %-4d %26s %s"
                   % (value, len(ranked), "", label))
 
     print("\nThe population here is whoever connects to a fingerprinting\n"
