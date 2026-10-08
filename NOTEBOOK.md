@@ -2942,3 +2942,80 @@ served here and refused to httpx over three to four interleaved rounds with
 sweep named individually, and g2 as a site that wins. The irony is not lost:
 the post arguing that a self-built oracle proves nothing was itself carrying
 a number with no oracle at all.
+
+---
+
+## 2026-10-08 — The catalogue answers both questions, and one answer is a defect
+
+`/api/v1/catalog` holds 849 sessions with client, version and OS, and the
+raw per-capture lists behind each hash. `tools/catalog.py` reads it.
+
+**Firefox: confirmed, including 157.** Our `t13d1517h2_8daaf6152771_`
+`3cbfd9057e0d` appears in thirty catalogued sessions: firefox 157.0, 156.0.1,
+156.0, 155.0.1, 155.0, 154.0.1 and 154.0, on Windows, macOS and Linux. So
+the hello does not move across four releases and carries no trace of the
+operating system — the SYN underneath carries that, and reported `Windows`
+about this machine without being asked. The caveat written into
+`docs/firefox.html` earlier today, that the identities stopped at 156, is
+answered and removed.
+
+**Chrome: the hypothesis was wrong and the defect is ours.** Their newest
+capture is 155.0.8059.39, the exact version this profile models, with 110
+Chrome sessions across 40 versions. "Their captures predate us" is dead.
+
+| | extensions in JA4_c order |
+|---|---|
+| chrome 155, fresh | `…0023,002b,002d,0033,44cd,ca34,fe0d,ff01` |
+| chrome 155, resumed | `…0023,0029,002b,002d,0033,44cd,ca34,fe0d,ff01` |
+| this profile | `…0023,002b,002d,0033,`**`12e0`**`,44cd,ca34,fe0d,ff01` |
+
+We are Chrome 155's fresh hello plus one extension. The `1518` that looked
+like a matching count was a coincidence: their eighteenth is `0029`,
+`pre_shared_key`, which makes it a resumption hello. Ours is `0x12e0`.
+
+**`0x12e0` appears zero times in 5.2 MB of catalogue**, against 2,346
+occurrences of `0x44cd` and 462 of `0xca34`. Not in any Chrome, Chromium,
+Edge, Safari or library session.
+
+**What it is not.** Not GREASE: `GREASE_DRAW` holds the sixteen reserved
+values and 0x12e0 is not one, and the service strips GREASE correctly
+elsewhere in the same response. Not the NordVPN interception either — that
+re-originated with OpenSSL's twenty-seven doubled suites, and this capture
+carries BoringSSL's fifteen with `acb858a92679`, the same original-order
+cipher hash real Chrome 155 produces. The capture is a genuine Chrome.
+
+### An instrument that should have existed from the start
+
+Every JA4 in this project until now came from a server. `tools/ja4.py`
+computes it from a profile locally, which makes a counterfactual answerable
+without a request. Its `--self-test` reproduces three values measured by
+thumbprint, two from real Chrome captures, so the arithmetic is checked
+rather than assumed.
+
+    chrome155                    t13d1518h2_8daaf6152771_4980c97edce0
+    chrome155 --drop 0x12e0      t13d1517h2_8daaf6152771_cb7bf5808d99
+
+The second is real Chrome 155's fresh hello exactly. `0x12e0` is the only
+difference there is. It also recomputes firefox157's JA4 to the value
+thumbprint measured over the network, which is a fourth independent check on
+that profile.
+
+### What this costs, and the test that decides it
+
+A fingerprint shared with nobody is worse than one that is slightly stale.
+"Chrome 155 except for an extension no Chrome sends" is a better
+discriminator for a detector than either a real Chrome or a plain Python
+client, because it is unique.
+
+But the six captures all contained it, so deleting it on the strength of
+somebody else's catalogue would be throwing away a measurement in favour of
+a consensus. Their 110 Chrome sessions are all headless, which is one
+configuration, and Chrome gates new TLS extensions behind randomised field
+trials that a fresh CI container may not join.
+
+The test is one page load: open Chrome on this machine and fetch
+`thumbprint.me/api/v1/probe`. If that browser reports `1518` with `12e0`,
+this profile is a faithful copy of this Chrome and the question becomes
+which Chrome to imitate. If it now reports `1517` without it, the extension
+came and went and the profile should follow. Either answer is actionable;
+guessing is not. Not run yet.
