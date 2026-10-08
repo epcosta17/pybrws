@@ -2667,21 +2667,73 @@ make unremarkable. The draw looks uniform. That does not prove it is -- six
 samples cannot -- but there is no evidence against it, and inventing
 structure to fit a theory is the thing this notebook exists to prevent.
 
-### So it is in the hello or the headers, and the next measurement is one visit
+### The visit happened, and every fingerprint matches
 
-By elimination the tell is in the ClientHello or the HTTP header set. The
-cheap decisive test is our Chrome's reported fingerprint against a real
-Chrome's, from the same service: ours is
+A real Chrome 155 against the same service, compared field by field rather
+than by eye:
 
-      ja4       t13d1518h2_8daaf6152771_4980c97edce0
-      ja3_hash  7e221395c71c862cf24887e7a99c8293
-      peetprint 493a80d6a4267c7820685d29d92aa946
+      ja4                 identical
+      ja4_r               identical
+      peetprint_hash      identical
+      akamai_fingerprint  identical
+      session id length   identical
+      HTTP/2 header order identical
+      HEADERS priority    identical, weight 256 exclusive depends_on 0
 
-If a real Chrome reports the same three, the tell is at the HTTP layer and
-the hello is exonerated. If any differs, there is a concrete defect to find,
-and it is one every Chromium impersonation shares.
+`ja4_r` is the informative one: the raw sorted form, every cipher, extension
+and signature algorithm spelled out. It matches. So does the `trust_anchors`
+payload, 186 bytes byte for byte, and the greased ECH payload length, 144,
+which is one of the three this profile draws from.
 
-Recording the eliminations is the point of writing this down. Four plausible
-answers are gone, and the two leading ones were gone within an hour of being
-proposed -- which is faster than they would have fallen if either had been
-written up as the answer.
+Our Chrome hello is indistinguishable from a real Chrome's on everything
+peet.ws knows how to compute. And yelp still refuses it.
+
+### Two more eliminations
+
+**The locale.** The one value deliberately changed from the capture: real
+Chrome sends `en-MX,en-GB;q=0.9,...` from a Mexican address and this profile
+sends `en-US,en;q=0.9`. Sending the captured locale instead: 0 of 3 either
+way, and Firefox 3 of 3 either way.
+
+**The shuffle**, which was the best remaining idea and is now gone. `ja4_r`
+and `peetprint` both sort the extension list, so the wire order is the one
+thing about the hello that none of the matching hashes capture -- which made
+the drawn order the obvious suspect. Replaying three *real captured orders*
+verbatim instead of drawing one: 0 of 2 each. The order is not it.
+
+### Then the answer was in a sentence I had already been given
+
+Ernesto's report was "me sale la pagina normal en chrome verifica y carga" --
+the page comes up in Chrome, it verifies and loads. I read that as *no
+challenge* and spent six hypotheses on the difference between a browser that
+passes and clients that do not.
+
+**"Verifica."** If a verification screen appears before the page, then real
+Chrome is challenged too and gets through by running the JavaScript. Every
+observation then fits with nothing left to explain:
+
+      real Chrome         challenged, solves it, loads
+      our Chrome          challenged, cannot solve it, 403
+      curl_cffi Chromium  challenged, cannot solve it, 403
+      our Firefox         not challenged, 200
+
+There is no tell. The profile is correct. yelp challenges Chromium-shaped
+clients and serves Firefox-shaped ones, and a JavaScript challenge is the
+boundary this project established hours earlier against Cloudflare: no
+fingerprint passes one.
+
+Pending his confirmation that a verification screen did appear, because
+building on a second misreading would be worse than the first.
+
+### The lesson, which is not a technical one
+
+The most expensive mistake today was misreading a one-line report from the
+person holding the browser, and not asking what an ambiguous word meant. Six
+hypotheses, each properly tested and properly eliminated, all downstream of
+treating "verifica y carga" as "loaded without a challenge".
+
+The eliminations are not wasted -- the profile is now verified against a real
+Chrome field by field, which it was not before, and five things that could
+have been wrong are known not to be. But the question they were answering was
+one I had invented. Measuring carefully in the wrong direction is still the
+wrong direction, and the cheap guard against it was one clarifying question.
