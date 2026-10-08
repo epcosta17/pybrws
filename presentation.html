@@ -112,9 +112,11 @@
 
   /* ---- proof (slide 5) ---- */
   pre {
-    font: 14.5px/1.85 var(--mono);
+    /* Sized so the real tool output fits the canvas without being
+       trimmed: 19 lines at this leading clear the footer. */
+    font: 13.5px/1.68 var(--mono);
     background: #22262e; color: #dfe3e9;
-    border-radius: 8px; padding: 20px 24px; margin: 0;
+    border-radius: 8px; padding: 18px 22px; margin: 0;
     overflow: hidden;
   }
   pre .ok { color: #8fc47a; }
@@ -369,23 +371,25 @@
 
     <div class="two">
       <div>
-        <pre>$ python tools/verify.py
+        <pre>$ python tools/verify.py --local
 
-ours   1901 bytes
-real   1901 bytes
+<span class="dim">capture</span>  reference-firefox-157-windows-fresh.hex
+<span class="dim">sni</span>      pybrws.127.0.0.1.nip.io
+ours     1901 bytes
+real     1901 bytes
 
-version ........... <span class="ok">match</span>
-cipher suites ..... <span class="ok">match</span>   <span class="dim">15, same order</span>
-extensions ........ <span class="ok">match</span>   <span class="dim">17, same order</span>
-payloads .......... <span class="ok">match</span>   <span class="dim">byte for byte</span>
+version ....... <span class="ok">match</span>
+cipher suites . <span class="ok">match</span>   <span class="dim">15, same order</span>
+extensions .... <span class="ok">match</span>   <span class="dim">17, same order</span>
+payloads ...... <span class="ok">15 of 17</span>   <span class="dim">byte for byte</span>
 
-random ............ <span class="hi">differs</span> <span class="dim">must (32 random bytes)</span>
-session id ........ <span class="hi">differs</span> <span class="dim">must (32 random bytes)</span>
-key_share ......... <span class="hi">differs</span> <span class="dim">must (fresh keypair)</span>
-GREASE ............ <span class="hi">differs</span> <span class="dim">must (drawn per connection)</span>
+random ........ <span class="hi">differs</span>   <span class="dim">must (32 fresh random bytes)</span>
+session_id .... <span class="hi">differs</span>   <span class="dim">must (32 fresh random bytes)</span>
+key_share ..... <span class="hi">differs</span>   <span class="dim">must (a real keypair)</span>
+encrypted_client_hello  <span class="hi">differs</span>   <span class="dim">must (greased payload)</span>
 
 ja4  <span class="ok">t13d1517h2_8daaf6152771_3cbfd9057e0d</span>
-     <span class="dim">same string as a real Firefox 157</span></pre>
+     <span class="dim">same string as the capture</span></pre>
       </div>
       <div>
         <div class="callout">

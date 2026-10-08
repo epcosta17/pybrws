@@ -363,10 +363,111 @@ our Firefox          <span class="g">not challenged</span>, 200</code></pre>
   mistake of the whole project and it was not a technical one.
 </p>
 
+<h2>Months later: a database of other people's Chromes</h2>
+
+<p>
+  Everything above compares my client to one browser on one machine, mine.
+  <a href="https://thumbprint.me/">thumbprint.me</a> publishes a catalogue of
+  captures it takes itself &mdash; 849 sessions, client and version and OS
+  recorded, with the raw cipher and extension lists, not just hashes. 110 of
+  them are Chrome, across 40 versions, and the newest is 155.0.8059.39: the
+  exact version this profile models.
+</p>
+
+<p>
+  My Chrome's fingerprint appears in none of them.
+</p>
+
+<p>
+  My first conclusion was that the profile was broken and I had been
+  measuring it against myself this whole time. It is a reasonable thing to
+  think at that point. It was also wrong, and what settled it was the
+  cheapest possible test: I opened thumbprint.me in a Chrome window on the
+  same machine.
+</p>
+
+<pre><code>my Chrome, in a window   t13d1518h2_8daaf6152771_4980c97edce0
+this client              <span class="g">t13d1518h2_8daaf6152771_4980c97edce0</span>
+their 110 captures       t13d1517h2_8daaf6152771_cb7bf5808d99</code></pre>
+
+<p>
+  So the profile reproduces a real Chrome exactly. What it does not
+  reproduce is <em>their</em> real Chrome, and the difference is one
+  extension: <code>0x12e0</code>, which occurs zero times in 5.2 MB of their
+  catalogue against 2,346 occurrences of <code>application_settings</code>.
+  Take it out of my list and the hash lands on their value precisely.
+</p>
+
+<h3>Two wrong turns, which is the interesting part</h3>
+
+<p>
+  Their captures are all headless, run in containers. So: headless Chrome
+  omits the extension, and its absence is a tell you can read at the
+  ClientHello with no JavaScript anywhere. That would be a genuinely useful
+  thing to know, and I wrote a script, and the script agreed with me.
+</p>
+
+<p>
+  The script launched Chrome with <code>--user-data-dir</code> on a fresh
+  temporary folder, the way every script-launched browser does. My hand
+  measurement used my normal profile. Two things differed between them, not
+  one, and the second one is where Chrome keeps its field trial state.
+</p>
+
+<p>
+  Holding that constant &mdash; same temporary profile, this install's four
+  seed files copied in, still headless:
+</p>
+
+<pre><code>fresh profile, headless      q13d0312h3_…_178839b6cec1   <span class="a">no 0x12e0</span>
+seeded profile, headless     q13d0313h3_…_eb028bd37c08   <span class="g">0x12e0</span>
+my Chrome in a window        q13d0313h3_…_eb028bd37c08   <span class="g">0x12e0</span></code></pre>
+
+<p>
+  The window was never the variable. <code>0x12e0</code> is gated behind a
+  randomised field trial that my install joined and a new profile does not.
+  And the second wrong turn was mine too: I had said a fingerprint nobody
+  else presents is worse than a stale one. It is absent from their 849
+  sessions because a container on a fresh profile never joins a trial. Their
+  Chrome is systematically the control arm. The absence described their
+  dataset, not the world.
+</p>
+
+<h3>What is actually worth taking from this</h3>
+
+<p>
+  Chrome's field trials change the ClientHello. So "Chrome 155's JA4" is not
+  a value, it is a distribution over trial arms, and the seed rotates on
+  Google's schedule rather than Chrome's release schedule.
+</p>
+
+<p>
+  If you are detecting: an allowlist of known-good Chrome fingerprints
+  cannot be maintained, because the valid set moves without a version bump.
+  If you are imitating: there is no single Chrome hello to copy, only an arm
+  to pick. And if you are building a fingerprint dataset out of containers,
+  as every published capture set I have seen does, you are collecting one
+  arm and every real install in another will read as unknown.
+</p>
+
+<p>
+  Both arms are real Chrome, and both have populations &mdash; 647
+  observations against 156 over TCP, 488 against 46 over QUIC, in the
+  service's own traffic. The common one is more common. It is also what
+  every container and every freshly installed Chrome produces, while the
+  rarer one says this install has been running long enough to pick up a
+  seed. Which of those a given detector would rather see is not something I
+  can measure from out here, so the profile keeps what was captured and the
+  choice stays explicit.
+</p>
+
 <div class="src">
   <h3>From the repository</h3>
   <ul>
     <li><code>fixtures/chrome-1.hex</code> … <code>chrome-6.hex</code> &mdash; the six captures</li>
+    <li><code>tools/ja4.py</code> &mdash; computes a profile's JA4 offline, with <code>--drop</code> for the counterfactual</li>
+    <li><code>tools/catalog.py</code>, <code>tools/population.py</code> &mdash; the catalogue and the relative frequencies</li>
+    <li><code>tools/headless_tell.py</code> &mdash; the seed-transplant experiment</li>
     <li><code>pybrws/profiles/chrome155.py</code> &mdash; the drawn order and the pinned GREASE pair</li>
     <li><code>pybrws/emitter.py</code> &mdash; <code>ctx.grease(slot)</code>, memoised per connection</li>
     <li><code>tests/test_chrome_profile.py</code> &mdash; including the <code>trust_anchors</code> byte-identity test</li>

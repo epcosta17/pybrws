@@ -3230,3 +3230,46 @@ asks it and reports where both arms sit. Worth reading with the skew in
 mind — the population is whoever visits a fingerprinting observatory, which
 is developers, scrapers and CI, not the web. It is still a measurement
 rather than an assumption. Not run yet.
+
+---
+
+## 2026-10-08 — The slide was showing output no tool had produced
+
+Slide 5 of the deck shows a `$ python tools/verify.py` transcript. That
+output was laid out by hand. `verify.py` prints `PASS`/`FAIL` lines and a
+count, it has never printed a byte comparison, and it reaches
+`tls.peet.ws` — a host this project has recorded as advertising HTTP/3 and
+not serving it, and as unreachable often enough that no demo should depend
+on it. A slide that says `$` and then shows something the command does not
+print is the same defect as a published number nobody measured.
+
+Fixed by making the claim true rather than by removing it. `verify.py
+--local` diffs the hello this client builds against the captured bytes in
+`fixtures/`, with no network: version, cipher suites, extension types,
+every extension payload, total length, and the JA4 computed by
+`tools/ja4.py`. The slide is now that command's output line for line, and
+anyone who asks to see it run gets the same thing in under a second with
+nothing external involved.
+
+Three things it caught about itself while being written.
+
+**The hostname moves the message.** Comparing a hello built for one host
+against a capture taken against another reported a 12-byte difference that
+was entirely my doing. The SNI is now read out of the capture and used to
+build ours, so the one field whose length changes the total is held equal.
+
+**A model that varies cannot be checked for byte identity.** Run against
+`chrome155` it reported five UNEXPECTED differences, all of them the
+profile working: the extension order is drawn per connection, six lists
+carry a greased value at the head, and the ECH payload length is drawn
+from the three sizes observed. Those are now declared per profile and
+reported as `drawn (reason)`. Firefox varies in nothing but the four
+fields that must.
+
+**And it printed a contradiction.** The summary row said payloads matched
+while the rows below listed payloads that differed. It is a count now, 15
+of 17, which is the more useful fact and cannot disagree with itself.
+
+The deck's rendered output was checked with a headless screenshot rather
+than by eye, which is how the overflow it introduced was found before
+anyone saw it.
