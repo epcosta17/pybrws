@@ -501,3 +501,44 @@ H1_COOKIE_BEFORE = None
 # Over HTTP/2 the same flag worked, which is the difference between a tool
 # that selects on sec-fetch-dest and one that takes whatever arrived first.
 UNMEASURED = ("H1_IMAGE_HEADERS",)
+
+
+# -- the reload artefact ------------------------------------------------------
+#
+# Every capture was taken on a reload, because the page `catch_request.py`
+# serves reloads itself to trigger the capture. Chrome sends
+# `Cache-Control: max-age=0` on a reload and Firefox does not, which the two
+# profiles show: this is real Chrome behaviour and the artefact is that all
+# six navigation-shaped captures are reloads.
+#
+# Sending it on every request describes a client that reloads every page it
+# has ever visited, so the measured sets are kept under CAPTURED_ names and
+# what goes on the wire is those sets without it.
+#
+# Tested against yelp.com, which refuses this profile 0 of 5 while serving
+# the Firefox one 5 of 5: removing this header changed nothing either way.
+# So it is a defect on its own merits and not the cause of that, and
+# presenting it as the cause would have been a convenient story rather than
+# a result.
+RELOAD_HEADER = "cache-control"
+
+
+def _without_reload(headers):
+    return tuple((name, value) for name, value in headers
+                 if name.lower() != RELOAD_HEADER)
+
+
+CAPTURED_H1_HEADERS = H1_HEADERS
+CAPTURED_H1_POST_FORM_HEADERS = H1_POST_FORM_HEADERS
+CAPTURED_H1_POST_FORM_SCRIPT_HEADERS = H1_POST_FORM_SCRIPT_HEADERS
+CAPTURED_H2_NAVIGATION_HEADERS = H2_NAVIGATION_HEADERS
+CAPTURED_H2_POST_FORM_HEADERS = H2_POST_FORM_HEADERS
+CAPTURED_H2_POST_FORM_SCRIPT_HEADERS = H2_POST_FORM_SCRIPT_HEADERS
+
+H1_HEADERS = _without_reload(H1_HEADERS)
+H1_POST_FORM_HEADERS = _without_reload(H1_POST_FORM_HEADERS)
+H1_POST_FORM_SCRIPT_HEADERS = _without_reload(H1_POST_FORM_SCRIPT_HEADERS)
+H2_NAVIGATION_HEADERS = _without_reload(H2_NAVIGATION_HEADERS)
+H2_POST_FORM_HEADERS = _without_reload(H2_POST_FORM_HEADERS)
+H2_POST_FORM_SCRIPT_HEADERS = _without_reload(H2_POST_FORM_SCRIPT_HEADERS)
+

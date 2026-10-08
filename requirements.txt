@@ -1,0 +1,14 @@
+# The dependencies live in pyproject.toml, where each one has a comment
+# saying why it is there. This file exists so that `pip install -r
+# requirements.txt` works, and holds no list of its own: a second list
+# is a second thing to keep current, and the one nobody looks at is the
+# one that goes stale.
+#
+# client  cryptography, hpack, brotli -- what the client itself needs
+# dev     httpx, aioquic, curl_cffi, jupyterlab -- baselines and the demo
+# zstd    only on Python below 3.14, where zstd is not in the stdlib
+#
+# For the exact environment the measurements were taken in, see
+# requirements-lock.txt.
+
+-e .[client,dev]

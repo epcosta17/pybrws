@@ -82,6 +82,7 @@ library in 3.14.
 
     python -m venv .venv
     .venv/bin/pip install -e ".[client,dev]"     # .venv\Scripts\pip on Windows
+    # or, the same thing: pip install -r requirements.txt
     .venv/bin/python -m unittest discover -s tests -t . -v
 
 Two things are tied to the machine the references were captured on, which was

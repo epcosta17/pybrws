@@ -14,6 +14,11 @@ a Mac and one of those is not fixable.
     python3 -m venv .venv
     .venv/bin/python -m pip install -e ".[client,dev]"
 
+`requirements.txt` does the same thing and holds no list of its own.
+`requirements-lock.txt` pins the environment the measurements were taken in,
+if something behaves differently and the question is whether a dependency
+moved.
+
 `requires-python` is 3.11, but `compression.zstd` only arrived in the standard
 library in 3.14. On anything older, add the `zstd` extra or brotli/zstd
 responses raise `ContentEncodingError` — which looks like a network problem

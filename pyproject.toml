@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "pybrws"
 version = "0.1.0"
@@ -16,3 +20,10 @@ zstd = ["zstandard"]
 # reading Initial packets takes only cryptography, because the keys come from
 # a published salt.
 dev = ["httpx[http2]", "jupyterlab", "nbclient", "aioquic", "curl_cffi"]
+
+# Without this, setuptools sees two top-level directories -- `pybrws` and
+# `fixtures` -- refuses to guess which is the package, and `pip install -e .`
+# fails. It had never worked, and the install command in README and MACOS.md
+# was written without being run.
+[tool.setuptools]
+packages = ["pybrws", "pybrws.profiles"]

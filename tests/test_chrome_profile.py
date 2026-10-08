@@ -307,11 +307,12 @@ class TestTheHeaderCaptures(unittest.TestCase):
         pseudo = [n for n, _ in captured if n.startswith(":")]
         real = [n for n, _ in captured if not n.startswith(":")]
         self.assertEqual(tuple(pseudo), profile.H2_PSEUDO_ORDER)
-        self.assertEqual([n for n, _ in profile.H2_NAVIGATION_HEADERS], real)
+        self.assertEqual([n for n, _ in profile.CAPTURED_H2_NAVIGATION_HEADERS],
+                         real)
 
     def test_every_http2_value_matches(self):
         captured = dict(self.parse("reference-chrome-155-h2.txt", False))
-        for name, value in profile.H2_NAVIGATION_HEADERS:
+        for name, value in profile.CAPTURED_H2_NAVIGATION_HEADERS:
             if name == "accept-language":
                 continue          # deliberately not the captured locale
             with self.subTest(header=name):
@@ -340,12 +341,12 @@ class TestTheHeaderCaptures(unittest.TestCase):
         # everything else capitalised. A client that normalises either way
         # gets it wrong.
         captured = self.parse("reference-chrome-155-h1.txt", True)
-        self.assertEqual([n for n, _ in profile.H1_HEADERS],
+        self.assertEqual([n for n, _ in profile.CAPTURED_H1_HEADERS],
                          [n for n, _ in captured])
 
     def test_the_http1_values_match_where_they_are_not_per_request(self):
         captured = dict(self.parse("reference-chrome-155-h1.txt", True))
-        for name, value in profile.H1_HEADERS:
+        for name, value in profile.CAPTURED_H1_HEADERS:
             if value.startswith("{"):     # filled per request
                 continue
             if name == "Accept-Language":

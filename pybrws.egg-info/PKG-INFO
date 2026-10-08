@@ -1,0 +1,17 @@
+Metadata-Version: 2.4
+Name: pybrws
+Version: 0.1.0
+Summary: A from-scratch browser-fingerprinted TLS client
+Requires-Python: >=3.11
+Provides-Extra: client
+Requires-Dist: cryptography>=50; extra == "client"
+Requires-Dist: hpack; extra == "client"
+Requires-Dist: brotli; extra == "client"
+Provides-Extra: zstd
+Requires-Dist: zstandard; extra == "zstd"
+Provides-Extra: dev
+Requires-Dist: httpx[http2]; extra == "dev"
+Requires-Dist: jupyterlab; extra == "dev"
+Requires-Dist: nbclient; extra == "dev"
+Requires-Dist: aioquic; extra == "dev"
+Requires-Dist: curl_cffi; extra == "dev"
