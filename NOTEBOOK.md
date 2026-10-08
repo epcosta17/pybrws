@@ -3176,3 +3176,57 @@ catalogue said our Chrome was broken; the browser said it was not; the
 headless run said the window explained it; the profile directory said that
 was uncontrolled. Each correction came from printing one more thing, not
 from a better idea.
+
+---
+
+## 2026-10-08 — It was a field trial, and that is a bigger fact than the extension
+
+Seed held constant, window varied, every arm headless and captured by the
+script:
+
+| arm | ja4 | 0x12e0 |
+|---|---|---|
+| fresh temporary profile | `q13d0312h3_…_178839b6cec1` | no |
+| same, carrying this install's seed | `q13d0313h3_…_eb028bd37c08` | **yes** |
+| Chrome window, normal profile, by hand | `q13d0313h3_…_eb028bd37c08` | yes |
+
+A headless Chrome with this install's four seed files produces the windowed
+value exactly. The window was never the variable. `0x12e0` is gated on a
+randomised field trial this install joined and a fresh profile does not,
+and the retraction in the entry above was the right call.
+
+**And it corrects something said earlier today.** The claim that our Chrome
+fingerprint "appears in nobody's catalogue, which is worse than being
+stale" does not hold. It is absent from all 849 sessions because that
+catalogue is built from CI containers on fresh profiles, which never join a
+trial. Their Chrome is systematically the control arm. The absence is an
+artefact of the dataset's construction, not evidence about the wild.
+
+### What this means beyond one extension
+
+Chrome's field trials change the ClientHello. So "Chrome 155's fingerprint"
+is not a value, it is a distribution over trial arms, and the seed rotates
+without any version bump.
+
+For a detector: an allowlist of known-good Chrome JA4s cannot be
+maintained, because the valid set moves on Google's schedule and not on
+Chrome's release schedule. For an impersonator: there is no "the" Chrome
+fingerprint to copy, only an arm to pick. And for anyone building a
+fingerprint dataset from containers, as thumbprint does and as every
+published capture set this project has seen does: the dataset holds only
+the control arm, so every trial-arm client looks unknown.
+
+### What to do with the profile, and the measurement it needs
+
+The arm is a property of an installation, not of a connection. A machine
+stays in its arm for the life of the seed. So this does not belong with the
+things the profile draws per request — the extension order, the GREASE
+values, the ECH payload length — it belongs chosen once.
+
+Which arm should be the default is an empirical question, and
+`/api/v1/top/{signal}` is the only instrument for it here: ranked counts
+from the clients that connect, not from their captures. `tools/population.py`
+asks it and reports where both arms sit. Worth reading with the skew in
+mind — the population is whoever visits a fingerprinting observatory, which
+is developers, scrapers and CI, not the web. It is still a measurement
+rather than an assumption. Not run yet.
