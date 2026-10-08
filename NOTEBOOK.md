@@ -2758,3 +2758,90 @@ but they were not the way to the answer and were never going to be.
 Nothing to change in the code. `docs/chrome.html` now states this as
 established rather than as the reading that fits.
 
+
+## 2026-10-08 — A host where the transport decides, measured
+
+Ernesto asked the question that undid the HTTP/3 result as it stood: if
+httpx got a 200 from the same host, what would our h3 200 have told us?
+Nothing. "Seven of seven hosts connect" is a correctness check wearing the
+clothes of a result -- it says the QUIC stack works and nothing about
+whether speaking h3 changes what a server decides.
+
+So the transport became an arm. `ab_test.py --arms pybrws pybrws-h3 httpx`,
+where the pair that can answer anything is pybrws against pybrws-h3, since
+it is the only one whose single variable is the transport. pybrws-h3
+against httpx moves fingerprint and transport together, which is the same
+confound that made the 2x2 layer crossing useless during the yelp work.
+
+### What the probe established first
+
+Of six real targets only one is usable: `www.indeed.com` answers over both.
+Three do not speak h3 at all, `www.etsy.com` has no h3 and blocks anyway,
+and `www.g2.com` advertises h3 and then does not serve it -- the second
+host in this project to do that, after tls.peet.ws. Advertising is not
+serving, and the probe decides by connecting.
+
+### The result, four interleaved rounds
+
+      host                 pybrws      pybrws-h3   httpx
+      www.indeed.com       0/4         4/4         0/4
+      cloudflare-quic.com  4/4         4/4         4/4
+      www.crunchbase.com   4/4         0/4         4/4   (control)
+
+No flapping in any cell. The httpx arm is what makes the indeed row mean
+something: the host does discriminate, so the other two arms are measuring
+a decision rather than an open door.
+
+### Two ways it could still have been nothing, both checked
+
+**The status could have been hiding a soft block.** A challenge page is a
+200. `tools/show_transport.py` now prints what each transport actually
+received:
+
+      www.indeed.com  h2   403  27,709 B  "Security Check - Indeed.com"   captcha
+      www.indeed.com  h3   200 592,001 B  "Bolsa de trabajo ... Indeed Mexico"
+
+A real page, not an interstitial.
+
+**The h3 arm had been redirected.** It ended at `mx.indeed.com`, so the
+obvious alternative was that the Mexican host is simply unprotected and the
+transport had nothing to do with it -- the TCP arm never saw the redirect
+because it was challenged first. Fetching `mx.indeed.com` directly:
+
+      mx.indeed.com   h2   403  27,708 B  "Security Check - Indeed.com"
+      mx.indeed.com   h3   200 591,241 B  the page
+
+Same host, same URL, no redirect. The alternative is dead.
+
+### And a defect the control exposed
+
+`crunchbase` reads 0/4 in the h3 column and is not blocking anything: it
+does not speak h3, so the connection is refused. The tool was scoring
+"could not connect" as "was refused", which means any host without HTTP/3
+would have printed `*** served over h2, blocked over h3 ***` -- the mirror
+image of the finding being hunted, manufactured by the instrument. Fixed:
+an arm that never received an HTTP response is reported as unreachable.
+
+That is twice now that the control has earned its place by failing in a
+way that revealed the measurement rather than the target.
+
+### What this does and does not establish
+
+It establishes that on indeed.com, our Firefox-over-QUIC presentation is
+served where our Firefox-over-TCP presentation is challenged, deterministic
+over four rounds, with a plain client challenged too.
+
+It does not establish that QUIC as such is the discriminator. The QUIC
+profile differs from the TCP one in more than transport: three cipher
+suites rather than fifteen, a drawn extension order rather than a fixed
+one, three extensions absent, and its own header set. "The transport" here
+means the whole presentation that goes with it.
+
+Nor does it establish whose fault the TCP refusal is. The decisive test is
+a real Firefox with `network.http.http3.enable` set false: if a genuine
+browser over TCP also gets the Security Check, indeed is challenging TCP
+broadly and our fingerprint is not the reason. If it sails through, the
+TCP profile has a tell that the QUIC one does not. Not run yet.
+
+One host, one machine, one address, one day.
+
