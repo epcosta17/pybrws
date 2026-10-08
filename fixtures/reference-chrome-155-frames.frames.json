@@ -1,0 +1,53 @@
+{
+  "connection_window_update": 15663105,
+  "first_stream_id": 1,
+  "frame_log": [
+    {
+      "flags": 0,
+      "length": 24,
+      "stream": 0,
+      "type": "SETTINGS"
+    },
+    {
+      "flags": 0,
+      "length": 4,
+      "stream": 0,
+      "type": "WINDOW_UPDATE"
+    },
+    {
+      "flags": 37,
+      "length": 501,
+      "stream": 1,
+      "type": "HEADERS"
+    }
+  ],
+  "frame_types_sent": [
+    "HEADERS",
+    "SETTINGS",
+    "WINDOW_UPDATE"
+  ],
+  "headers_flags": 37,
+  "headers_priority": {
+    "dependency": 0,
+    "exclusive": true,
+    "weight": 256
+  },
+  "settings": [
+    [
+      1,
+      65536
+    ],
+    [
+      2,
+      0
+    ],
+    [
+      4,
+      6291456
+    ],
+    [
+      6,
+      262144
+    ]
+  ]
+}

@@ -2613,3 +2613,75 @@ The useful thing either way: which browser you choose to impersonate is a
 decision with a measurable cost, and the industry default of Chrome is not
 free. Nobody tests that because nobody has two profiles measured the same
 way.
+
+## 2026-10-08 — Four hypotheses eliminated, and the tell not found
+
+A real Chrome loads yelp.com normally. That is the fact that reframes
+everything: it is not that yelp challenges Chrome users, it is that yelp
+detects Chrome *impersonations*. Four of them -- ours and three of
+curl_cffi's, all made platform-consistent -- get the DataDome challenge while
+our Firefox profile is served.
+
+Which constrains the answer sharply. Whatever the tell is, it must be
+something our Firefox gets right, our Chrome gets wrong, and curl_cffi's
+Chromium also gets wrong. That excludes:
+
+- **Behaviour.** Both our profiles do the same thing: one bare request to a
+  homepage, no subresources, no referer chain, no think time. If that were
+  the signal, Firefox would fail too.
+- **The TCP/IP layer.** Same machine, same stack, and the real Chrome that
+  passes shares it.
+- **The HTTP/2 frame sequence.** Measured, after `catch_h2.py` was taught to
+  log every frame rather than the six types it had branches for. Chrome
+  sends `SETTINGS`, `WINDOW_UPDATE`, `HEADERS` -- stream 1, flags 0x25 --
+  and so do we, identically. No `PRIORITY_UPDATE`, no ALPS exchange, which
+  were the two leading guesses and are both wrong. Advertising
+  `application_settings` without speaking the protocol is apparently not
+  what gives us away.
+- **`Cache-Control: max-age=0`**, the reload artefact baked into the Chrome
+  captures. Removing it changed nothing, 0 of 4 either way.
+
+And one experiment that establishes nothing, recorded because it looked
+decisive: a 2x2 crossing TLS against headers refuses both mixed arms. That
+is not layer isolation, because a Chrome hello carrying a Firefox User-Agent
+is itself the contradiction these systems hunt for. Crossing the layers adds
+a third variable.
+
+### The shuffle, which cannot be tested with six captures
+
+The best remaining idea was that Chrome's extension order is drawn and
+nobody reproduces the draw: we shuffle uniformly, curl_cffi does not shuffle
+at all, and Firefox has no order to get wrong because its order is fixed and
+copied exactly. It explains the whole pattern.
+
+It is also not supported. Across the six captures, the positions each of the
+eighteen shuffled extensions occupied:
+
+      psk_key_exchange_modes   [10, 6, 5, 10, 5, 6]    span 5-10
+      server_name              [8, 10, 15, 8, 12, 11]  span 8-15
+      signature_algorithms     [17, 0, 17, 11, 13, 17] span 0-17
+      ...
+
+Every span is wide and the narrowest covers six positions, which six samples
+make unremarkable. The draw looks uniform. That does not prove it is -- six
+samples cannot -- but there is no evidence against it, and inventing
+structure to fit a theory is the thing this notebook exists to prevent.
+
+### So it is in the hello or the headers, and the next measurement is one visit
+
+By elimination the tell is in the ClientHello or the HTTP header set. The
+cheap decisive test is our Chrome's reported fingerprint against a real
+Chrome's, from the same service: ours is
+
+      ja4       t13d1518h2_8daaf6152771_4980c97edce0
+      ja3_hash  7e221395c71c862cf24887e7a99c8293
+      peetprint 493a80d6a4267c7820685d29d92aa946
+
+If a real Chrome reports the same three, the tell is at the HTTP layer and
+the hello is exonerated. If any differs, there is a concrete defect to find,
+and it is one every Chromium impersonation shares.
+
+Recording the eliminations is the point of writing this down. Four plausible
+answers are gone, and the two leading ones were gone within an hour of being
+proposed -- which is faster than they would have fallen if either had been
+written up as the answer.
