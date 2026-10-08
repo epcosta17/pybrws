@@ -9,7 +9,15 @@ change rather than a surprise.
 
     python tools/ab_test.py
     python tools/ab_test.py --rounds 10 --targets www.zillow.com www.etsy.com
+    python tools/ab_test.py --arms pybrws pybrws-h3 httpx
     python tools/ab_test.py --history
+
+With the h3 arm the question changes. pybrws against httpx asks whether the
+fingerprint matters; pybrws against pybrws-h3 asks whether the transport
+does, and it is the only pair that can, since it is the only one where the
+transport is the single variable. The httpx arm earns its place by settling
+the prior question: if a plain client is served too, the host is not
+discriminating and the other two arms establish nothing either way.
 """
 
 from __future__ import annotations
@@ -71,7 +79,31 @@ def via_baseline(target: str, timeout: float) -> int:
         return client.get(as_url(target)).status_code
 
 
-CLIENTS = {"pybrws": via_pybrws, "httpx": via_baseline}
+def via_pybrws_h3(target: str, timeout: float) -> int:
+    """Same client and same headers as the h2 arm, over QUIC instead.
+
+    This is the arm that answers whether the transport changes the outcome.
+    Pairing it against the httpx arm would not: that moves fingerprint and
+    transport at once, and a difference could not be attributed to either.
+    No proxy here -- the QUIC path does not have one, so --proxy runs would
+    silently be comparing a proxied arm against a direct one.
+    """
+    import pybrws.h3 as h3
+
+    return h3.get(as_url(target), timeout=timeout).status
+
+
+# Keyed by arm name, which is what goes in the log, so a run with the h3 arm
+# stays readable alongside every run recorded before it existed.
+ALL_CLIENTS = {
+    "pybrws": via_pybrws,
+    "pybrws-h3": via_pybrws_h3,
+    "httpx": via_baseline,
+}
+DEFAULT_ARMS = ["pybrws", "httpx"]
+CLIENTS = {name: ALL_CLIENTS[name] for name in DEFAULT_ARMS}
+
+PROFILES = {"pybrws-h3": "firefox157_quic"}
 
 
 def blocked(status) -> bool:
@@ -101,7 +133,7 @@ def run(targets: list[str], rounds: int, timeout: float, pause: float) -> list[d
                         "client": name,
                         "status": status,
                         "error": error,
-                        "profile": firefox157.NAME,
+                        "profile": PROFILES.get(name, firefox157.NAME),
                         "proxy": bool(PROXY) if name == "pybrws" else False,
                     }
                 )
@@ -121,7 +153,10 @@ def summarise(samples: list[dict]) -> None:
     hosts = sorted({host for host, _ in grouped})
     width = max(len(h) for h in hosts) + 2
     print()
-    print("host".ljust(width) + "pybrws".ljust(26) + "httpx".ljust(26) + "reading")
+    header = "host".ljust(width)
+    for client in CLIENTS:
+        header += client.ljust(26)
+    print(header + "reading")
     for host in hosts:
         cells = {}
         for client in CLIENTS:
@@ -135,19 +170,51 @@ def summarise(samples: list[dict]) -> None:
             spread = "" if len(set(map(str, results))) == 1 else " flapping"
             rendered.append(("%d/%d served%s" % (served, total, spread)).ljust(26))
 
-        p_served, p_total, _ = cells["pybrws"]
-        b_served, b_total, _ = cells["httpx"]
-        if host == CONTROL:
-            reading = "control"
-        elif p_total and b_total and p_served == p_total and b_served == 0:
-            reading = "pybrws passes, baseline blocked"
-        elif p_served > b_served:
-            reading = "pybrws better, not deterministic"
-        elif p_served == b_served:
-            reading = "no difference"
-        else:
-            reading = "baseline better"
-        print(host.ljust(width) + "".join(rendered) + reading)
+        print(host.ljust(width) + "".join(rendered) + reading_for(host, cells))
+
+
+def reading_for(host: str, cells: dict) -> str:
+    """One sentence per host, saying what the cells do and do not establish.
+
+    Written as an ordered set of questions rather than a comparison, because
+    the first one disposes of most hosts: if a plain client is served too,
+    nothing this tool measures is being discriminated against, and the other
+    arms say nothing about detection no matter how they came out.
+    """
+    if host == CONTROL:
+        return "control"
+
+    def rate(arm):
+        served, total, _ = cells.get(arm, (0, 0, []))
+        return served, total
+
+    plain, plain_n = rate("httpx")
+    h2, h2_n = rate("pybrws")
+    h3, h3_n = rate("pybrws-h3")
+
+    if plain_n and plain == plain_n:
+        return "host serves a plain client too -- discriminates on nothing here"
+
+    # With the h3 arm present the interesting pair is h2 against h3, because
+    # it is the only pair where the single variable is the transport.
+    if h3_n and h2_n:
+        if h2 == h2_n and h3 == h3_n:
+            return "served on both transports"
+        if h3 == h3_n and h2 == 0:
+            return "*** served over h3, blocked over h2 ***"
+        if h2 == h2_n and h3 == 0:
+            return "*** served over h2, blocked over h3 ***"
+        if h2 == 0 and h3 == 0:
+            return "blocked on both transports -- not a transport question"
+        return "transport differs but neither arm is deterministic"
+
+    if h2_n and plain_n and h2 == h2_n and plain == 0:
+        return "pybrws passes, baseline blocked"
+    if h2 > plain:
+        return "pybrws better, not deterministic"
+    if h2 == plain:
+        return "no difference"
+    return "baseline better"
 
 
 def show_history() -> None:
@@ -172,6 +239,12 @@ def main() -> int:
     )
     parser.add_argument("--targets", nargs="+", default=DEFAULT_TARGETS)
     parser.add_argument("--rounds", type=int, default=4)
+    parser.add_argument("--arms", nargs="+", default=DEFAULT_ARMS,
+                        choices=sorted(ALL_CLIENTS),
+                        help="which clients to run. Adding pybrws-h3 turns "
+                             "this into a transport comparison: pybrws-h3 "
+                             "against pybrws is the only pair whose single "
+                             "variable is the transport")
     parser.add_argument("--timeout", type=float, default=25.0)
     parser.add_argument("--pause", type=float, default=1.0,
                         help="seconds between requests, to stay polite")
@@ -189,6 +262,12 @@ def main() -> int:
     if args.history:
         show_history()
         return 0
+
+    global CLIENTS
+    CLIENTS = {name: ALL_CLIENTS[name] for name in args.arms}
+    if "pybrws-h3" in CLIENTS and (args.proxy or args.use_env):
+        raise SystemExit("the h3 arm has no proxy path, so --proxy would "
+                         "compare a proxied arm against a direct one")
 
     global PROXY
     if args.proxy:
