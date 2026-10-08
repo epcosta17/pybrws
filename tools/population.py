@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -64,21 +65,74 @@ def rows(body) -> list[dict]:
                      % sorted(body))
 
 
+# A JA4 of any transport: t13d1517h2_8daaf6152771_3cbfd9057e0d and friends.
+JA4ISH = re.compile(r"^[a-z0-9]{6,14}_[0-9a-f]{12}(_[0-9a-f]{12})*$")
+
+
+def strings(value):
+    """Every string anywhere in a row, for when the key names are not ours."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for inner in value.values():
+            yield from strings(inner)
+    elif isinstance(value, list):
+        for inner in value:
+            yield from strings(inner)
+
+
+def integers(value):
+    if isinstance(value, bool):
+        return
+    if isinstance(value, int):
+        yield value
+    elif isinstance(value, dict):
+        for inner in value.values():
+            yield from integers(inner)
+    elif isinstance(value, list):
+        for inner in value:
+            yield from integers(inner)
+
+
 def value_of(row) -> str:
+    """The fingerprint, by name if the name is one we know, else by shape."""
     if isinstance(row, str):
         return row
-    for key in ("value", "fingerprint", "ja4", "id", "name"):
-        if isinstance(row.get(key), str):
+    for key in ("value", "fingerprint", "ja4", "fp", "id", "name", "key"):
+        if isinstance(row.get(key), str) and row[key]:
             return row[key]
+    for text in strings(row):
+        if JA4ISH.match(text):
+            return text
     return "?"
 
 
 def count_of(row) -> int:
-    if isinstance(row, dict):
-        for key in ("count", "sessions", "observations", "n", "total"):
-            if isinstance(row.get(key), int):
-                return row[key]
-    return 0
+    if not isinstance(row, dict):
+        return 0
+    for key in ("count", "sessions", "observations", "clients", "n",
+                "total", "hits"):
+        if isinstance(row.get(key), int) and not isinstance(row[key], bool):
+            return row[key]
+    # Fall back to the largest integer in the row. A rank or a timestamp can
+    # outrank a count, so this is a guess and the schema dump below is the
+    # real answer when it matters.
+    found = [n for n in integers(row) if n > 0]
+    return max(found) if found else 0
+
+
+def explain(row) -> None:
+    """Print what actually came back, rather than a column of question marks.
+
+    Guessing another service's field names and then rendering "?" when the
+    guess misses is how a tool reports a schema change as data. The shape
+    goes on screen instead.
+    """
+    print("\nCould not read the ranked rows. The first one looks like:\n")
+    print("    " + json.dumps(row, indent=2, sort_keys=True)
+          .replace("\n", "\n    "))
+    print("\nRe-run with --json for the whole response, or add the right "
+          "key\nnames to value_of/count_of in this file.")
 
 
 def main() -> int:
@@ -106,8 +160,14 @@ def main() -> int:
         return 0
 
     ranked = rows(body)
+    print("%s -- %d ranked values" % (url, len(ranked)))
+
+    if ranked and value_of(ranked[0]) == "?":
+        explain(ranked[0])
+        return 1
+
     total = sum(count_of(r) for r in ranked) or 1
-    print("%s -- %d ranked values\n" % (url, len(ranked)))
+    print()
 
     print("%-5s %-38s %9s %7s" % ("rank", "value", "count", "share"))
     for index, row in enumerate(ranked[:args.limit], 1):
