@@ -42,16 +42,41 @@ def split_target(url: str) -> tuple[str, int, str, str]:
     return parts.hostname, port, authority, path
 
 
+class Unmeasured(Exception):
+    """A profile has no capture for this kind of request."""
+
+
+def _set(profile, name: str):
+    """One of a profile's header lists, or a refusal that names it.
+
+    A profile holds what was measured. Reaching for a list a browser was
+    never captured sending used to raise AttributeError from somewhere
+    unhelpful; this says which measurement is missing and how to take it,
+    because the alternative -- inventing a plausible set -- produces a
+    fingerprint that is wrong in a way nothing will reveal.
+    """
+    headers = getattr(profile, name, None)
+    if headers is None:
+        raise Unmeasured(
+            "%s has no %s: that request kind was never captured for this "
+            "browser. tools/catch_request.py and tools/catch_h2.py take it."
+            % (getattr(profile, "__name__", profile), name)
+        )
+    return headers
+
+
 def header_set(profile, method: str, kind: str, http2: bool):
     """The profile's measured header list for this kind of request."""
     if method.upper() in ("GET", "HEAD"):
-        return profile.H2_NAVIGATION_HEADERS if http2 else profile.H1_HEADERS
+        return _set(profile, "H2_NAVIGATION_HEADERS" if http2 else "H1_HEADERS")
     if kind == "form":
-        return profile.H2_POST_FORM_HEADERS if http2 else profile.H1_POST_FORM_HEADERS
+        return _set(profile, "H2_POST_FORM_HEADERS" if http2
+                    else "H1_POST_FORM_HEADERS")
     if kind == "form-script":
-        return (profile.H2_POST_FORM_SCRIPT_HEADERS if http2
-                else profile.H1_POST_FORM_SCRIPT_HEADERS)
-    return profile.H2_POST_XHR_HEADERS if http2 else profile.H1_POST_XHR_HEADERS
+        return _set(profile, "H2_POST_FORM_SCRIPT_HEADERS" if http2
+                    else "H1_POST_FORM_SCRIPT_HEADERS")
+    return _set(profile, "H2_POST_XHR_HEADERS" if http2
+                else "H1_POST_XHR_HEADERS")
 
 
 def fetch_once(url: str, *, method: str = "GET", profile=firefox157,

@@ -109,22 +109,49 @@ the suite from the binder length rather than naming it.
 
 ## Known gaps, roughly by value
 
-1. **A second profile.** `profiles/` has two implementations now, but both
-   are Firefox, so it is still an abstraction shaped by one browser. Chrome
-   would validate it or break it.
+1. **Chrome 155 is measured, and it changed the design.** The ClientHello
+   comes from six captures in one run of `catch_hello.py --count 6`; the
+   HTTP/2 and HTTP/1.1 sides from `catch_h2.py` and `catch_request.py`.
+   `tests/test_chrome_profile.py` holds all of it, 45 tests.
 
-   There is a head start: the first QUIC capture caught Chrome talking to
-   bing.com, and it looks nothing like Firefox -- eleven extensions against
-   fifteen, a 218-byte greased ECH against 282, extension 17613, Google's
-   transport parameters, and none of the NSS markers (`renegotiation_info`,
-   `delegated_credentials`, `status_request`,
-   `extended_master_secret`, `record_size_limit`).
+   What it says. The extension order is **drawn** per connection -- six
+   captures, six orders, one set -- with a greased extension pinned at each
+   end. Chrome greases six lists, always at the head: cipher suites,
+   signature_algorithms, supported_groups, supported_versions, key_share, and
+   both ends of the extension list. Five are independent draws;
+   supported_groups and key_share share one, which the protocol requires.
+   Three codepoints are unassigned in IANA and named here from their shape:
+   application_settings at 0x44cd, a constant 186-byte list of five-byte
+   identifiers at 0xca34, and two constant bytes at 0x12e0.
 
-   Note the TCP profile's claim that "Chrome shuffles its extension order and
-   Firefox does not" is only half true, and this project proved the other
-   half: Firefox shuffles over QUIC, because that is neqo and not NSS. So
-   shuffling is a property of a *stack*, not of a browser, and a Chrome
-   profile should not assume one rule covers both of its protocols either.
+   Its HTTP/2 fingerprint matches Firefox's in **no field at all**, down to
+   which settings are sent: Chrome sends 6 (max header list size) and Firefox
+   sends 5 (max frame size). Verified by pointing our own client at
+   `catch_h2.py` -- the recorded frames are byte-identical to Chrome's, and
+   the header order including pseudo-headers matches field for field.
+
+   What writing it found. Three defects, each caught by comparing against a
+   capture rather than against what had been typed: the trust-anchors payload
+   had been **invented** rather than extracted and is now the captured bytes;
+   `renegotiation_info` was missing from the shuffled set, giving nineteen
+   extensions where the browser sends twenty; and the two greased extension
+   types could collide one time in sixteen, which RFC 8446 forbids and which
+   produced a hello one byte shorter than any capture. A length no browser
+   produces is the cheapest possible tell.
+
+   What is **not** measured and is absent rather than guessed: an image
+   subresource, a form POST by click or by script, where a cookie header sits
+   in the order, resumption, HelloRetryRequest, and anything over QUIC.
+   Asking for one raises `client.Unmeasured`, which names the missing set and
+   the tool that takes it. The HTTP/2 POST set is *derived* from the HTTP/1.1
+   one and labelled as derived: Firefox's derivation was confirmed against a
+   capture and Chrome's is not, and it is known to be missing a `priority`
+   header whose value nothing here can supply.
+
+   Also machine-specific and flagged: `ACCEPT_LANGUAGE` carries the locale of
+   the machine it was captured on, `en-MX,en-GB;q=0.9,...`, which is a
+   fingerprint of a person rather than of a browser.
+
 2. **TLS 1.2 and client certificates are done**, and both were found by a
    sweep rather than planned. `pybrws/tls12.py` carries the PRF, the key
    block, the two AEAD record constructions and both Finished messages;

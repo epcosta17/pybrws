@@ -24,13 +24,14 @@ Rng = Callable[[int], bytes]
 class Context:
     """Per-connection state handed to a profile's payload generators."""
 
-    __slots__ = ("hostname", "key_exchange", "_rng", "_grease")
+    __slots__ = ("hostname", "key_exchange", "_rng", "_grease", "_memo")
 
     def __init__(self, hostname: str, rng: Rng, key_exchange=None) -> None:
         self.hostname = hostname
         self.key_exchange = key_exchange
         self._rng = rng
         self._grease: dict[str, int] = {}
+        self._memo: dict[str, object] = {}
 
     def random(self, n: int) -> bytes:
         data = self._rng(n)
@@ -40,6 +41,17 @@ class Context:
 
     def choice(self, options: Sequence[int]) -> int:
         return options[self.random(1)[0] % len(options)]
+
+    def once(self, key: str, factory):
+        """Compute `factory()` the first time and reuse it after.
+
+        For per-connection values a profile has to agree with itself about:
+        the extension order and the payload lookup are separate calls, and a
+        value drawn twice would differ between them.
+        """
+        if key not in self._memo:
+            self._memo[key] = factory()
+        return self._memo[key]
 
     def grease(self, slot: str) -> int:
         """A GREASE value for `slot`, drawn once per connection.

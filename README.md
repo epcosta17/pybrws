@@ -183,7 +183,16 @@ and the source of NSS, Firefox and OpenSSL.
 | 13 | Firefox's ClientHello over QUIC, via aioquic | done |
 | 14 | HTTP/3 requests, measured against a real capture | done |
 | 15 | TLS 1.2, for the hosts that decline 1.3 | done |
-| 16 | A second browser profile, to test the abstraction | not started |
+| 16 | A second browser profile, to test the abstraction | done |
+
+Phase 16 is the one that mattered to the design. `profiles/` had two
+implementations and both were Firefox, so it was an abstraction shaped by one
+browser. Chrome broke it, which is what it was for: Chrome draws its
+extension order per connection, so a profile cannot be an ordered list, and it
+greases six separate lists, so a cipher list cannot be a constant. Both are
+now things a profile may be rather than things it must be -- and Firefox keeps
+its stored order, because a stored order is a stronger claim than a drawn one
+and flattening them would discard what was measured.
 
 Phases 0 through 2 are standard library only.
 
