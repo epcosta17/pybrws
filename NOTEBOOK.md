@@ -3019,3 +3019,60 @@ this profile is a faithful copy of this Chrome and the question becomes
 which Chrome to imitate. If it now reports `1517` without it, the extension
 came and went and the profile should follow. Either answer is actionable;
 guessing is not. Not run yet.
+
+---
+
+## 2026-10-08 — The Chrome profile was right, and the catalogue is the odd one
+
+Loaded thumbprint.me in a real Chrome window on this machine. Its
+cross-transport view reports, over TCP:
+
+    TLS ClientHello (JA4)   t13d1518h2_8daaf6152771_4980c97edce0
+
+That is this project's chrome155 profile exactly, which `tools/ja4.py`
+computes offline from the profile and which the probe measured over the
+network. Three sources, one value: the browser, the service, and our own
+arithmetic.
+
+So the entry above is corrected. `0x12e0` is not a defect and nothing
+should be deleted. The profile reproduces a real Chrome.
+
+**What is actually unusual is the catalogue.** Their page labels the QUIC
+transport parameters and the HTTP/2 frame fingerprint `Match`, and labels
+neither JA4 row. This machine's *real browser* is also absent from their
+849 sessions. Their 110 Chrome captures are all headless, 27 of them on
+Windows, and none carries `0x12e0`.
+
+Which leaves a question worth more than the one it replaced. Either
+headless Chrome omits `0x12e0`, making it a headless tell readable at the
+TLS layer with no JavaScript anywhere, or this install joined a randomised
+field trial that fresh CI containers do not. The first would be a finding;
+the second would mean our profile copies one Chrome population rather than
+Chrome.
+
+`tools/headless_tell.py` decides it on this machine, where the binary, the
+version, the field trial state and the network are all held constant and
+only the window changes. Not run yet.
+
+**Two smaller readings from the same page.**
+
+The locale difference is deliberate and behaved as designed. The browser
+sent `ge20nr12enmx_54b4638ab28b`; this client sends `enus`. The profile
+holds `CAPTURED_ACCEPT_LANGUAGE` as `en-MX,...` for the fixture tests and
+ships `en-US,en;q=0.9`, on the grounds that a header meant to blend in
+should not announce one particular machine in Mexico. The header-name hash
+`54b4638ab28b` is identical to the catalogue's Chrome 155, and this
+client's `0c2c1d640f3e` is the catalogue's no-referer 13-header variant, so
+both header sets are real Chrome sets for their respective request kinds.
+
+And their Linux `python-httpx 0.28.1` reports
+`t13d1713h1_ab0a1bf427ad_ecd0401ec68b`. The cipher hash is identical to the
+httpx value measured here, confirming those seventeen suites from outside;
+the extension count differs, 13 against 12, because their OpenSSL sends
+`encrypt_then_mac` and the one Python ships on Windows does not. The README
+comparison should say that value is a Windows reading.
+
+`ecd0401ec68b` is also the third hash of the NordVPN interception recorded
+on 2026-10-07. The middlebox's extension and signature-algorithm set is a
+stock OpenSSL client's, which confirms that diagnosis from a dataset that
+had nothing to do with it.
