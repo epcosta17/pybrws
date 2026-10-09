@@ -32,6 +32,8 @@ from ..wire import u8, u16, vector
 # QUIC requires TLS 1.3, so the TLS 1.2 suites the TCP profile offers are not
 # merely unnecessary here, they would be wrong. A client sending fifteen
 # suites over QUIC has not thought about the protocol.
+NAME = "firefox157_quic"
+
 CIPHER_SUITES = (0x1301, 0x1303, 0x1302)
 
 # Empty, where the TCP profile sends 32 bytes.

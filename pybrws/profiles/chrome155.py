@@ -44,6 +44,8 @@ from ..keyexchange import KeyExchange
 from ..model import GREASE_DRAW
 from ..wire import u8, u16, vector
 
+NAME = "chrome155"
+
 LEGACY_VERSION = 0x0303
 RECORD_VERSION = 0x0301
 SESSION_ID_SIZE = 32

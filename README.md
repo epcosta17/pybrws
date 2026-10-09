@@ -267,8 +267,17 @@ like a page that changed.
 Fetch a URL:
 
     python -m pybrws https://example.com/
+    python -m pybrws --profile chrome155 https://example.com/
+    python -m pybrws --http3 https://cloudflare-quic.com/
     python -m pybrws -x socks5://user:pass@exit.example:1080 https://example.com/
     python -m pybrws -H 'Accept-Language: es-MX,es;q=0.9' -o page.html https://www.zillow.com/
+
+A profile belongs to a transport. `firefox157` and `chrome155` go over TCP;
+`firefox157_quic` is three cipher suites and a set of QUIC transport
+parameters, so it only means anything through `--http3`, and asking for it
+over TCP would build a hello no browser sends. `--http3` is a separate code
+path rather than a negotiation, and it does not take `-x`: QUIC is UDP and
+there is no UDP proxy support here.
 
 Lend the fingerprint to another language, with no change to its code:
 

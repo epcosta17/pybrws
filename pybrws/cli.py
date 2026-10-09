@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from urllib.parse import urljoin
 
 from . import profiles
 from . import headers as header_tools
@@ -22,16 +23,69 @@ def parse_header(raw: str) -> tuple[str, str]:
     return name.strip(), value.strip()
 
 
-def resolve_profile(name: str):
-    try:
-        return getattr(profiles, name)
-    except AttributeError:
-        available = ", ".join(profiles.__all__)
-        raise SystemExit("unknown profile " + repr(name) + "; available: " + available)
+def resolve_profile(name: str, http3: bool):
+    """The profile for the transport actually being used.
+
+    A profile belongs to a transport. Handing the QUIC profile to the TCP
+    client would build a hello with three cipher suites and QUIC transport
+    parameters over TCP, which no browser sends and which would be a worse
+    fingerprint than not trying. So the two sets are kept apart and asking
+    for one from the other side says which flag to use instead.
+    """
+    table = profiles.QUIC if http3 else profiles.TCP
+    if name in table:
+        return table[name]
+
+    other = profiles.TCP if http3 else profiles.QUIC
+    hint = ""
+    if name in other:
+        hint = ("; " + repr(name) + " is a "
+                + ("TCP" if http3 else "QUIC") + " profile, so "
+                + ("drop --http3" if http3 else "add --http3"))
+    elif not http3 and name.replace("-", "").replace("_", "").endswith("quic"):
+        # The name people reach for first, without the underscore.
+        hint = "; for HTTP/3 use --http3"
+    raise SystemExit("unknown profile " + repr(name) + "; available over "
+                     + ("QUIC" if http3 else "TCP") + ": "
+                     + ", ".join(sorted(table)) + hint)
+
+
+def fetch_http3(args, profile, overrides) -> Response:
+    """One HTTP/3 fetch, following redirects by hand.
+
+    `pybrws.h3` returns the response it gets and does not follow anything,
+    so the loop lives here. Without it `-L` would silently mean nothing on
+    this path while meaning something on the other -- the same arm
+    answering a different question, which is how a comparison between the
+    two transports goes wrong.
+    """
+    from . import h3
+
+    url = args.url
+    history: list[Response] = []
+    budget = args.max_redirs if args.location else 0
+    for _ in range(budget + 1):
+        response = h3.get(url, timeout=args.timeout,
+                          headers=overrides or None,
+                          profile=profile, verify=not args.insecure)
+        response.url = url
+        if not 300 <= response.status < 400:
+            break
+        location = response.header("location")
+        if not location:
+            break
+        history.append(response)
+        url = urljoin(url, location)
+    else:
+        raise TooManyRedirects("more than %d redirects" % budget)
+    response.history = history
+    return response
 
 
 def describe_request(profile, args) -> str:
-    lines = ["> " + args.url, "> profile: " + profile.NAME]
+    lines = ["> " + args.url,
+             "> transport: " + ("quic/h3" if args.http3 else "tcp"),
+             "> profile: " + profile.NAME]
     if args.proxy:
         lines.append("> proxy: " + args.proxy)
     for name, value in args.header:
@@ -81,7 +135,13 @@ def build_parser() -> argparse.ArgumentParser:
                              "user:pass@")
     parser.add_argument("-k", "--insecure", action="store_true",
                         help="skip certificate verification, as curl's -k does")
-    parser.add_argument("--profile", default="firefox157", metavar="NAME")
+    parser.add_argument("--profile", default=None, metavar="NAME",
+                        help="firefox157 or chrome155 over TCP, "
+                             "firefox157_quic with --http3")
+    parser.add_argument("--http3", action="store_true",
+                        help="fetch over HTTP/3 instead of TCP. A separate "
+                             "profile and a separate code path, not a "
+                             "negotiation")
     parser.add_argument("--timeout", type=float, default=20.0, metavar="SECONDS")
     return parser
 
@@ -95,22 +155,30 @@ def main(argv: list[str] | None = None) -> int:
         # curl's default for -d, and a server will otherwise guess.
         overrides.append(("Content-Type", "application/x-www-form-urlencoded"))
 
-    profile = resolve_profile(args.profile)
+    if args.profile is None:
+        args.profile = "firefox157_quic" if args.http3 else "firefox157"
+    profile = resolve_profile(args.profile, args.http3)
+    if args.http3 and args.proxy:
+        raise SystemExit("--proxy does not apply to --http3: QUIC is UDP and "
+                         "this client has no UDP proxy support")
     if args.verbose:
         print(describe_request(profile, args), file=sys.stderr)
 
     try:
-        response = request(
-            args.url,
-            method=args.request.upper(),
-            headers=overrides or None,
-            data=args.data,
-            profile=profile,
-            timeout=args.timeout,
-            follow_redirects=args.max_redirs if args.location else 0,
-            proxy=args.proxy,
-            verify=not args.insecure,
-        )
+        if args.http3:
+            response = fetch_http3(args, profile, overrides)
+        else:
+            response = request(
+                args.url,
+                method=args.request.upper(),
+                headers=overrides or None,
+                data=args.data,
+                profile=profile,
+                timeout=args.timeout,
+                follow_redirects=args.max_redirs if args.location else 0,
+                proxy=args.proxy,
+                verify=not args.insecure,
+            )
     except (UnsupportedUrl, TooManyRedirects, TlsAlert, ProxyError,
             CertificateError) as exc:
         raise SystemExit(type(exc).__name__ + ": " + str(exc))
