@@ -29,7 +29,27 @@ VOLATILE = {0, 51, 65037}          # host, keys, greased payload
 
 
 def captures() -> list:
+    """The six Chrome captures, or a skip explaining their absence.
+
+    These are not committed: .gitignore keeps only fixtures/reference-*.hex,
+    and the per-connection captures stayed on the machine that took them. The
+    assertions below are kept rather than deleted because they record what
+    those captures said, and a skip states that plainly instead of failing
+    and implying the profile is broken.
+
+    Re-capturing is possible but is not a restoration. A newer Chrome draws a
+    different extension order, and may carry a different field-trial state, so
+    six fresh captures are a new measurement that these numbers should not be
+    assumed to describe.
+    """
     paths = sorted(glob.glob(str(FIXTURES / "chrome-*.hex")))
+    if not paths:
+        raise unittest.SkipTest(
+            "fixtures/chrome-1.hex .. chrome-6.hex are not in the repository; "
+            "capture six with `python tools/catch_hello.py "
+            "fixtures/chrome.hex --count 6` and see this function's docstring "
+            "for why that is a new measurement rather than this one"
+        )
     return [parse_client_hello(load_hex(p)) for p in paths]
 
 

@@ -1,6 +1,7 @@
 """Tests for pybrws.records."""
 
 import socket
+import threading
 import unittest
 
 from pybrws.keyschedule import CIPHER_SUITES
@@ -109,9 +110,20 @@ class TestRecordLayer(unittest.TestCase):
         self.assertEqual(reader.read(), (APPLICATION_DATA, b"secret payload"))
 
     def test_large_payload_is_fragmented(self):
-        writer = RecordLayer(self.a)
+        # The write has to run concurrently with the read. A socketpair's
+        # send buffer is 8 KiB on macOS, so a payload larger than one record
+        # fills it and `sendall` blocks forever with nobody reading -- the
+        # suite hung here rather than failing, which is why it went unnoticed.
+        # On Linux the default buffer is a few hundred kilobytes and the
+        # sequential version passed, which is what made it look portable.
         payload = b"x" * ((1 << 14) + 100)
-        writer.write(APPLICATION_DATA, payload)
+        writer = threading.Thread(
+            target=RecordLayer(self.a).write,
+            args=(APPLICATION_DATA, payload),
+            daemon=True,
+        )
+        writer.start()
+        self.addCleanup(writer.join, 5)
         reader = RecordLayer(self.b)
         first = reader.read()[1]
         second = reader.read()[1]
