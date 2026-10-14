@@ -108,6 +108,8 @@ the suite from the binder length rather than naming it.
 
     python tools/catch_resumed.py --fresh fixtures/one.hex --resumed fixtures/two.hex
 
+`PROFILES.md` is the procedure for adding or re-measuring a browser.
+
 ## Known gaps, roughly by value
 
 1. **Chrome 155 is measured, and it changed the design.** The ClientHello

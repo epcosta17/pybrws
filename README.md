@@ -118,6 +118,10 @@ run it to fill them in.
 
     .venv/bin/jupyter lab notebooks/demo.ipynb
 
+Adding a browser, or re-measuring one for a newer version: `PROFILES.md` is
+the procedure, derived from doing it twice, with the traps that each attempt
+found.
+
 Picking this up after a break, or on another machine: read `HANDOFF.md`
 for the one-page orientation and the gap list. `NOTEBOOK.md` is the lab
 record in date order, including the conclusions that were retracted when

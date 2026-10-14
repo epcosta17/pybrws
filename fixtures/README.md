@@ -1,7 +1,11 @@
 # fixtures
 
-Raw ClientHello captures in hex. Not tracked in git: they are specific to the
-machine that produced them.
+Raw ClientHello captures in hex, and the reference HTTP requests the
+byte-identity tests compare against. These are tracked: a reader checking the
+GREASE analysis or the variance table needs the data behind it. They are still specific to
+the machine that produced them, and the write-ups say so where it matters:
+one machine's GPU, OS, font set, browser build and field-trial state are a
+sample and not a population.
 
 ## Hostname requirement
 
@@ -10,14 +14,18 @@ extension, because SNI carries hostnames and not IP addresses. A capture taken
 that way does not represent a real connection, and JA4 encodes SNI presence in
 its first field.
 
-Map the loopback address to a name instead:
+So the browser needs a *name* that resolves to the loopback. The references
+here were taken against `pybrws.127.0.0.1.nip.io`, which resolves to
+127.0.0.1 without an `/etc/hosts` entry and is what `REFERENCE_HOSTNAME` in
+`tests/test_emitter.py` holds. An `/etc/hosts` line works equally well if you
+would rather not depend on a public resolver:
 
     127.0.0.1   pybrws.test
 
 - macOS and Linux: `/etc/hosts`
 - Windows: `C:\Windows\System32\drivers\etc\hosts`, as administrator
 
-Then capture against `https://pybrws.test:4443`.
+Either way, capture against the name and not the address.
 
 ## Capturing
 
@@ -25,7 +33,7 @@ Terminal 1:
 
     python tools/catch_hello.py fixtures/firefox.hex --peek
 
-Terminal 2, or the browser: open `https://pybrws.test:4443`. The handshake
+Terminal 2, or the browser: open `https://pybrws.127.0.0.1.nip.io:4443/`. The handshake
 fails and the client reports an error; the ClientHello has already been sent.
 
 ## Captures to collect
