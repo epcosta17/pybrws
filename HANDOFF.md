@@ -355,7 +355,7 @@ the suite from the binder length rather than naming it.
 
 ## The demo
 
-`demo.ipynb`, seven sections, outputs stripped. Fetches one URL with `httpx`
+`notebooks/demo.ipynb`, seven sections, outputs stripped. Fetches one URL with `httpx`
 and with this client and renders both, sweeps four protection vendors,
 shows why the baseline arm exists, compares the fingerprint the server
 reported against a real Firefox, and asks whether a session changes the

@@ -132,7 +132,7 @@ Order of suspicion:
 
 ## 6. Demo notes
 
-`demo.ipynb` needs `jupyterlab` from the `dev` extra. Section ordering
+`notebooks/demo.ipynb` needs `jupyterlab` from the `dev` extra. Section ordering
 matters: the setup cell defines helpers the later sections use, so running a
 section standalone without it fails for a reason that has nothing to do with
 the client.

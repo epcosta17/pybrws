@@ -112,16 +112,19 @@ The captured requests are stored with the CRLF that HTTP requires, pinned by
 
 ## Demo
 
-`demo.ipynb` fetches one URL twice, with a plain client and with this one,
+`notebooks/demo.ipynb` fetches one URL twice, with a plain client and with this one,
 renders both results, and shows what the server saw. Outputs are stripped;
 run it to fill them in.
 
-    .venv/bin/jupyter lab demo.ipynb
+    .venv/bin/jupyter lab notebooks/demo.ipynb
 
 Picking this up after a break, or on another machine: read `HANDOFF.md`
 for the one-page orientation and the gap list. `NOTEBOOK.md` is the lab
 record in date order, including the conclusions that were retracted when
-more rounds dissolved them.
+more rounds dissolved them. `MACOS.md` is the portability analysis: what the
+client cannot imitate because it belongs to the host's TCP stack, what the
+Windows-measured User-Agent contradicts when it runs from a Mac, and which
+platform assumption is still unmeasured.
 
 ## Clean-room rule
 
