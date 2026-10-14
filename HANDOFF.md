@@ -1,8 +1,9 @@
 # Handoff
 
-Read this before changing anything. `README.md` is the user guide and
-`NOTEBOOK.md` is the full lab record in date order; this file is what someone
-picking the project up needs in one page.
+`README.md` is the user guide and `NOTEBOOK.md` is the full lab record in
+date order. This file is the one-page orientation -- what works, what the
+known gaps are, and which decisions are load-bearing. Start here before
+changing anything.
 
 ## What it is
 
@@ -16,7 +17,7 @@ resumption, HTTP/2 multiplexing, a concurrent fetcher, cookies, sessions with co
 outbound HTTP CONNECT and SOCKS5 proxies, a CLI, a MITM proxy that lends the
 fingerprint to other languages, request bodies and header merging.
 
-    .venv/bin/python -m unittest discover -s tests -t . -v   # 244 tests
+    .venv/bin/python -m unittest discover -s tests -t . -v   # 636 tests
     .venv/bin/python tools/verify.py                         # 18 live checks
     .venv/bin/python tools/ab_test.py                        # targets over time
 
@@ -112,7 +113,7 @@ the suite from the binder length rather than naming it.
 1. **Chrome 155 is measured, and it changed the design.** The ClientHello
    comes from six captures in one run of `catch_hello.py --count 6`; the
    HTTP/2 and HTTP/1.1 sides from `catch_h2.py` and `catch_request.py`.
-   `tests/test_chrome_profile.py` holds all of it, 45 tests.
+   `tests/test_chrome_profile.py` holds all of it, 53 tests.
 
    What it says. The extension order is **drawn** per connection -- six
    captures, six orders, one set -- with a greased extension pinned at each

@@ -30,7 +30,7 @@ Then:
 
     .venv/bin/python -m unittest discover -s tests -t .
 
-568 tests, no network needed for any of them. **If these fail, stop here** —
+636 tests, no network needed for any of them. **If these fail, stop here** —
 nothing further will make sense, and the most likely cause is the next
 section.
 

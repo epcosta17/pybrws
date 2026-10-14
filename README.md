@@ -6,7 +6,12 @@ to a real browser's.
 ## Does it work
 
 `tools/ab_test.py`, four interleaved rounds per target, both clients
-following redirects, with crunchbase.com as a negative control. `httpx` is a
+following redirects, with crunchbase.com as a negative control.
+**Measured 2026-10-06 to 2026-10-08.** Every sample is in
+`fixtures/ab-test-log.jsonl` and `--history` replays them. Scored
+protections change their minds between one week and the next, so a reader
+running this later should expect different cells and treat the log as the
+record rather than this table. `httpx` is a
 mature HTTP/2 client over the stdlib TLS stack, running with `http2=True` and
 verified to negotiate it; `pybrws` differs from it only in protocol
 fingerprint.
@@ -113,7 +118,10 @@ run it to fill them in.
 
     .venv/bin/jupyter lab demo.ipynb
 
-Picking this up after a break, or on another machine: read `HANDOFF.md`.
+Picking this up after a break, or on another machine: read `HANDOFF.md`
+for the one-page orientation and the gap list. `NOTEBOOK.md` is the lab
+record in date order, including the conclusions that were retracted when
+more rounds dissolved them.
 
 ## Clean-room rule
 
