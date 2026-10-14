@@ -3,8 +3,8 @@
 # CRLF that HTTP requires and break those tests on checkout, silently and
 # only on some platforms. Never touch them.
 fixtures/reference-*.txt -text
-fixtures/reference-*.hex -text
-fixtures/*.jsonl          -text
+fixtures/*.hex           -text
+fixtures/*.jsonl         -text
 
 # Source stays LF in the repository and is checked out natively.
 *.py      text eol=lf

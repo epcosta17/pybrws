@@ -6,9 +6,6 @@ venv/
 .vscode/
 *.pcapng
 *.pcap
-!fixtures/*.hex
-!fixtures/.gitkeep
-!fixtures/reference-*.hex
 .ipynb_checkpoints/
 
 # setuptools build artefacts, created by an editable install

@@ -17,7 +17,7 @@ resumption, HTTP/2 multiplexing, a concurrent fetcher, cookies, sessions with co
 outbound HTTP CONNECT and SOCKS5 proxies, a CLI, a MITM proxy that lends the
 fingerprint to other languages, request bodies and header merging.
 
-    .venv/bin/python -m unittest discover -s tests -t . -v   # 619, 3 skipped
+    .venv/bin/python -m unittest discover -s tests -t . -v   # 636 tests
     .venv/bin/python tools/verify.py                         # 18 live checks
     .venv/bin/python tools/ab_test.py                        # targets over time
 

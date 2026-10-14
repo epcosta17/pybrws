@@ -30,9 +30,8 @@ Then:
 
     .venv/bin/python -m unittest discover -s tests -t .
 
-619 tests in about seven seconds, no network needed for any of them.
-Three skip: they assert against six Chrome captures that are not in the
-repository, and `tests/test_chrome_profile.py` says so when it skips. **If these fail, stop here** —
+636 tests in about seven seconds, no network needed for any of them, and
+none skipped. **If these fail, stop here** —
 nothing further will make sense, and the most likely cause is the next
 section.
 
