@@ -6,7 +6,7 @@ venv/
 .vscode/
 *.pcapng
 *.pcap
-fixtures/*.hex
+!fixtures/*.hex
 !fixtures/.gitkeep
 !fixtures/reference-*.hex
 .ipynb_checkpoints/
