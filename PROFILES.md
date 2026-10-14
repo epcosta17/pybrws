@@ -208,7 +208,7 @@ this reason.
 1216 bytes: ML-KEM-768's 1184 plus X25519's 32.
 
 **Something on your own path may be rewriting the handshake** before any
-target sees it. `MACOS.md` §5.1 records NordVPN's Threat Protection rewriting
+target sees it. `notes/PORTABILITY.md` §5.1 records NordVPN's Threat Protection rewriting
 the browser's ClientHello *while the VPN was disconnected* — duplicated
 ciphers, an `encrypt_then_mac` extension, no NSS markers. Run
 `tools/verify.py` before blaming a profile or a target.

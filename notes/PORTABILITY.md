@@ -1,9 +1,13 @@
-# Running this on a Mac
+# Portability
+
+*Called `MACOS.md` until 2026-10-14.*
 
 Written on the Windows machine where everything was measured, for whoever
 picks it up on the Mac — most likely because a demo is minutes away and
 something does not work. Diagnostic order, cheapest first. Each step says
 what the answer means, not just what to type.
+
+Every command here runs from the repository root, not from `notes/`.
 
 The short version: **the code is portable, the measurements are not.** Every
 fixture came from Firefox 157 on Windows 11. Two of them cannot be right on
@@ -127,7 +131,7 @@ Order of suspicion:
 
 4. **Run the A/B before concluding anything.** `tools/ab_test.py` with four
    interleaved rounds. A single refusal means nothing: several findings in
-   `NOTEBOOK.md` were retracted after more rounds dissolved them.
+   `../NOTEBOOK.md` were retracted after more rounds dissolved them.
 
 ## 6. Demo notes
 
@@ -148,6 +152,6 @@ hidden. If HTTP/3 is part of the demo, install `dev`.
   `sys.platform` branch in `pybrws/`, and the trust store comes from
   Python's `ssl`, which works the same on macOS.
 
-Read `HANDOFF.md` for the gap list and `NOTEBOOK.md` for why things are the
+Read `OVERVIEW.md` for the gap list and `../NOTEBOOK.md` for why things are the
 way they are, including the findings that were retracted. The retractions are
 the useful part.

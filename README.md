@@ -122,13 +122,14 @@ Adding a browser, or re-measuring one for a newer version: `PROFILES.md` is
 the procedure, derived from doing it twice, with the traps that each attempt
 found.
 
-Picking this up after a break, or on another machine: read `HANDOFF.md`
-for the one-page orientation and the gap list. `NOTEBOOK.md` is the lab
-record in date order, including the conclusions that were retracted when
-more rounds dissolved them. `MACOS.md` is the portability analysis: what the
-client cannot imitate because it belongs to the host's TCP stack, what the
-Windows-measured User-Agent contradicts when it runs from a Mac, and which
-platform assumption is still unmeasured.
+`NOTEBOOK.md` is the lab record in date order, including the conclusions that
+were retracted when more rounds dissolved them.
+
+Two more, in `notes/`. `notes/OVERVIEW.md` is the one-page orientation and
+the known gaps ranked by value. `notes/PORTABILITY.md` is what the client cannot
+imitate because it belongs to the host's TCP stack, what the Windows-measured
+User-Agent contradicts when it runs from a Mac, and which platform assumption
+is still unmeasured.
 
 ## Clean-room rule
 

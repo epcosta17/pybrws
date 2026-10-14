@@ -60,7 +60,8 @@ ECH_PAYLOAD_SIZE = 240
 # hello's size: the 66-character-name capture has a hello 43 bytes longer and
 # reports the same residual of 1. What remains untested is a different
 # pre_shared_key size, which needs a ticket of a different length -- see
-# HANDOFF for the two levers that did not work. So this is fitted to a
+# notes/OVERVIEW.md for the two levers that did not work. So this is fitted
+# to a
 # constant, now with two observations behind it rather than one.
 #   fixtures/reference-firefox-157-windows-fresh.hex
 #   fixtures/reference-firefox-157-windows-resumed.hex
