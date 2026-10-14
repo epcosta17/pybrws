@@ -11,6 +11,18 @@ The computation is small and the spec is public, so there is no reason for
 that. This prints JA4 and JA4_r for a profile, and `--drop` answers the
 counterfactual directly.
 
+The method is JA4, specified by FoxIO at https://github.com/FoxIO-LLC/ja4.
+Only JA4 -- the TLS client fingerprint -- is computed here, and FoxIO
+licenses that one as BSD 3-Clause, the same as JA3, stating that it holds no
+patent claims over it. The rest of the JA4+ suite (JA4S, JA4H, JA4T, JA4X and
+the others) is patent-pending under the FoxIO License 1.1 and is *not*
+implemented anywhere in this project: where those names appear, in
+tools/probe_fingerprint.py and tools/population.py, they are keys of values a
+third-party service returned.
+
+This file is an independent implementation written from the specification,
+not a port of FoxIO's code.
+
     python tools/ja4.py --profile chrome155
     python tools/ja4.py --profile chrome155 --drop 0x12e0
     python tools/ja4.py --self-test

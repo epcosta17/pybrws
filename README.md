@@ -383,3 +383,20 @@ Track how targets respond over time, against a plain client:
 Separate the fingerprint from the address it comes from:
 
     python tools/isolate.py
+
+## Licence
+
+MIT, in `LICENSE`.
+
+The fingerprinting method this project measures itself with is **JA4**,
+specified by [FoxIO](https://github.com/FoxIO-LLC/ja4). FoxIO licenses JA4 —
+the TLS client fingerprint — as BSD 3-Clause, the same as JA3, and states
+that it holds no patent claims over it. The rest of the JA4+ suite (JA4S,
+JA4H, JA4T, JA4X and the others) is patent-pending under the FoxIO License
+1.1.
+
+Only JA4 is computed here, in `tools/ja4.py`, as an independent
+implementation written from the specification rather than a port. Where the
+other method names appear — in `tools/probe_fingerprint.py` and
+`tools/population.py` — they are keys of values a third-party service
+returned, not implementations.
