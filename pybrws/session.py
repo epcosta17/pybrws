@@ -170,6 +170,10 @@ class Session:
             response = http.request(method, path, authority,
                                     headers=request_headers, body=body)
 
+        if getattr(http, "broken", False):
+            # The peer is closing it, or its header state is lost: it may
+            # not carry the next request, so the pool lets it go now.
+            self._discard(host, port)
         self.cookies.absorb(response.headers, host, path.split("?", 1)[0])
         response.url = url
         return response

@@ -86,7 +86,8 @@ def _protocol():
                 self._http = H3Connection(self._quic)
             stream_id = self._quic.get_next_available_stream_id()
             fields = _pseudo(method, path, authority, pseudo_order)
-            fields += [(name.lower().encode(), value.encode())
+            fields += [(header_tools.to_wire(name.lower()),
+                        header_tools.to_wire(value))
                        for name, value in headers]
             self._http.send_headers(stream_id, fields, end_stream=not body)
             if body:
@@ -125,8 +126,8 @@ def _protocol():
             status = 0
             headers = []
             for name, value in fields:
-                name = name.decode("ascii", "replace")
-                value = value.decode("ascii", "replace")
+                name = header_tools.from_wire(name)
+                value = header_tools.from_wire(value)
                 if name == ":status":
                     status = int(value)
                 elif not name.startswith(":"):

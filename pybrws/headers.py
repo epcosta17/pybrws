@@ -15,6 +15,35 @@ Headers = Sequence[tuple[str, str]]
 Overrides = Mapping[str, str] | Iterable[tuple[str, str]] | None
 
 
+def to_wire(value: str) -> bytes:
+    """A header value as the bytes that go on the wire.
+
+    Header values are bytes, not text. Everywhere in this client a value is
+    held as a str whose characters are those bytes one to one (latin-1), so
+    whatever arrived -- UTF-8, latin-1, anything -- goes back out unchanged.
+    """
+    return value.encode("latin-1")
+
+
+def from_wire(raw: bytes) -> str:
+    """The str form of header bytes received from the wire; see `to_wire`."""
+    return raw.decode("latin-1") if isinstance(raw, (bytes, bytearray)) else raw
+
+
+def check_field(name: str, value: str) -> None:
+    """Refuse a header that would split the message it is written into.
+
+    CR and LF end a header line in HTTP/1.1, so a value carrying them writes
+    a second header -- or a second request -- of the sender's choosing; NUL
+    is refused by every HTTP version. Checked for every header sent,
+    whatever its source: a caller's, a profile's, or a cookie a server set.
+    """
+    for part in (name, value):
+        if "\r" in part or "\n" in part or "\x00" in part:
+            raise ValueError("header %r carries CR, LF or NUL, which would "
+                             "split the message" % name)
+
+
 def as_pairs(overrides: Overrides) -> list[tuple[str, str]]:
     if overrides is None:
         return []

@@ -71,6 +71,8 @@ class Response:
     http_version: str = ""
     url: str = ""
     history: list = field(default_factory=list)
+    # HTTP/2 trailers: fields sent after the body, kept apart from the head.
+    trailers: list[tuple[str, str]] = field(default_factory=list)
 
     def header(self, name: str) -> str | None:
         wanted = name.lower()
