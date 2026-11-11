@@ -27,18 +27,27 @@ class _StreamReader:
         self.buffer = bytearray()
         self.eof = False
 
-    def _fill(self) -> None:
+    def _fill(self) -> bool:
+        """Read more into the buffer. False at a clean end of stream.
+
+        Only close_notify is a clean end, and the TLS layer reports it as an
+        empty read. A connection that simply stops (EOFError, which a bare
+        FIN surfaces as) may have been cut by anyone on the path, so it
+        raises: the caller cannot know what it did not receive.
+        """
         if self.eof:
-            raise Http1Error("connection closed mid-message")
+            return False
         try:
             chunk = self.tls.recv()
-        except EOFError:
+        except EOFError as exc:
             self.eof = True
-            raise Http1Error("connection closed mid-message")
+            raise Http1Error("connection closed without close_notify, so the "
+                             "message may be truncated") from exc
         if not chunk:
             self.eof = True
-            raise Http1Error("connection closed mid-message")
+            return False
         self.buffer += chunk
+        return True
 
     def read_until(self, delimiter: bytes, limit: int) -> bytes:
         while True:
@@ -49,21 +58,22 @@ class _StreamReader:
                 return head
             if len(self.buffer) > limit:
                 raise Http1Error("no " + repr(delimiter) + " within " + str(limit) + " bytes")
-            self._fill()
+            if not self._fill():
+                raise Http1Error("connection closed mid-message")
 
     def read_exactly(self, n: int) -> bytes:
         while len(self.buffer) < n:
-            self._fill()
+            if not self._fill():
+                raise Http1Error("connection closed mid-message")
         data = bytes(self.buffer[:n])
         del self.buffer[:n]
         return data
 
     def read_to_eof(self) -> bytes:
-        while True:
-            try:
-                self._fill()
-            except Http1Error:
-                break
+        """A body whose length is the connection's: complete only at
+        close_notify (RFC 9112 section 9.8)."""
+        while self._fill():
+            pass
         data = bytes(self.buffer)
         self.buffer.clear()
         return data
@@ -158,7 +168,11 @@ class Http1Connection:
             head = self.reader.read_until(b"\r\n\r\n", MAX_HEADER_BYTES)
             status_line, _, header_block = head.partition(b"\r\n")
             version, status = _parse_status_line(status_line)
-            if status != 100:
+            # Every 1xx but 101 is informational: 100 Continue, 103 Early
+            # Hints. Taking one as final leaves the real response unread, to
+            # be mistaken for the answer to the next request on the
+            # connection.
+            if not 100 <= status < 200 or status == 101:
                 break
 
         headers = _parse_headers(header_block)

@@ -25,7 +25,8 @@ from .parser import _Reader
 from .profiles import firefox157
 from .tickets import parse_new_session_ticket, ticket_key
 from .proxies import open_socket
-from .records import CHANGE_CIPHER_SPEC, APPLICATION_DATA, HANDSHAKE, Cipher, RecordLayer
+from .records import (CHANGE_CIPHER_SPEC, APPLICATION_DATA, HANDSHAKE, Cipher,
+                      RecordLayer, TlsAlert)
 from .wire import u24, u8, vector
 
 SERVER_HELLO = 0x02
@@ -58,6 +59,17 @@ HELLO_RETRY_REQUEST_RANDOM = bytes.fromhex(
 
 class HandshakeError(Exception):
     pass
+
+
+class TruncatedStream(EOFError):
+    """The peer closed the TCP stream without a close_notify.
+
+    Over TLS only an authenticated close_notify proves the stream ended where
+    the peer meant it to. A bare FIN can be anyone on the path cutting the
+    connection, so whatever was being read when it came may be cut short.
+    An EOFError, so code that treats a closed connection as retryable still
+    does.
+    """
 
 
 class ServerHello:
@@ -415,15 +427,36 @@ class Connection:
         self.write_secret = write_secret
         # A post-handshake message may span records, like any handshake one.
         self._post_buffer = bytearray()
+        self._closed = False
 
     def send(self, data: bytes) -> None:
         self.records.write(APPLICATION_DATA, data)
 
     def recv(self) -> bytes:
-        """Return the next application payload, skipping post-handshake messages."""
+        """Return the next application payload, skipping post-handshake messages.
+
+        Returns b"" only when the peer has sent close_notify, the clean end
+        of the stream. An empty application record is legal and is skipped,
+        not read as an end. A connection closed without close_notify raises
+        TruncatedStream.
+        """
+        if self._closed:
+            return b""
         while True:
-            content_type, body = self.records.read()
+            try:
+                content_type, body = self.records.read()
+            except TlsAlert as alert:
+                if alert.description == 0:   # close_notify
+                    self._closed = True
+                    return b""
+                raise
+            except EOFError as exc:
+                raise TruncatedStream(
+                    "the peer closed the connection without close_notify; "
+                    "anything being read may be truncated") from exc
             if content_type == APPLICATION_DATA:
+                if not body:
+                    continue
                 return body
             if content_type == HANDSHAKE:
                 self._post_handshake(body)

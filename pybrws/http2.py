@@ -148,7 +148,12 @@ class Http2Connection:
                     payload = bytes(self._buffer[9 : 9 + length])
                     del self._buffer[: 9 + length]
                     return frame_type, flags, stream_id, payload
-            self._buffer += self.tls.recv()
+            chunk = self.tls.recv()
+            if not chunk:
+                # close_notify at a frame boundary: no frame is coming, so
+                # whatever is still waiting for one has failed.
+                raise Http2Error("connection closed")
+            self._buffer += chunk
 
     def request(self, method: str, path: str, authority: str, *, headers=None,
                 body: bytes = b"", context=None) -> Response:
