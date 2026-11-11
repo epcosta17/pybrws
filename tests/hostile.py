@@ -736,6 +736,24 @@ class QuicServer:
         self.loop.close()
 
 
+P25519 = 2**255 - 19
+A25519 = 486662
+
+
+def x25519_like(enc: bytes) -> bool:
+    """Whether `enc` could be an X25519 public key, as a passive observer
+    can test: 32 bytes in canonical form (top bit clear, u below p) and a
+    point on Curve25519 rather than its twist -- u^3 + A u^2 + u is a
+    square mod p (RFC 7748). Random bytes pass about one time in four."""
+    if len(enc) != 32 or enc[31] & 0x80:
+        return False
+    u = int.from_bytes(enc, "little")
+    if u >= P25519:
+        return False
+    v = (u * u * u + A25519 * u * u + u) % P25519
+    return v == 0 or pow(v, (P25519 - 1) // 2, P25519) == 1
+
+
 def zstd_compress(data: bytes) -> bytes:
     """zstd from the standard library (3.14) or the zstandard package, so
     the zstd tests run on 3.11 as well; skipped where neither exists."""

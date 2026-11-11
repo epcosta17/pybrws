@@ -165,6 +165,12 @@ CHALLENGE_MARKERS = (
     b"enable JavaScript and cookies",
 )
 
+# The markers are read only in bodies smaller than this. They were taken from
+# refusal pages, which are small (the macys shell is 2,843 bytes); a real page
+# can say "Access Denied" in passing, and the notebook's rule is that content
+# heuristics stay anchored to the small refusal pages.
+CHALLENGE_BODY_LIMIT = 100_000
+
 
 def blocked(status) -> bool:
     return status in (403, 429, 503)
@@ -187,8 +193,8 @@ def arrived(result) -> bool:
         status, body = result, None
     if not isinstance(status, int) or blocked(status) or 300 <= status < 400:
         return False
-    if body is not None and any(m.lower() in body[:60000].lower()
-                                for m in CHALLENGE_MARKERS):
+    if (body is not None and len(body) < CHALLENGE_BODY_LIMIT
+            and any(m.lower() in body.lower() for m in CHALLENGE_MARKERS)):
         return False
     return True
 

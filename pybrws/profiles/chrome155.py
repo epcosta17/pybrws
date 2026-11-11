@@ -39,6 +39,8 @@ from __future__ import annotations
 import os
 from typing import Callable
 
+from cryptography.hazmat.primitives.asymmetric import x25519
+
 from .. import hosts
 from .. import headers as header_tools
 from ..keyexchange import KeyExchange
@@ -306,13 +308,26 @@ def key_share(ctx) -> bytes:
 
 
 def greased_ech(ctx) -> bytes:
-    size = ECH_PAYLOAD_SIZES[ctx.random(1)[0] % len(ECH_PAYLOAD_SIZES)]
+    """Chrome's GREASE ECH extension.
+
+    `enc` is a real X25519 public key, from a key pair drawn per connection:
+    all six captures carry one, which random bytes would be one time in
+    4096, and three random `enc`s in four are values no X25519 key can take
+    -- a test anyone watching can run. Firefox's are random bytes, and
+    firefox157 sends random bytes. The size index is drawn without modulus
+    bias, as every other draw here is.
+    """
+    size = ECH_PAYLOAD_SIZES[_below(ctx, len(ECH_PAYLOAD_SIZES))]
+    config_id = ctx.random(1)[0]
+    enc = (x25519.X25519PrivateKey.from_private_bytes(ctx.random(32))
+           .public_key().public_bytes_raw())
+    assert len(enc) == ECH_ENC_SIZE
     return (
         u8(ECH_OUTER)
         + u16(ECH_KDF_ID)
         + u16(ECH_AEAD_ID)
-        + u8(ctx.random(1)[0])
-        + vector(ctx.random(ECH_ENC_SIZE), 2)
+        + u8(config_id)
+        + vector(enc, 2)
         + vector(ctx.random(size), 2)
     )
 
