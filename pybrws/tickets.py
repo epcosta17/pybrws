@@ -63,29 +63,45 @@ def parse_new_session_ticket(body: bytes, suite: CipherSuite,
     )
 
 
+def ticket_key(host: str, port: int, verify: bool, trust_store) -> tuple:
+    """What a ticket is bound to: the server it came from, and how that
+    server was checked.
+
+    A resumed handshake shows no certificate -- the ticket stands in for the
+    one checked when it was earned. So a ticket from a connection that did
+    not verify, or that trusted other anchors, must never resume one that
+    does: it would authenticate a server nothing ever checked. And a ticket
+    for one port is a different server's. The trust store is compared by
+    identity, which is what one process shares between its sessions.
+    """
+    return (host.lower(), port, bool(verify),
+            id(trust_store) if trust_store is not None else None)
+
+
 class TicketStore:
     """Tickets held per host, used once each."""
 
     def __init__(self) -> None:
-        self._tickets: dict[str, list[Ticket]] = {}
+        self._tickets: dict[object, list[Ticket]] = {}
         self._lock = threading.Lock()
 
     def __len__(self) -> int:
         with self._lock:
             return sum(len(v) for v in self._tickets.values())
 
-    def add(self, host: str, ticket: Ticket) -> None:
+    def add(self, key, ticket: Ticket) -> None:
+        """Keep `ticket` under `key`, normally `ticket_key(...)`."""
         with self._lock:
-            self._tickets.setdefault(host, []).append(ticket)
+            self._tickets.setdefault(key, []).append(ticket)
 
-    def take(self, host: str, suite_id: int | None = None) -> Ticket | None:
-        """Remove and return a usable ticket for `host`, if there is one.
+    def take(self, key, suite_id: int | None = None) -> Ticket | None:
+        """Remove and return a usable ticket for `key`, if there is one.
 
         Removed rather than kept because reusing one lets an observer link
         the two connections, which is the opposite of the point.
         """
         with self._lock:
-            held = self._tickets.get(host)
+            held = self._tickets.get(key)
             if not held:
                 return None
             now = time.time()

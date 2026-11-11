@@ -155,33 +155,50 @@ def serialise(hello, record_version: int = 0x0301) -> bytes:
     return u8(CONTENT_TYPE_HANDSHAKE) + u16(record_version) + vector(handshake, 2)
 
 
-def retry_hello(original: bytes, group: int, share: bytes,
-                cookie: bytes | None = None) -> bytes:
+def retry_hello(original: bytes, group: int | None, share: bytes | None,
+                cookie: bytes | None = None, *, binder_context: bytes = b"",
+                tickets=None, suite=None) -> bytes:
     """The second ClientHello a HelloRetryRequest asks for.
 
     RFC 8446 section 4.1.2: it must equal the first except for the key_share,
     which carries one entry for the group the server chose, plus the server's
-    cookie if it sent one. Rebuilding from the original bytes rather than
-    re-emitting from the profile is what guarantees "except".
+    cookie if it sent one, plus a pre_shared_key brought up to date. Rebuilding
+    from the original bytes rather than re-emitting from the profile is what
+    guarantees "except".
+
+    `group=None` is a retry that only carries a cookie: the key shares stay.
+
+    A PSK cannot be copied across. Its binder signs the transcript, and the
+    transcript now starts with the first hello's hash and the retry request,
+    which is what `binder_context` holds; its age has moved on too. So any old
+    pre_shared_key is removed, and with `tickets` it is re-attached, last,
+    with fresh ages and binders over the new transcript (RFC 8446 4.2.11.2).
+    Without `tickets` it stays removed, which the RFC allows for a PSK the
+    server's suite cannot use.
 
     The cookie's position is UNMEASURED. No capture of a browser answering a
-    HelloRetryRequest exists here, so it goes last, which is legal and may
-    not be what Firefox does.
+    HelloRetryRequest exists here, so it goes at the end of everything but
+    the pre_shared_key, which RFC 8446 requires to be last.
     """
     from .parser import parse_client_hello
 
     hello = parse_client_hello(original)
-    entry = u16(group) + vector(share, 2)
     rebuilt = []
     for existing in hello.extensions:
-        if existing.type == EXT_KEY_SHARE:
+        if existing.type == EXT_PRE_SHARED_KEY:
+            continue
+        if existing.type == EXT_KEY_SHARE and group is not None:
+            entry = u16(group) + vector(share, 2)
             rebuilt.append(Extension(EXT_KEY_SHARE, vector(entry, 2)))
         else:
             rebuilt.append(existing)
     if cookie is not None and not any(e.type == EXT_COOKIE for e in rebuilt):
         rebuilt.append(Extension(EXT_COOKIE, cookie))
     hello.extensions = rebuilt
-    return serialise(hello, int.from_bytes(original[1:3], "big"))
+    record = serialise(hello, int.from_bytes(original[1:3], "big"))
+    if tickets:
+        return _attach_psk(record, tickets, suite, binder_context)
+    return record
 
 
 def grow_ech(data: bytes, extra: int, rng: Callable[[int], bytes]) -> bytes:
@@ -216,18 +233,12 @@ def with_psk(original: bytes, tickets, suite, *, profile=firefox157,
     session_ticket is dropped on the way, which the RFC does not ask for but
     the browser does.
     """
-    from .keyschedule import psk_binder
     from .parser import parse_client_hello
 
     hello = parse_client_hello(original)
     if any(e.type == EXT_PRE_SHARED_KEY for e in hello.extensions):
         raise ValueError("this ClientHello already offers a pre-shared key")
 
-    identities = b"".join(
-        vector(t.identity, 2) + t.obfuscated_age().to_bytes(4, "big")
-        for t in tickets
-    )
-    placeholder = b"".join(vector(bytes(suite.hash_size), 1) for _ in tickets)
     # Measured: Firefox does not merely append the extension, it *swaps*
     # session_ticket for it, so a resumed hello carries the same number of
     # extensions as a fresh one. Appending without dropping would leave us at
@@ -236,8 +247,6 @@ def with_psk(original: bytes, tickets, suite, *, profile=firefox157,
     # by counting, without hashing anything.
     # fixtures/reference-firefox-157-windows-resumed.hex
     kept = [e for e in hello.extensions if e.type != EXT_SESSION_TICKET]
-    psk = Extension(EXT_PRE_SHARED_KEY,
-                    vector(identities, 2) + vector(placeholder, 2))
 
     # The greased ECH payload stands in for an encrypted inner ClientHello,
     # which now carries a pre_shared_key of its own, so the browser's grows
@@ -245,23 +254,57 @@ def with_psk(original: bytes, tickets, suite, *, profile=firefox157,
     # shorter than the capture.
     growth = getattr(profile, "ech_growth_for_psk", None)
     if growth is not None:
-        extra = growth(len(psk.data) + 4)
+        extra = growth(_psk_extension_size(tickets, suite) + 4)
         kept = [
             Extension(e.type, grow_ech(e.data, extra, rng))
             if e.type == EXT_ENCRYPTED_CLIENT_HELLO else e
             for e in kept
         ]
 
-    hello.extensions = kept + [psk]
-
+    hello.extensions = kept
     record = serialise(hello, int.from_bytes(original[1:3], "big"))
+    return _attach_psk(record, tickets, suite)
+
+
+def _psk_extension_size(tickets, suite) -> int:
+    """The pre_shared_key payload's size: identities, then binders."""
+    identities = sum(2 + len(t.identity) + 4 for t in tickets)
+    binders = sum(1 + suite.hash_size for _ in tickets)
+    return 2 + identities + 2 + binders
+
+
+def _attach_psk(record: bytes, tickets, suite, binder_context: bytes = b"") -> bytes:
+    """Append a pre_shared_key offering `tickets`, binders filled in.
+
+    The binders are an HMAC over the transcript up to where they begin, so
+    the hello is serialised once with the right lengths and empty binders,
+    hashed together with `binder_context` -- empty for a first hello, the
+    first hello's hash and the HelloRetryRequest for a second one -- and the
+    binders written into the space reserved for them. The ages are computed
+    now, which on a second hello is the point.
+    """
+    from .keyschedule import psk_binder
+    from .parser import parse_client_hello
+
+    hello = parse_client_hello(record)
+    identities = b"".join(
+        vector(t.identity, 2) + t.obfuscated_age().to_bytes(4, "big")
+        for t in tickets
+    )
+    placeholder = b"".join(vector(bytes(suite.hash_size), 1) for _ in tickets)
+    psk = Extension(EXT_PRE_SHARED_KEY,
+                    vector(identities, 2) + vector(placeholder, 2))
+    hello.extensions = list(hello.extensions) + [psk]
+
+    record = serialise(hello, int.from_bytes(record[1:3], "big"))
     message = record[5:]
     # The binders, and the two-byte length in front of them, are the tail.
     tail = 2 + len(placeholder)
     truncated = message[:-tail]
 
     binders = b"".join(
-        vector(psk_binder(suite, t.psk, truncated), 1) for t in tickets
+        vector(psk_binder(suite, t.psk, binder_context + truncated), 1)
+        for t in tickets
     )
     if len(binders) != len(placeholder):
         raise ValueError("binders did not fill the space reserved for them")

@@ -50,31 +50,55 @@ class CertificateError(Exception):
 
 
 def decompress_certificate(message: bytes) -> bytes:
-    """Turn an RFC 8879 CompressedCertificate body into a Certificate body."""
+    """Turn an RFC 8879 CompressedCertificate body into a Certificate body.
+
+    The output is bounded by the declared length *while* decompressing.
+    Checking it afterwards would be too late: this message arrives before the
+    server has proved anything, and a kilobyte of brotli can expand to a
+    gigabyte. RFC 8879 section 4 asks for exactly this bound. The declared
+    length is a uint24, so its own ceiling of 2**24 - 1 holds by construction.
+    """
     reader = _Reader(message, "CompressedCertificate")
     algorithm = reader.uint(2)
     expected = reader.uint(3)
     compressed = reader.vector(3)
+    # One byte past the declared length is enough to know it was a lie.
+    limit = expected + 1
 
-    if algorithm == COMPRESSION_ZLIB:
-        import zlib
+    try:
+        if algorithm == COMPRESSION_ZLIB:
+            import zlib
 
-        plain = zlib.decompress(compressed)
-    elif algorithm == COMPRESSION_BROTLI:
-        import brotli
+            plain = zlib.decompressobj().decompress(compressed, limit)
+        elif algorithm == COMPRESSION_BROTLI:
+            import brotli
 
-        plain = brotli.decompress(compressed)
-    elif algorithm == COMPRESSION_ZSTD:
-        try:
-            from compression import zstd
-        except ImportError:
-            import zstandard
+            # Bounded to within one internal block of the limit, which is
+            # enough: the length check below rejects anything past it.
+            plain = brotli.Decompressor().process(
+                compressed, output_buffer_limit=limit)
+        elif algorithm == COMPRESSION_ZSTD:
+            try:
+                from compression import zstd
+            except ImportError:
+                import io
 
-            plain = zstandard.ZstdDecompressor().decompress(compressed)
+                import zstandard
+
+                with zstandard.ZstdDecompressor().stream_reader(
+                        io.BytesIO(compressed)) as source:
+                    plain = source.read(limit)
+            else:
+                plain = zstd.ZstdDecompressor().decompress(
+                    compressed, max_length=limit)
         else:
-            plain = zstd.decompress(compressed)
-    else:
-        raise CertificateError("unknown certificate compression " + str(algorithm))
+            raise CertificateError(
+                "unknown certificate compression " + str(algorithm))
+    except CertificateError:
+        raise
+    except Exception as exc:
+        raise CertificateError(
+            "certificate decompression failed: " + str(exc)) from exc
 
     if len(plain) != expected:
         raise CertificateError(

@@ -74,9 +74,16 @@ class KeyExchange:
             return self._x25519[group].exchange(peer)
 
         if group in CURVES:
-            peer = ec.EllipticCurvePublicKey.from_encoded_point(
-                CURVES[group](), peer_share
-            )
+            curve = CURVES[group]()
+            # RFC 8446 section 4.2.8.2: only the uncompressed form, 0x04 and
+            # both coordinates. `from_encoded_point` would accept a
+            # compressed one too.
+            size = 1 + 2 * ((curve.key_size + 7) // 8)
+            if len(peer_share) != size or peer_share[:1] != b"\x04":
+                raise ValueError(
+                    f"0x{group:04x} server share is not an uncompressed point "
+                    f"of {size} bytes (RFC 8446 4.2.8.2)")
+            peer = ec.EllipticCurvePublicKey.from_encoded_point(curve, peer_share)
             return self._ec[group].exchange(ec.ECDH(), peer)
 
         if group == X25519MLKEM768:
