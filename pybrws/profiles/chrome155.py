@@ -39,6 +39,7 @@ from __future__ import annotations
 import os
 from typing import Callable
 
+from .. import hosts
 from .. import headers as header_tools
 from ..keyexchange import KeyExchange
 from ..model import GREASE_DRAW
@@ -275,8 +276,11 @@ def payload_for(kind: int, ctx) -> bytes:
     raise ValueError("chrome155 has no payload for extension %d" % kind)
 
 
-def server_name(hostname: str) -> bytes:
-    host = hostname.encode("idna")
+def server_name(hostname: str) -> bytes | None:
+    """None for an IP literal, which Chrome leaves out of server_name."""
+    if hosts.is_ip_literal(hostname):
+        return None
+    host = hosts.ascii_host(hostname).encode("ascii")
     return vector(u8(0x00) + vector(host, 2), 2)
 
 

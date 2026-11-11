@@ -85,17 +85,20 @@ def build_extensions(profile, ctx: Context) -> bytes:
     Keeping the stored kind is not backwards compatibility for its own sake:
     a stored order is a stronger claim than a drawn one, and flattening both
     into a draw would lose the distinction that was measured.
+
+    A payload of None leaves the extension out: server_name for an IP
+    literal, which RFC 6066 forbids and neither browser sends.
     """
     if hasattr(profile, "extension_order"):
-        out = bytearray()
-        for ext_type in profile.extension_order(ctx):
-            out += extension(ext_type, profile.payload_for(ext_type, ctx))
-        return bytes(out)
-
+        pairs = ((ext_type, profile.payload_for(ext_type, ctx))
+                 for ext_type in profile.extension_order(ctx))
+    else:
+        pairs = ((ext_type, payload(ctx) if callable(payload) else payload)
+                 for ext_type, payload in profile.EXTENSIONS)
     out = bytearray()
-    for ext_type, payload in profile.EXTENSIONS:
-        data = payload(ctx) if callable(payload) else payload
-        out += extension(ext_type, data)
+    for ext_type, data in pairs:
+        if data is not None:
+            out += extension(ext_type, data)
     return bytes(out)
 
 

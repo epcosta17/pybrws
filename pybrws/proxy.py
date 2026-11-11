@@ -28,6 +28,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
+from . import headers as header_tools
 from .client import TooManyRedirects, UnsupportedUrl, get
 from .proxies import ProxyError
 from .message import Response
@@ -202,9 +203,15 @@ def parse_head(head: bytes) -> tuple[str, str, list[tuple[str, str]]]:
 
 
 def serialise(response: Response) -> bytes:
+    """The upstream response as HTTP/1.1 for the local client.
+
+    Raises ValueError for a header carrying CR, LF or NUL: written here, it
+    would start a header line of the upstream's choosing (RFC 9112 5.5).
+    """
     lines = ["HTTP/1.1 " + str(response.status)]
     for name, value in response.headers:
         if name.lower() not in HOP_BY_HOP:
+            header_tools.check_field(name, value)
             lines.append(name + ": " + value)
     lines.append("Content-Length: " + str(len(response.body)))
     lines.append("Connection: close")
@@ -249,7 +256,10 @@ class Proxy:
         except OSError as exc:
             return error_response(504, str(exc))
         self.log("  %s -> %d, %d bytes" % (url, response.status, len(response.body)))
-        return serialise(response)
+        try:
+            return serialise(response)
+        except ValueError as exc:
+            return error_response(502, "upstream response: " + str(exc))
 
     def handle(self, client: socket.socket, peer) -> None:
         client.settimeout(self.timeout)

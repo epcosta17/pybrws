@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import socket
 
-from . import certs
+from . import certs, hosts
 from hmac import compare_digest
 
 from .emitter import build_client_hello, retry_hello, with_psk
@@ -570,6 +570,8 @@ def connect(
         CertificateError: if the chain or the signature does not check out.
         TlsAlert: if the server rejects the handshake.
     """
+    # One ASCII form for SNI, DNS and certificate checks alike (hosts.py).
+    host = hosts.ascii_host(host)
     key_exchange = KeyExchange([group for group, _ in profile.KEY_SHARE_GROUPS])
     client_hello = build_client_hello(host, profile=profile, key_exchange=key_exchange)
 

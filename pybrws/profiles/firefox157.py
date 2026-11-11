@@ -6,6 +6,7 @@ Payloads that vary per connection are produced by the functions at the bottom.
 
 from __future__ import annotations
 
+from .. import hosts
 from .. import headers as header_tools
 from ..keyexchange import KeyExchange
 from ..wire import u8, u16, vector
@@ -78,8 +79,12 @@ def ech_growth_for_psk(psk_extension_size: int) -> int:
     return psk_extension_size + ECH_PSK_GROWTH_RESIDUAL
 
 
-def server_name(ctx) -> bytes:
-    host = ctx.hostname.encode("idna")
+def server_name(ctx) -> bytes | None:
+    """None for an IP literal: RFC 6066 3 forbids one here and Firefox sends
+    no server_name at all (the bare-IP capture, NOTEBOOK phase 1)."""
+    if hosts.is_ip_literal(ctx.hostname):
+        return None
+    host = hosts.ascii_host(ctx.hostname).encode("ascii")
     return vector(u8(0x00) + vector(host, 2), 2)
 
 

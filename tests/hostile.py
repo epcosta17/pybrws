@@ -77,8 +77,43 @@ def trusted_ca():
 
 
 def leaf(ca, host: str):
-    """(certificate, private key) for `host`, signed by `ca`."""
-    return ca._leaf(host)
+    """(certificate, private key) for `host`, signed by `ca`.
+
+    A DNS-name SAN from the CA's own builder; for an IP literal, an IP
+    address SAN with the same extensions, which that builder cannot make.
+    """
+    import datetime
+    import ipaddress
+
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+
+    try:
+        address = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return ca._leaf(host)
+    key = ec.generate_private_key(ec.SECP256R1())
+    now = datetime.datetime.now(datetime.timezone.utc)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, str(address))]))
+        .issuer_name(ca.certificate.subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=90))
+        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(address)]),
+                       critical=False)
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(x509.ExtendedKeyUsage([x509.ExtendedKeyUsageOID.SERVER_AUTH]),
+                       critical=False)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
+                       critical=False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(
+            ca.key.public_key()), critical=False)
+        .sign(ca.key, hashes.SHA256())
+    )
+    return certificate, key
 
 
 def leaf_der(ca, host: str) -> bytes:

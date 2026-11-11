@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from contextlib import contextmanager
 from urllib.parse import urljoin, urlsplit
 
@@ -9,6 +10,7 @@ from .handshake import connect
 from .http1 import Http1Connection
 from .http2 import Http2Connection
 from . import headers as header_tools
+from . import hosts
 from .message import Response, encode_body
 from .profiles import firefox157
 
@@ -25,6 +27,10 @@ class TooManyRedirects(Exception):
 
 REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
+# What a caller sets for one origin and must not hand to another.
+CREDENTIAL_HEADERS = frozenset({"authorization", "proxy-authorization", "cookie"})
+DEFAULT_PORTS = {"https": 443, "http": 80}
+
 
 def split_target(url: str) -> tuple[str, int, str, str]:
     """Return host, port, authority and path-with-query for an https URL."""
@@ -34,16 +40,50 @@ def split_target(url: str) -> tuple[str, int, str, str]:
     if not parts.hostname:
         raise UnsupportedUrl("no host in " + repr(url))
     port = parts.port or DEFAULT_PORT
-    authority = (parts.hostname if port == DEFAULT_PORT
-                 else parts.hostname + ":" + str(port))
+    host = hosts.ascii_host(parts.hostname)
+    authority = hosts.authority_for(host, port, DEFAULT_PORT)
     path = parts.path or "/"
     if parts.query:
         path += "?" + parts.query
-    return parts.hostname, port, authority, path
+    return host, port, authority, path
 
 
 class Unmeasured(Exception):
     """A profile has no capture for this kind of request."""
+
+
+def _origin(url: str) -> tuple[str, str, int]:
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
+    host = hosts.ascii_host(parts.hostname or "")
+    if hosts.is_ip_literal(host):
+        host = ipaddress.ip_address(host).compressed   # [0:0::1] is [::1]
+    return scheme, host, parts.port or DEFAULT_PORTS.get(scheme, DEFAULT_PORT)
+
+
+def same_origin(a: str, b: str) -> bool:
+    """Whether two URLs share scheme, host and port (RFC 6454), however they
+    are spelled: case, an explicit default port, a U-label or its A-label.
+    A URL that does not parse is another origin."""
+    try:
+        return _origin(a) == _origin(b)
+    except ValueError:
+        return False
+
+
+def redirect_headers(headers, from_url: str, to_url: str):
+    """The caller's headers for the next hop of a redirect.
+
+    On a change of origin, Authorization, Proxy-Authorization and a Cookie
+    the caller set are dropped, as curl and requests do: they were given for
+    the first origin, and a redirect is the server's choice, not the
+    caller's. Otherwise the headers are returned unchanged. A Session's own
+    cookies are not affected; its jar picks them for each hop.
+    """
+    if headers is None or same_origin(from_url, to_url):
+        return headers
+    return [(name, value) for name, value in header_tools.as_pairs(headers)
+            if name.lower() not in CREDENTIAL_HEADERS]
 
 
 def _set(profile, name: str):
@@ -185,7 +225,9 @@ def request(url: str, *, method: str = "GET", profile=firefox157,
                 + " hops, last " + repr(urljoin(url, location))
             )
         seen.append(response)
-        url = urljoin(url, location)
+        next_url = urljoin(url, location)
+        headers = redirect_headers(headers, url, next_url)
+        url = next_url
         if response.status in (301, 302, 303) and method != "HEAD":
             # A browser turns these into a GET and drops the body.
             method, body = "GET", b""

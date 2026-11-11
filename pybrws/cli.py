@@ -9,7 +9,8 @@ from urllib.parse import urljoin
 
 from . import profiles
 from . import headers as header_tools
-from .client import TooManyRedirects, UnsupportedUrl, request
+from .client import (REDIRECT_STATUSES, TooManyRedirects, UnsupportedUrl,
+                     redirect_headers, request)
 from .message import Response
 from .certs import CertificateError
 from .proxies import ProxyError
@@ -64,20 +65,25 @@ def fetch_http3(args, profile, overrides) -> Response:
     url = args.url
     history: list[Response] = []
     budget = args.max_redirs if args.location else 0
-    for _ in range(budget + 1):
+    for hop in range(budget + 1):
         response = h3.get(url, timeout=args.timeout,
                           headers=overrides or None,
                           profile=profile, verify=not args.insecure)
         response.url = url
-        if not 300 <= response.status < 400:
-            break
         location = response.header("location")
-        if not location:
+        # The statuses client.request follows, so both arms agree on what
+        # a redirect is; a 304 with a Location header is not one.
+        if response.status not in REDIRECT_STATUSES or not location:
             break
+        if hop == budget:
+            if budget == 0:
+                break   # --no-location: the redirect is the answer, as over TCP
+            raise TooManyRedirects("still redirecting after %d hops, last %r"
+                                   % (budget, urljoin(url, location)))
         history.append(response)
-        url = urljoin(url, location)
-    else:
-        raise TooManyRedirects("more than %d redirects" % budget)
+        next_url = urljoin(url, location)
+        overrides = redirect_headers(overrides, url, next_url)
+        url = next_url
     response.history = history
     return response
 

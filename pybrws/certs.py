@@ -8,6 +8,7 @@ until it matters.
 
 from __future__ import annotations
 
+import ipaddress
 import ssl
 import warnings
 
@@ -17,6 +18,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519, padding, rsa
 from cryptography.x509.verification import PolicyBuilder, Store
 
+from . import hosts
 from .parser import _Reader
 
 # RFC 8879
@@ -146,10 +148,15 @@ def verify_chain(chain: list[bytes], hostname: str, store: Store | None = None):
     """
     certificates = [x509.load_der_x509_certificate(der) for der in chain]
     leaf, intermediates = certificates[0], certificates[1:]
+    if hosts.is_ip_literal(hostname):
+        # An address is matched against an IP address SAN, never a DNS one.
+        subject = x509.IPAddress(ipaddress.ip_address(hostname.strip("[]")))
+    else:
+        subject = x509.DNSName(hostname)
     verifier = (
         PolicyBuilder()
         .store(store if store is not None else system_store())
-        .build_server_verifier(x509.DNSName(hostname))
+        .build_server_verifier(subject)
     )
     try:
         verifier.verify(leaf, intermediates)

@@ -122,6 +122,11 @@ class Http1Connection:
         if body and not header_tools.has(headers, "content-length"):
             # Only reached when the header set carries no slot of its own.
             headers = list(headers) + [("Content-Length", str(len(body)))]
+        # Nothing is written until every line is known to be one line.
+        header_tools.check_field(":method", method)
+        header_tools.check_field(":path", path)
+        for name, value in headers:
+            header_tools.check_field(name, value)
         lines = [method + " " + path + " HTTP/1.1"]
         for name, value in headers:
             lines.append(name + ": " + value)

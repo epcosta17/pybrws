@@ -191,6 +191,10 @@ class Http2Connection:
         # peer treats an uppercase one as a protocol error. Casing is part of
         # the fingerprint over HTTP/1.1 and is simply not expressible here.
         ordered += [(name.lower(), value) for name, value in headers]
+        # Before encoding: the encoder's table changes as it encodes, so a
+        # refused field must stop the block before any of it is encoded.
+        for name, value in ordered:
+            header_tools.check_field(name, value)
         # Bytes, not str: hpack would encode a str as UTF-8, and a value is
         # the bytes it arrived as (headers.to_wire). Identical for ASCII.
         return self.encoder.encode(
@@ -249,11 +253,6 @@ class Http2Connection:
             raise StreamRefused("the peer sent GOAWAY, so no new stream may "
                                 "be opened (RFC 9113 6.8)",
                                 requests=[(method, path, authority)])
-        stream_id = self.next_stream_id
-        self.next_stream_id += 2
-        self._stream_windows[stream_id] = self._peer_initial_window
-        self._open[stream_id] = _Stream()
-
         pseudo = {
             ":method": method,
             ":path": path,
@@ -268,7 +267,13 @@ class Http2Connection:
         headers = header_tools.fill(headers, **fields)
         if body and not header_tools.has(headers, "content-length"):
             headers = list(headers) + [("content-length", str(len(body)))]
+        # The block first: a refused header raises before a stream exists.
         block = self._header_block(pseudo, headers)
+
+        stream_id = self.next_stream_id
+        self.next_stream_id += 2
+        self._stream_windows[stream_id] = self._peer_initial_window
+        self._open[stream_id] = _Stream()
 
         flags = FLAG_END_HEADERS if body else FLAG_END_STREAM | FLAG_END_HEADERS
         payload = block
@@ -608,6 +613,13 @@ class Http2Connection:
             # later block on this connection would decode wrongly.
             self.broken = True
             raise Http2Error("COMPRESSION_ERROR: " + str(exc)) from exc
+        for name, value in fields:
+            if any(c in part for part in (name, value) for c in (b"\r", b"\n", b"\x00")):
+                # RFC 9113 8.2.1: a malformed response. Its stream would be
+                # reset, but nothing is sent (D10), so the connection goes.
+                raise self._connection_error(
+                    "PROTOCOL_ERROR: response field %r carries CR, LF or NUL "
+                    "(RFC 9113 8.2.1)" % header_tools.from_wire(name))
         return [
             (header_tools.from_wire(name), header_tools.from_wire(value))
             for name, value in fields

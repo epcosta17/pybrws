@@ -31,6 +31,7 @@ import asyncio
 from urllib.parse import urlsplit
 
 from . import headers as header_tools
+from . import hosts
 from . import quic_impersonate
 from .message import Response, decompress, encode_body
 from .profiles import firefox157, firefox157_quic
@@ -53,6 +54,23 @@ def _pseudo(method: str, path: str, authority: str,
         ":scheme": b"https",
     }
     return [(name.encode(), values[name]) for name in (order or PSEUDO_ORDER)]
+
+
+def request_fields(method: str, path: str, authority: str, headers=(),
+                   pseudo_order=None) -> list[tuple[bytes, bytes]]:
+    """The request's field list as bytes: pseudo-headers, then `headers`
+    lowercased, each value the bytes it was received as (headers.to_wire).
+
+    Raises ValueError for a field carrying CR, LF or NUL (headers.check_field).
+    """
+    headers = list(headers)
+    for name, value in [(":method", method), (":path", path),
+                        (":authority", authority), *headers]:
+        header_tools.check_field(name, value)
+    fields = _pseudo(method, path, authority, pseudo_order)
+    fields += [(header_tools.to_wire(name.lower()), header_tools.to_wire(value))
+               for name, value in headers]
+    return fields
 
 
 def _protocol():
@@ -80,15 +98,13 @@ def _protocol():
         def send(self, method: str, path: str, authority: str,
                  headers=(), body: bytes = b"",
                  pseudo_order=None) -> asyncio.Future:
+            # First, so a refused field raises before a stream is taken.
+            fields = request_fields(method, path, authority, headers, pseudo_order)
             if self._http is None:
                 # ProtocolNegotiated normally gets here first; a caller that
                 # sends before the handshake settles should still work.
                 self._http = H3Connection(self._quic)
             stream_id = self._quic.get_next_available_stream_id()
-            fields = _pseudo(method, path, authority, pseudo_order)
-            fields += [(header_tools.to_wire(name.lower()),
-                        header_tools.to_wire(value))
-                       for name, value in headers]
             self._http.send_headers(stream_id, fields, end_stream=not body)
             if body:
                 self._http.send_data(stream_id, body, end_stream=True)
@@ -157,12 +173,12 @@ def split_target(url: str) -> tuple[str, int, str, str]:
     if not parts.hostname:
         raise Http3Error("no host in " + repr(url))
     port = parts.port or DEFAULT_PORT
-    authority = (parts.hostname if port == DEFAULT_PORT
-                 else "%s:%d" % (parts.hostname, port))
+    host = hosts.ascii_host(parts.hostname)
+    authority = hosts.authority_for(host, port, DEFAULT_PORT)
     path = parts.path or "/"
     if parts.query:
         path += "?" + parts.query
-    return parts.hostname, port, authority, path
+    return host, port, authority, path
 
 
 class Http3Client:

@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 from typing import Callable
 
+from .. import hosts
 from ..wire import u8, u16, vector
 
 # QUIC requires TLS 1.3, so the TLS 1.2 suites the TCP profile offers are not
@@ -251,7 +252,7 @@ def greased_ech(rng: Callable[[int], bytes] = os.urandom) -> bytes:
 
 
 def server_name(hostname: str) -> bytes:
-    host = hostname.encode("idna")
+    host = hosts.ascii_host(hostname).encode("ascii")
     return vector(u8(0x00) + vector(host, 2), 2)
 
 

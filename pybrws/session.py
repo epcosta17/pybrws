@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from urllib.parse import urljoin, urlsplit
 
-from .client import REDIRECT_STATUSES, TooManyRedirects, UnsupportedUrl
+from . import hosts
+from .client import (REDIRECT_STATUSES, TooManyRedirects, UnsupportedUrl,
+                     redirect_headers)
 from . import headers as header_tools
 from .cookies import CookieJar
 from .tickets import TicketStore
@@ -36,11 +38,12 @@ def split_url(url: str) -> tuple[str, int, str, str]:
     if not parts.hostname:
         raise UnsupportedUrl("no host in " + repr(url))
     port = parts.port or DEFAULT_PORT
-    authority = parts.hostname if port == DEFAULT_PORT else parts.hostname + ":" + str(port)
+    host = hosts.ascii_host(parts.hostname)
+    authority = hosts.authority_for(host, port, DEFAULT_PORT)
     path = parts.path or "/"
     if parts.query:
         path += "?" + parts.query
-    return parts.hostname, port, authority, path
+    return host, port, authority, path
 
 
 def insert_header(headers, name: str, value: str, before: str):
@@ -220,7 +223,9 @@ class Session:
                     + repr(urljoin(url, location))
                 )
             seen.append(response)
-            url = urljoin(url, location)
+            next_url = urljoin(url, location)
+            headers = redirect_headers(headers, url, next_url)
+            url = next_url
             if response.status in (301, 302, 303) and method != "HEAD":
                 method, body = "GET", b""
 
