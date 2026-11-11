@@ -27,6 +27,7 @@ class _StreamReader:
         self.tls = tls
         self.buffer = bytearray()
         self.eof = False
+        self.received = 0   # bytes read from the connection, all told
 
     def _fill(self) -> bool:
         """Read more into the buffer. False at a clean end of stream.
@@ -47,6 +48,7 @@ class _StreamReader:
         if not chunk:
             self.eof = True
             return False
+        self.received += len(chunk)
         self.buffer += chunk
         return True
 
@@ -120,6 +122,12 @@ class Http1Connection:
         # still on the wire, so the connection cannot carry another request.
         self.broken = False
         self.reader = _StreamReader(tls)
+        self._sent_at = 0   # reader.received when the current request went out
+
+    @property
+    def response_started(self) -> bool:
+        """Whether any byte of the current request's response has arrived."""
+        return self.reader.received > self._sent_at
 
     def build_request(self, method: str, path: str, authority: str, headers=None,
                       body: bytes = b"", context=None) -> bytes:
@@ -146,8 +154,9 @@ class Http1Connection:
     def request(self, method: str, path: str, authority: str, *, headers=None,
                 body: bytes = b"", context=None) -> Response:
         """Send one request and read its complete response."""
-        self.tls.send(self.build_request(method, path, authority, headers,
-                                         body, context))
+        request = self.build_request(method, path, authority, headers, body, context)
+        self._sent_at = self.reader.received
+        self.tls.send(request)
         return self._read_response(method)
 
     def get(self, path: str, authority: str, *, headers=None) -> Response:

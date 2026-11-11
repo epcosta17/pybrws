@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from .cookies import CookieJar
 from .message import DEFAULT_MAX_BODY, Response
 from .profiles import firefox157
-from .session import Session
+from .session import IDEMPOTENT, Session, may_retry
 from .tickets import TicketStore
 
 
@@ -28,6 +28,7 @@ class Result:
     response: Response | None = None
     error: Exception | None = None
     attempts: int = 1
+    method: str = "GET"
 
     @property
     def ok(self) -> bool:
@@ -47,11 +48,17 @@ class Retry:
     backoff: float = 1.0
 
     def should(self, result: Result) -> bool:
+        """The Session's method rule (D5). An error lets a request go again
+        if the server never saw it, whatever the method, or if the method is
+        safe to repeat. A 429 or 5xx is an answer the server gave, so only a
+        GET, HEAD or OPTIONS asks again."""
         if result.attempts >= self.attempts:
             return False
         if result.error is not None:
-            return True
-        return result.response is not None and result.response.status in self.statuses
+            return may_retry(result.method, result.error, response_started=False)
+        return (result.method.upper() in IDEMPOTENT
+                and result.response is not None
+                and result.response.status in self.statuses)
 
     def wait(self, attempt: int) -> float:
         return self.backoff * (2 ** (attempt - 1))
@@ -118,7 +125,7 @@ class Fetcher:
         """
         import time
 
-        result = Result(url=url, attempts=0)
+        result = Result(url=url, attempts=0, method=kwargs.get("method", "GET"))
         while True:
             result.attempts += 1
             try:

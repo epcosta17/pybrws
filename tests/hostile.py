@@ -539,13 +539,8 @@ class Tls12Server(threading.Thread):
         self.completed = True
 
 
-def openssl_server(handler, *, ca, curve: str | None = None,
-                   alpn=("http/1.1",), connections: int = 1,
-                   max_version=None, host: str = "localhost") -> int:
-    """A real TLS server (stdlib ssl) on loopback. Returns its port.
-
-    `handler(tls_socket)` serves each accepted connection.
-    """
+def server_context(ca, host: str = "localhost") -> ssl.SSLContext:
+    """A stdlib server context presenting a leaf for `host` from `ca`."""
     certificate, key = leaf(ca, host)
     directory = Path(tempfile.mkdtemp())
     cert_path = directory / "leaf.pem"
@@ -556,6 +551,23 @@ def openssl_server(handler, *, ca, curve: str | None = None,
         serialization.NoEncryption()))
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(cert_path, key_path)
+    return context
+
+
+def client_context(ca) -> ssl.SSLContext:
+    """A stdlib client context that trusts `ca`, and only it."""
+    return ssl.create_default_context(cadata=ca.certificate.public_bytes(
+        serialization.Encoding.PEM).decode("ascii"))
+
+
+def openssl_server(handler, *, ca, curve: str | None = None,
+                   alpn=("http/1.1",), connections: int = 1,
+                   max_version=None, host: str = "localhost") -> int:
+    """A real TLS server (stdlib ssl) on loopback. Returns its port.
+
+    `handler(tls_socket)` serves each accepted connection.
+    """
+    context = server_context(ca, host)
     if curve is not None:
         context.set_ecdh_curve(curve)
     if alpn:

@@ -146,6 +146,9 @@ class Http2Connection:
         self.tls = tls
         self.profile = profile
         self.max_body_size = max_body_size
+        # Whether any frame of the answer to `request`'s stream has arrived.
+        self.response_started = False
+        self._current: int | None = None
         self.encoder = Encoder()
         self.decoder = Decoder()
         # The profile advertises a HEADER_TABLE_SIZE, which tells the peer how
@@ -244,8 +247,10 @@ class Http2Connection:
     def request(self, method: str, path: str, authority: str, *, headers=None,
                 body: bytes = b"", context=None) -> Response:
         """Send one request and read its complete response."""
+        self.response_started = False
         stream_id = self.send_request(method, path, authority, headers=headers,
                                       body=body, context=context)
+        self._current = stream_id
         return self._read_response(stream_id)
 
     def send_request(self, method: str, path: str, authority: str, *,
@@ -553,6 +558,8 @@ class Http2Connection:
         stream = self._open.get(stream_id)
         if stream is None:
             return None
+        if stream_id == self._current and frame_type in (HEADERS, CONTINUATION, DATA):
+            self.response_started = True
 
         if frame_type == RST_STREAM:
             code = int.from_bytes(payload[:4], "big")

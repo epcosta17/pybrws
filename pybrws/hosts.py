@@ -42,7 +42,8 @@ def ascii_host(host: str) -> str:
     return idna.encode(host, uts46=True, transitional=False).decode("ascii")
 
 
-def authority_for(host: str, port: int, default_port: int = DEFAULT_PORT) -> str:
-    """`host[:port]`, with an IPv6 literal in brackets (RFC 3986 3.2.2)."""
+def authority_for(host: str, port: int, default_port: int | None = DEFAULT_PORT) -> str:
+    """`host[:port]`, with an IPv6 literal in brackets (RFC 3986 3.2.2).
+    The port is left out when it is `default_port`; None always writes it."""
     written = "[%s]" % host if ":" in host else host
     return written if port == default_port else "%s:%d" % (written, port)
