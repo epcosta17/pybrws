@@ -139,6 +139,21 @@ class InitialPacket:
     consumed: int  # where the next packet in the same datagram starts
 
 
+def _connection_id(data: bytes, offset: int, which: str) -> tuple[bytes, int]:
+    """A length-prefixed connection id; at most 20 bytes in QUIC v1
+    (RFC 9000 17.2)."""
+    if offset >= len(data):
+        raise QuicError("truncated before the %s connection id" % which)
+    length = data[offset]
+    if length > 20:
+        raise QuicError("a %d-byte %s connection id; v1 allows 20"
+                        % (length, which))
+    if offset + 1 + length > len(data):
+        raise QuicError("the %s connection id runs past the end of the packet"
+                        % which)
+    return data[offset + 1:offset + 1 + length], offset + 1 + length
+
+
 def parse_long_header(data: bytes) -> tuple[dict, int]:
     """Read the unprotected part of a long header. RFC 9000 section 17.2."""
     if len(data) < 7:
@@ -154,17 +169,14 @@ def parse_long_header(data: bytes) -> tuple[dict, int]:
         raise QuicError("not an Initial packet")
 
     version = int.from_bytes(data[1:5], "big")
-    offset = 5
-    dcid_length = data[offset]
-    offset += 1
-    destination_id = data[offset:offset + dcid_length]
-    offset += dcid_length
-    scid_length = data[offset]
-    offset += 1
-    source_id = data[offset:offset + scid_length]
-    offset += scid_length
+    # Every length is checked before it is used: a datagram is untrusted,
+    # and an IndexError out of here stopped every caller that iterates.
+    destination_id, offset = _connection_id(data, 5, "destination")
+    source_id, offset = _connection_id(data, offset, "source")
 
     token_length, offset = varint(data, offset)
+    if offset + token_length > len(data):
+        raise QuicError("the token runs past the end of the packet")
     token = data[offset:offset + token_length]
     offset += token_length
 

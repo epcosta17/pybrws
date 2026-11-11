@@ -10,7 +10,7 @@ from urllib.parse import urljoin
 from . import profiles
 from . import headers as header_tools
 from .client import (REDIRECT_STATUSES, TooManyRedirects, UnsupportedUrl,
-                     redirect_headers, request)
+                     Unmeasured, redirect_headers, request)
 from .message import Response
 from .certs import CertificateError
 from .proxies import ProxyError
@@ -66,9 +66,11 @@ def fetch_http3(args, profile, overrides) -> Response:
     history: list[Response] = []
     budget = args.max_redirs if args.location else 0
     for hop in range(budget + 1):
-        response = h3.get(url, timeout=args.timeout,
-                          headers=overrides or None,
-                          profile=profile, verify=not args.insecure)
+        # The method and body asked for: h3 refuses what it has no
+        # capture for, where this used to send a GET whatever -X and -d said.
+        response = h3.request(url, method=args.request.upper(), data=args.data,
+                              timeout=args.timeout, headers=overrides or None,
+                              profile=profile, verify=not args.insecure)
         response.url = url
         location = response.header("location")
         # The statuses client.request follows, so both arms agree on what
@@ -186,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
                 verify=not args.insecure,
             )
     except (UnsupportedUrl, TooManyRedirects, TlsAlert, ProxyError,
-            CertificateError) as exc:
+            CertificateError, Unmeasured) as exc:
         raise SystemExit(type(exc).__name__ + ": " + str(exc))
     except OSError as exc:
         raise SystemExit("connection failed: " + str(exc))

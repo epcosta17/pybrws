@@ -236,6 +236,11 @@ class _FakeContext:
         self.key_schedule = _FakeSchedule()
         self.certificates = []
         self.states = []
+        # What quic_impersonate attaches to the contexts it handles; any
+        # other context falls through to aioquic.
+        self._pybrws_connection = object()
+        # Where a Certificate, and so a CompressedCertificate, is legal.
+        self.state = aioquic_tls.State.CLIENT_EXPECT_CERTIFICATE_REQUEST_OR_CERTIFICATE
 
     def _set_peer_certificate(self, certificate):
         self.certificates.append(certificate)

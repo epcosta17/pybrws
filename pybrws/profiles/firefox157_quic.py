@@ -251,7 +251,11 @@ def greased_ech(rng: Callable[[int], bytes] = os.urandom) -> bytes:
     )
 
 
-def server_name(hostname: str) -> bytes:
+def server_name(hostname: str | None) -> bytes | None:
+    """None for an IP literal, which Firefox leaves out of server_name, as
+    RFC 6066 3 requires. aioquic hands the writer None for one already."""
+    if hostname is None or hosts.is_ip_literal(hostname):
+        return None
     host = hosts.ascii_host(hostname).encode("ascii")
     return vector(u8(0x00) + vector(host, 2), 2)
 

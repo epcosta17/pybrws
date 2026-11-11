@@ -641,6 +641,101 @@ class ScriptedTls:
         pass
 
 
+class QuicServer:
+    """An HTTP/3 server on loopback: aioquic's own `serve`, on an event loop
+    of its own in a thread, with a leaf from `ca` for `certificate_host`
+    (by default the address it listens on). Answers every request with
+    `status` and `body`, keeping the request headers in `.requests`.
+    `retry=True` makes it answer the first Initial with a QUIC Retry.
+    `on_request` is "answer", "reset" (RESET_STREAM on the request) or
+    "close" (CONNECTION_CLOSE instead of an answer). `tickets=True` issues
+    session tickets; `.resumed` records whether each handshake resumed."""
+
+    def __init__(self, *, ca, host: str = "127.0.0.1", certificate_host=None,
+                 status: int = 200, body: bytes = b"ok", retry: bool = False,
+                 on_request: str = "answer", tickets: bool = False) -> None:
+        import asyncio
+
+        from aioquic.asyncio import serve
+        from aioquic.asyncio.protocol import QuicConnectionProtocol
+        from aioquic.h3.connection import H3_ALPN, H3Connection
+        from aioquic.h3.events import HeadersReceived
+        from aioquic.quic.configuration import QuicConfiguration
+        from aioquic.quic.events import HandshakeCompleted, ProtocolNegotiated
+
+        certificate, key = leaf(ca, certificate_host or host)
+        configuration = QuicConfiguration(is_client=False, alpn_protocols=H3_ALPN)
+        configuration.certificate = certificate
+        configuration.private_key = key
+        self.requests: list = []
+        self.resumed: list[bool] = []   # one per completed handshake
+        issued: dict = {}
+        server = self
+
+        class Protocol(QuicConnectionProtocol):
+            def __init__(self, *args, **kwargs) -> None:
+                super().__init__(*args, **kwargs)
+                self._http = None
+
+            def quic_event_received(self, event) -> None:
+                if isinstance(event, HandshakeCompleted):
+                    server.resumed.append(event.session_resumed)
+                if isinstance(event, ProtocolNegotiated):
+                    self._http = H3Connection(self._quic)
+                if self._http is None:
+                    return
+                for http_event in self._http.handle_event(event):
+                    if isinstance(http_event, HeadersReceived):
+                        server.requests.append(http_event.headers)
+                        if on_request == "reset":
+                            self._quic.reset_stream(http_event.stream_id, 0x10C)
+                            self.transmit()
+                            continue
+                        if on_request == "close":
+                            self._quic.close(error_code=0x102, reason_phrase="test close")
+                            self.transmit()
+                            continue
+                        self._http.send_headers(http_event.stream_id, [
+                            (b":status", str(status).encode()),
+                            (b"content-length", str(len(body)).encode())])
+                        self._http.send_data(http_event.stream_id, body, end_stream=True)
+                        self.transmit()
+
+        self.loop = asyncio.new_event_loop()
+        started = threading.Event()
+
+        def run() -> None:
+            asyncio.set_event_loop(self.loop)
+            ticket_store = dict(
+                session_ticket_handler=lambda t: issued.__setitem__(t.ticket, t),
+                session_ticket_fetcher=issued.pop) if tickets else {}
+            self._server = self.loop.run_until_complete(serve(
+                host, 0, configuration=configuration, create_protocol=Protocol,
+                retry=retry, **ticket_store))
+            started.set()
+            self.loop.run_forever()
+
+        self._thread = threading.Thread(target=run, daemon=True)
+        self._thread.start()
+        if not started.wait(10):
+            raise RuntimeError("the QUIC server did not start")
+        self.port = self._server._transport.get_extra_info("sockname")[1]
+
+    def close(self) -> None:
+        import asyncio
+
+        async def shutdown() -> None:
+            self._server.close()
+            # The transport closes its socket in a callback of its own;
+            # stopping the loop before it runs leaves the socket open.
+            await asyncio.sleep(0)
+
+        asyncio.run_coroutine_threadsafe(shutdown(), self.loop).result(10)
+        self.loop.call_soon_threadsafe(self.loop.stop)
+        self._thread.join(10)
+        self.loop.close()
+
+
 def zstd_compress(data: bytes) -> bytes:
     """zstd from the standard library (3.14) or the zstandard package, so
     the zstd tests run on 3.11 as well; skipped where neither exists."""

@@ -392,8 +392,9 @@ class TestRedirectCredentials(unittest.TestCase):
             return next(answers)
 
         args = argparse.Namespace(url="https://a.example/", timeout=5, location=True,
-                                  max_redirs=5, insecure=False)
-        with mock.patch.object(h3, "get", side_effect=fake_get):
+                                  max_redirs=5, insecure=False, request="GET",
+                                  data=None)
+        with mock.patch.object(h3, "request", side_effect=fake_get):
             self.assertEqual(cli.fetch_http3(args, firefox157, list(CREDENTIALS)).status, 200)
         self.assertEqual(sent[0], CREDENTIALS)
         self.assertEqual(sent[1], [])
@@ -432,7 +433,8 @@ class TestHttp3Redirects(unittest.TestCase):
         import argparse
 
         return argparse.Namespace(url="https://a.example/", timeout=5,
-                                  location=location, max_redirs=5, insecure=False)
+                                  location=location, max_redirs=5, insecure=False,
+                                  request="GET", data=None)
 
     def test_http3_no_location_prints_the_redirect(self):
         import contextlib
@@ -445,7 +447,7 @@ class TestHttp3Redirects(unittest.TestCase):
         redirect = Response(status=302, headers=[("location", "https://b.example/")],
                             http_version="h3")
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch.object(h3, "get", return_value=redirect) as get, \
+        with mock.patch.object(h3, "request", return_value=redirect) as get, \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = cli.main(["--http3", "--no-location", "-I", "https://a.example/"])
         self.assertEqual((code, get.call_count), (0, 1))
@@ -459,7 +461,7 @@ class TestHttp3Redirects(unittest.TestCase):
         from pybrws.message import Response
 
         not_modified = Response(status=304, headers=[("location", "https://b.example/")])
-        with mock.patch.object(h3, "get", return_value=not_modified) as get:
+        with mock.patch.object(h3, "request", return_value=not_modified) as get:
             response = cli.fetch_http3(self.args(location=True), firefox157, [])
         self.assertEqual((response.status, get.call_count), (304, 1))
 

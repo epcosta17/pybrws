@@ -82,7 +82,8 @@ def _protocol():
     from aioquic.asyncio.protocol import QuicConnectionProtocol
     from aioquic.h3.connection import H3Connection
     from aioquic.h3.events import DataReceived, HeadersReceived
-    from aioquic.quic.events import ProtocolNegotiated
+    from aioquic.quic.events import (ConnectionTerminated, HandshakeCompleted,
+                                     ProtocolNegotiated, StreamReset)
 
     class Protocol(QuicConnectionProtocol):
         """One connection, several requests, each on its own stream."""
@@ -92,6 +93,10 @@ def _protocol():
             self._http = None
             self._pending: dict[int, asyncio.Future] = {}
             self._parts: dict[int, tuple[list, bytearray]] = {}
+            # Ours rather than aioquic's wait_connected(), which awaits a
+            # shielded future: cancelling that wait on a timeout left an
+            # exception in it that asyncio then logged as never retrieved.
+            self.handshake = self._loop.create_future()
 
         # -- requests -------------------------------------------------------
 
@@ -117,6 +122,23 @@ def _protocol():
         # -- events ---------------------------------------------------------
 
         def quic_event_received(self, event) -> None:
+            # A request whose stream or connection ends without an answer
+            # fails now; it used to wait out its timeout, or forever.
+            if isinstance(event, HandshakeCompleted) and not self.handshake.done():
+                self.handshake.set_result(None)
+            if isinstance(event, ConnectionTerminated):
+                reason = "error 0x%x: %s" % (event.error_code,
+                                            event.reason_phrase or "no reason given")
+                if not self.handshake.done():
+                    self.handshake.set_exception(Http3Error(
+                        "the connection closed during the handshake (%s)" % reason))
+                self._fail_all(Http3Error(
+                    "the connection closed before the response was complete "
+                    "(%s)" % reason))
+                return
+            if isinstance(event, StreamReset):
+                self._fail(event.stream_id, Http3Error(
+                    "the server reset the stream (error 0x%x)" % event.error_code))
             if isinstance(event, ProtocolNegotiated):
                 self._http = H3Connection(self._quic)
             if self._http is None:
@@ -133,6 +155,16 @@ def _protocol():
                     body.extend(http_event.data)
                 if http_event.stream_ended:
                     self._finish(stream_id)
+
+        def _fail(self, stream_id: int, error: Exception) -> None:
+            self._parts.pop(stream_id, None)
+            waiter = self._pending.pop(stream_id, None)
+            if waiter is not None and not waiter.done():
+                waiter.set_exception(error)
+
+        def _fail_all(self, error: Exception) -> None:
+            for stream_id in list(self._pending):
+                self._fail(stream_id, error)
 
         def _finish(self, stream_id: int) -> None:
             fields, body = self._parts.pop(stream_id)
@@ -208,19 +240,27 @@ class Http3Client:
 
 
 async def open_connection(url: str, *, profile=firefox157_quic,
-                          verify: bool = True, timeout: float = 30.0):
-    """Connect and hand back (client, closer). The caller closes."""
+                          verify: bool = True, timeout: float = 30.0,
+                          cadata: bytes | None = None):
+    """Connect and hand back (client, closer). The caller closes.
+
+    `cadata`: PEM certificates to trust as anchors, as aioquic takes them.
+    """
     from aioquic.asyncio import connect
 
-    quic_impersonate.install(profile=profile)
+    quic_impersonate.install()
     host, port, authority, _path = split_target(url)
     configuration = quic_impersonate.configuration(host, profile=profile,
-                                                   verify=verify)
+                                                   verify=verify, cadata=cadata)
+    # aioquic's connect() can wait for the handshake itself, but with no
+    # limit: a silent server held the caller until the idle timeout. So it
+    # only opens the socket here, and the wait is ours, bounded.
     manager = connect(host, port, configuration=configuration,
-                      create_protocol=_protocol())
+                      create_protocol=_protocol(), wait_connected=False)
     protocol = await manager.__aenter__()
+    protocol.transmit()   # the first flight, which wait_connected=False holds
     try:
-        await asyncio.wait_for(protocol.wait_connected(), timeout=timeout)
+        await asyncio.wait_for(protocol.handshake, timeout=timeout)
     except BaseException:
         await manager.__aexit__(None, None, None)
         raise
@@ -229,20 +269,37 @@ async def open_connection(url: str, *, profile=firefox157_quic,
 
 async def fetch(url: str, *, method: str = "GET", headers=None,
                 data=None, json=None, profile=firefox157_quic,
-                verify: bool = True, timeout: float = 30.0) -> Response:
-    """One request on its own connection, from inside a loop."""
+                verify: bool = True, timeout: float = 30.0,
+                cadata: bytes | None = None) -> Response:
+    """One request on its own connection, from inside a loop.
+
+    Raises:
+        client.Unmeasured: for any method but GET and HEAD. No Firefox
+            HTTP/3 POST has been captured, and sending the navigation set
+            with a body attached is a request no browser makes (D8).
+    """
+    if method.upper() not in ("GET", "HEAD"):
+        from .client import Unmeasured
+
+        raise Unmeasured(
+            "no Firefox HTTP/3 %s has been captured, so there is no measured "
+            "header set to send. tools/catch_quic.py takes one; until then "
+            "send it over TCP." % method.upper())
     body, content_type = encode_body(data, json)
     _host, _port, authority, _path = split_target(url)
     merged = header_tools.merge(profile.navigation_headers(authority), headers)
     if content_type and not header_tools.has(merged, "content-type"):
         merged = merged + [("Content-Type", content_type)]
 
-    client, manager = await open_connection(url, profile=profile,
-                                            verify=verify, timeout=timeout)
+    # One deadline for the whole operation, handshake and answer together.
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    client, manager = await open_connection(url, profile=profile, verify=verify,
+                                            timeout=timeout, cadata=cadata)
     try:
         _host, _port, _authority, path = split_target(url)
-        response = await client.request(method, path, headers=merged,
-                                        body=body, timeout=timeout)
+        response = await client.request(method, path, headers=merged, body=body,
+                                        timeout=max(0.0, deadline - loop.time()))
         response.url = url
         return response
     finally:
