@@ -16,3 +16,6 @@ transport-*.html
 
 # third-party data downloaded by tools/catalog.py
 .cache/
+
+# Notebooks are kept locally and not published with the package.
+notebooks/

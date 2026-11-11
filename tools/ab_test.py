@@ -67,20 +67,52 @@ def as_url(target: str) -> str:
 PROXY = None  # set from --proxy; None means a direct connection
 
 
-def via_pybrws(target: str, timeout: float) -> int:
-    return get(as_url(target), timeout=timeout, proxy=PROXY or False,
-               follow_redirects=MAX_REDIRECTS).status
+# Firefox's measured HTTP/2 navigation headers, used by the httpx+ff arm so
+# that the one variable between it and the plain httpx arm is the header set.
+FIREFOX_HEADERS = list(firefox157.H2_NAVIGATION_HEADERS)
 
 
-def via_baseline(target: str, timeout: float) -> int:
+def via_pybrws(target: str, timeout: float):
+    response = get(as_url(target), timeout=timeout, proxy=PROXY or False,
+                   follow_redirects=MAX_REDIRECTS)
+    return response.status, response.body or b""
+
+
+def via_baseline(target: str, timeout: float):
     import httpx
 
     with httpx.Client(timeout=timeout, http2=True, follow_redirects=True,
                       max_redirects=MAX_REDIRECTS) as client:
-        return client.get(as_url(target)).status_code
+        response = client.get(as_url(target))
+        return response.status_code, response.content
 
 
-def via_pybrws_h3(target: str, timeout: float) -> int:
+def via_baseline_ff(target: str, timeout: float):
+    """httpx carrying Firefox's exact headers, over the OpenSSL TLS stack.
+
+    The plain httpx arm differs from pybrws in two things at once: the
+    protocol fingerprint AND the headers (httpx sends its own User-Agent and
+    a bare Accept). So a target that serves pybrws and refuses httpx is not
+    evidence the *fingerprint* did it -- the headers could have. This arm
+    isolates that: same OpenSSL fingerprint as httpx, but Firefox's header
+    list. If it is served where plain httpx is refused, the headers were the
+    deciding factor and the fingerprint bought nothing on that host; if it is
+    refused like plain httpx while pybrws is served, the fingerprint is what
+    mattered. Without this arm the A/B credits the fingerprint for both.
+    """
+    import httpx
+
+    with httpx.Client(timeout=timeout, http2=True, follow_redirects=True,
+                      max_redirects=MAX_REDIRECTS) as client:
+        url = as_url(target)
+        request = client.build_request("GET", url)
+        request.headers = httpx.Headers(
+            [("host", httpx.URL(url).netloc.decode())] + FIREFOX_HEADERS)
+        response = client.send(request, follow_redirects=True)
+        return response.status_code, response.content
+
+
+def via_pybrws_h3(target: str, timeout: float):
     """Same client and same headers as the h2 arm, over QUIC instead.
 
     This is the arm that answers whether the transport changes the outcome.
@@ -96,15 +128,15 @@ def via_pybrws_h3(target: str, timeout: float) -> int:
     for _ in range(MAX_REDIRECTS + 1):
         response = h3.get(url, timeout=timeout)
         if not 300 <= response.status < 400:
-            return response.status
+            return response.status, response.body or b""
         location = response.header("location")
         if not location:
-            return response.status
+            return response.status, response.body or b""
         # A redirect may point somewhere that does not serve h3 at all, in
         # which case the next call raises and the run records the error.
         # That is the honest answer: the page did not arrive over h3.
         url = urljoin(url, location)
-    return response.status
+    return response.status, response.body or b""
 
 
 # Keyed by arm name, which is what goes in the log, so a run with the h3 arm
@@ -113,11 +145,25 @@ ALL_CLIENTS = {
     "pybrws": via_pybrws,
     "pybrws-h3": via_pybrws_h3,
     "httpx": via_baseline,
+    "httpx+ff": via_baseline_ff,
 }
-DEFAULT_ARMS = ["pybrws", "httpx"]
+# httpx+ff is on by default: it is the control that keeps the A/B from
+# crediting the protocol fingerprint for a result the headers produced.
+DEFAULT_ARMS = ["pybrws", "httpx", "httpx+ff"]
 CLIENTS = {name: ALL_CLIENTS[name] for name in DEFAULT_ARMS}
 
 PROFILES = {"pybrws-h3": "firefox157_quic"}
+
+# Phrases that mark a body as a block or a JavaScript challenge rather than
+# the page, so a 200 that is really an interstitial is not scored as served.
+# A JS challenge served with status 200 is the quietest way a run inflates
+# itself -- macys returns a 2,843-byte Akamai reload shell as a 200.
+CHALLENGE_MARKERS = (
+    b"captcha-delivery", b"px-captcha", b"/cdn-cgi/challenge",
+    b"Request unsuccessful", b"Access Denied", b"Pardon Our Interruption",
+    b"Powered and protected", b"Just a moment", b"Checking your browser",
+    b"enable JavaScript and cookies",
+)
 
 
 def blocked(status) -> bool:
@@ -127,12 +173,24 @@ def blocked(status) -> bool:
 def arrived(result) -> bool:
     """Did the page itself come back?
 
-    Not blocked is not the same as arrived. A run that ends on a 3xx has
-    run out of redirects rather than reached anything, and counting it as
-    a success is exactly the way a block one hop later gets hidden.
+    `result` is a (status, body) pair from a live call, or a bare status int
+    read back from the log (older rows carry no body).
+
+    Not blocked is not the same as arrived. A 3xx has run out of redirects
+    rather than reached anything; and a challenge page served with status 200
+    is not the page either, which is why the body is inspected when it is
+    available. Counting either as success is how a block hides.
     """
-    return (isinstance(result, int) and not blocked(result)
-            and not 300 <= result < 400)
+    if isinstance(result, tuple):
+        status, body = result
+    else:
+        status, body = result, None
+    if not isinstance(status, int) or blocked(status) or 300 <= status < 400:
+        return False
+    if body is not None and any(m.lower() in body[:60000].lower()
+                                for m in CHALLENGE_MARKERS):
+        return False
+    return True
 
 
 def run(targets: list[str], rounds: int, timeout: float, pause: float) -> list[dict]:
@@ -143,8 +201,9 @@ def run(targets: list[str], rounds: int, timeout: float, pause: float) -> list[d
         # whichever client happens to be measured last.
         for target in targets:
             for name, call in CLIENTS.items():
+                body = b""
                 try:
-                    status = call(target, timeout)
+                    status, body = call(target, timeout)
                     error = None
                 except Exception as exc:
                     status = None
@@ -157,6 +216,10 @@ def run(targets: list[str], rounds: int, timeout: float, pause: float) -> list[d
                         "host": target,
                         "client": name,
                         "status": status,
+                        # Recorded so a challenge served as a 200 is visible
+                        # as a tiny "served" cell rather than passing silently.
+                        "bytes": len(body) if status is not None else None,
+                        "served": arrived((status, body)) if status is not None else False,
                         "error": error,
                         "profile": PROFILES.get(name, firefox157.NAME),
                         "proxy": bool(PROXY) if name == "pybrws" else False,
@@ -171,9 +234,7 @@ def run(targets: list[str], rounds: int, timeout: float, pause: float) -> list[d
 def summarise(samples: list[dict]) -> None:
     grouped = defaultdict(list)
     for sample in samples:
-        grouped[(sample["host"], sample["client"])].append(
-            sample["status"] if sample["status"] is not None else sample["error"]
-        )
+        grouped[(sample["host"], sample["client"])].append(sample)
 
     hosts = sorted({host for host, _ in grouped})
     width = max(len(h) for h in hosts) + 2
@@ -185,14 +246,18 @@ def summarise(samples: list[dict]) -> None:
     for host in hosts:
         cells = {}
         for client in CLIENTS:
-            results = grouped.get((host, client), [])
-            served = sum(1 for r in results if arrived(r))
-            cells[client] = (served, len(results), results)
+            rows = grouped.get((host, client), [])
+            # `served` is decided per sample at capture time, so a 200 that
+            # was really a challenge body is already counted as not served.
+            served = sum(1 for r in rows if r.get("served"))
+            statuses = [r["status"] if r["status"] is not None else r["error"]
+                        for r in rows]
+            cells[client] = (served, len(rows), statuses)
 
         rendered = []
         for client in CLIENTS:
-            served, total, results = cells[client]
-            spread = "" if len(set(map(str, results))) == 1 else " flapping"
+            served, total, statuses = cells[client]
+            spread = "" if len(set(map(str, statuses))) == 1 else " flapping"
             rendered.append(("%d/%d served%s" % (served, total, spread)).ljust(26))
 
         print(host.ljust(width) + "".join(rendered) + reading_for(host, cells))
@@ -225,6 +290,7 @@ def reading_for(host: str, cells: dict) -> str:
         return bool(total) and not any(isinstance(r, int) for r in results)
 
     plain, plain_n = rate("httpx")
+    ff, ff_n = rate("httpx+ff")
     h2, h2_n = rate("pybrws")
     h3, h3_n = rate("pybrws-h3")
 
@@ -250,7 +316,17 @@ def reading_for(host: str, cells: dict) -> str:
         return "transport differs but neither arm is deterministic"
 
     if h2_n and plain_n and h2 == h2_n and plain == 0:
-        return "pybrws passes, baseline blocked"
+        # pybrws passes where plain httpx is refused. The httpx+ff arm, if it
+        # ran, says whether the fingerprint or the headers did it.
+        if ff_n and ff == ff_n:
+            return ("*** headers alone suffice: httpx+ff served too, the "
+                    "fingerprint bought nothing here ***")
+        if ff_n and ff == 0:
+            return "pybrws passes on the fingerprint: httpx+ff blocked like httpx"
+        return "pybrws passes, baseline blocked (add httpx+ff to attribute it)"
+    if ff_n and plain_n and ff == ff_n and plain == 0 and h2 == 0:
+        return ("*** fingerprint is a liability here: httpx+ff served, pybrws "
+                "blocked -- the browser hello is what gets refused ***")
     if h2 > plain:
         return "pybrws better, not deterministic"
     if h2 == plain:
@@ -266,7 +342,11 @@ def show_history() -> None:
         sample = json.loads(line)
         cell = runs[sample["run"]][(sample["host"], sample["client"])]
         cell[1] += 1
-        if arrived(sample["status"]):
+        # Rows written since the body was recorded carry a decided `served`;
+        # older rows have only a status, so fall back to judging that.
+        served = (sample["served"] if "served" in sample
+                  else arrived(sample["status"]))
+        if served:
             cell[0] += 1
     for started in sorted(runs):
         print(started)

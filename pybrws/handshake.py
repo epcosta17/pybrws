@@ -453,6 +453,7 @@ def connect(
 
         alpn = ""
         leaf = None
+        cert_verified = False
         certificate_request_context: bytes | None = None
         while True:
             message = handshake_reader.next_message()
@@ -491,6 +492,7 @@ def connect(
                     body = _Reader(message[4:], "CertificateVerify")
                     certs.verify_signature(leaf, body.uint(2), body.vector(2),
                                            transcript_hash(suite, bytes(transcript)))
+                    cert_verified = True
             elif msg_type == CERTIFICATE_REQUEST:
                 # The server wants a client certificate. We have none, and a
                 # browser in the same position does not fail: it answers with
@@ -507,8 +509,22 @@ def connect(
 
             transcript += message
 
-        if verify and leaf is None and not resumed:
-            raise HandshakeError("the server sent no certificate")
+        if verify and not resumed:
+            # A full (non-resumed) TLS 1.3 server authenticates with a
+            # Certificate *and* a CertificateVerify. The server Finished is
+            # keyed from the ECDHE secret, which an active middlebox shares
+            # with us, so it is not what ties the handshake to the
+            # certificate -- CertificateVerify is. Accepting a handshake that
+            # carried a chain but no CertificateVerify lets an attacker replay
+            # the real site's public chain, which it does not hold the key
+            # for, and omit the one message it cannot forge.
+            if leaf is None:
+                raise HandshakeError("the server sent no certificate")
+            if not cert_verified:
+                raise HandshakeError(
+                    "the server sent no CertificateVerify, so nothing proves "
+                    "it holds the certificate's private key"
+                )
 
         # RFC 8446 section 7.1: the application traffic secrets are derived
         # from the transcript up to and including the *server's* Finished, so

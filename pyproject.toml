@@ -11,7 +11,7 @@ dependencies = []
 
 [project.optional-dependencies]
 # Everything the client itself needs beyond the standard library.
-client = ["cryptography>=50", "hpack", "brotli"]
+client = ["cryptography>=50", "hpack", "brotli", "publicsuffixlist", "idna"]
 # Only for Python below 3.14, where zstd is not yet in the standard library.
 zstd = ["zstandard"]
 # Measurement and demo: httpx is the baseline every comparison runs against.

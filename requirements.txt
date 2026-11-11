@@ -1,6 +1,8 @@
 cryptography>=50
 hpack
 brotli
+publicsuffixlist
+idna
 httpx[http2]
 aioquic
 curl_cffi
