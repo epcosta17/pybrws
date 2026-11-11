@@ -11,7 +11,7 @@ from .http1 import Http1Connection
 from .http2 import Http2Connection
 from . import headers as header_tools
 from . import hosts
-from .message import Response, encode_body
+from .message import DEFAULT_MAX_BODY, Response, encode_body
 from .profiles import firefox157
 
 DEFAULT_PORT = 443
@@ -129,7 +129,8 @@ def header_set(profile, method: str, kind: str, http2: bool):
 def fetch_once(url: str, *, method: str = "GET", profile=firefox157,
                timeout: float = 20.0, headers=None, body: bytes = b"",
                proxy=None, kind: str = "xhr", context=None,
-               verify: bool = True, trust_store=None) -> Response:
+               verify: bool = True, trust_store=None,
+               max_body_size: int | None = DEFAULT_MAX_BODY) -> Response:
     """Fetch one URL without following redirects.
 
     The server picks the protocol through ALPN; both branches are implemented,
@@ -150,8 +151,9 @@ def fetch_once(url: str, *, method: str = "GET", profile=firefox157,
     with connect(host, port, profile=profile, timeout=timeout,
                  proxy=proxy, verify=verify, trust_store=trust_store) as tls:
         http2 = tls.alpn == "h2"
-        http = (Http2Connection(tls, profile=profile) if http2
-                else Http1Connection(tls, profile=profile))
+        http = (Http2Connection(tls, profile=profile, max_body_size=max_body_size)
+                if http2 else
+                Http1Connection(tls, profile=profile, max_body_size=max_body_size))
         base = header_set(profile, method, kind, http2)
         response = http.request(method, path, authority,
                                 headers=header_tools.merge(base, headers),
@@ -164,7 +166,8 @@ def request(url: str, *, method: str = "GET", profile=firefox157,
             timeout: float = 20.0, headers=None, data=None, json=None,
             follow_redirects: int = 0, proxy=None, kind: str = "xhr",
             referer: str | None = None, verify: bool = True,
-            trust_store=None) -> Response:
+            trust_store=None,
+            max_body_size: int | None = DEFAULT_MAX_BODY) -> Response:
     """Send one request, optionally following redirects.
 
     Args:
@@ -191,6 +194,8 @@ def request(url: str, *, method: str = "GET", profile=firefox157,
         verify: check the server's certificate. Off makes the connection
             interceptable without any sign of it.
         trust_store: anchors to trust instead of the system's.
+        max_body_size: the most a body may be, received or decoded, before
+            BodyTooLarge (128 MiB); None lifts the cap.
 
     Returns:
         The final response, with the body decompressed.
@@ -212,7 +217,8 @@ def request(url: str, *, method: str = "GET", profile=firefox157,
         response = fetch_once(url, method=method, profile=profile,
                               timeout=timeout, headers=headers, body=body,
                               proxy=proxy, kind=kind, context=context,
-                              verify=verify, trust_store=trust_store)
+                              verify=verify, trust_store=trust_store,
+                              max_body_size=max_body_size)
         response.history = list(seen)
         location = response.header("location")
         if response.status not in REDIRECT_STATUSES or not location:

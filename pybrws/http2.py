@@ -13,9 +13,11 @@ from hpack.exceptions import HPACKError
 from . import headers as header_tools
 from .handshake import Connection
 from .message import (
+    DEFAULT_MAX_BODY,
     ContentEncodingError,
     IncrementalDecoder,
     Response,
+    body_too_large,
     decompress,
 )
 from .profiles import firefox157
@@ -135,11 +137,15 @@ def frame(frame_type: int, flags: int, stream_id: int, payload: bytes = b"") -> 
 class Http2Connection:
     """Drives one HTTP/2 connection over an established TLS Connection."""
 
-    def __init__(self, tls: Connection, *, profile=firefox157) -> None:
+    def __init__(self, tls: Connection, *, profile=firefox157,
+                 max_body_size: int | None = DEFAULT_MAX_BODY) -> None:
+        """`max_body_size` caps what a stream may hold buffered, and what a
+        buffered response decodes to (BodyTooLarge); None lifts the cap."""
         if tls.alpn != "h2":
             raise Http2Error("ALPN negotiated " + repr(tls.alpn) + ", expected 'h2'")
         self.tls = tls
         self.profile = profile
+        self.max_body_size = max_body_size
         self.encoder = Encoder()
         self.decoder = Decoder()
         # The profile advertises a HEADER_TABLE_SIZE, which tells the peer how
@@ -327,9 +333,7 @@ class Http2Connection:
                     if stream.body:
                         raw = bytes(stream.body)
                         stream.body.clear()
-                        decoded = decoder.feed(raw)
-                        if decoded:
-                            yield decoded
+                        yield from decoder.pieces(raw)
                     elif stream.done:
                         break
                     else:
@@ -586,7 +590,19 @@ class Http2Connection:
             if flags & FLAG_END_STREAM:
                 stream.done = True
         elif frame_type == DATA:
-            stream.body += _strip_padding(flags, payload, priority=False)
+            data = _strip_padding(flags, payload, priority=False)
+            if stream.error is not None:
+                pass   # refused already; what still arrives is dropped
+            elif (self.max_body_size is not None
+                    and len(stream.body) + len(data) > self.max_body_size):
+                # Refused before it is held whole. Nothing can tell the peer
+                # to stop (D10), so the connection goes with the stream.
+                stream.error = body_too_large(self.max_body_size)
+                stream.body = bytearray()
+                stream.done = True
+                self.broken = True
+            else:
+                stream.body += data
             if payload:
                 # The whole payload, padding included, counts against flow
                 # control (RFC 9113 6.9.1), so the whole payload is credited.
@@ -643,7 +659,8 @@ class Http2Connection:
         response = Response(status=status, headers=headers, http_version="h2")
         response.trailers = list(stream.trailers)
         response.body = decompress(bytes(stream.body),
-                                   response.header("content-encoding") or "")
+                                   response.header("content-encoding") or "",
+                                   max_size=self.max_body_size)
         return response
 
     def _read_response(self, stream_id: int) -> Response:

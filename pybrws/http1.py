@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from .handshake import Connection
 from . import headers as header_tools
-from .message import Response, decompress
+from .message import (DEFAULT_MAX_BODY, BodyTooLarge, Response, body_too_large,
+                      decompress)
 from .profiles import firefox157
 
 MAX_HEADER_BYTES = 1 << 18
@@ -69,11 +70,13 @@ class _StreamReader:
         del self.buffer[:n]
         return data
 
-    def read_to_eof(self) -> bytes:
+    def read_to_eof(self, limit: int | None = None) -> bytes:
         """A body whose length is the connection's: complete only at
-        close_notify (RFC 9112 section 9.8)."""
+        close_notify (RFC 9112 section 9.8). BodyTooLarge once more than
+        `limit` bytes have arrived."""
         while self._fill():
-            pass
+            if limit is not None and len(self.buffer) > limit:
+                raise body_too_large(limit)
         data = bytes(self.buffer)
         self.buffer.clear()
         return data
@@ -104,11 +107,18 @@ def _parse_headers(block: bytes) -> list[tuple[str, str]]:
 class Http1Connection:
     """Drives one HTTP/1.1 connection over an established TLS Connection."""
 
-    def __init__(self, tls: Connection, *, profile=firefox157) -> None:
+    def __init__(self, tls: Connection, *, profile=firefox157,
+                 max_body_size: int | None = DEFAULT_MAX_BODY) -> None:
+        """`max_body_size` caps a body both as received and as decoded
+        (BodyTooLarge); None lifts the cap."""
         if tls.alpn not in ("", "http/1.1"):
             raise Http1Error("ALPN negotiated " + repr(tls.alpn) + ", expected http/1.1")
         self.tls = tls
         self.profile = profile
+        self.max_body_size = max_body_size
+        # Set when a response is abandoned mid-body: what is left of it is
+        # still on the wire, so the connection cannot carry another request.
+        self.broken = False
         self.reader = _StreamReader(tls)
 
     def build_request(self, method: str, path: str, authority: str, headers=None,
@@ -152,8 +162,11 @@ class Http1Connection:
             return self._read_chunked()
         length = lookup.get("content-length")
         if length is not None:
-            return self.reader.read_exactly(int(length))
-        return self.reader.read_to_eof()
+            size = int(length)
+            if self.max_body_size is not None and size > self.max_body_size:
+                raise body_too_large(self.max_body_size)   # before reading any
+            return self.reader.read_exactly(size)
+        return self.reader.read_to_eof(self.max_body_size)
 
     def _read_chunked(self) -> bytes:
         body = bytearray()
@@ -165,6 +178,8 @@ class Http1Connection:
                 while self.reader.read_until(b"\r\n", MAX_HEADER_BYTES):
                     pass
                 return bytes(body)
+            if self.max_body_size is not None and len(body) + size > self.max_body_size:
+                raise body_too_large(self.max_body_size)
             body += self.reader.read_exactly(size)
             self.reader.read_exactly(2)  # trailing CRLF
 
@@ -181,7 +196,12 @@ class Http1Connection:
                 break
 
         headers = _parse_headers(header_block)
-        body = self._read_body(headers, status, method)
+        try:
+            body = self._read_body(headers, status, method)
+        except BodyTooLarge:
+            self.broken = True
+            raise
         response = Response(status=status, headers=headers, http_version=version)
-        response.body = decompress(body, response.header("content-encoding") or "")
+        response.body = decompress(body, response.header("content-encoding") or "",
+                                   max_size=self.max_body_size)
         return response

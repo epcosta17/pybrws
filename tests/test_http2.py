@@ -337,9 +337,9 @@ class TestDecompress(unittest.TestCase):
         self.assertEqual(decompress(brotli.compress(b"payload"), "br"), b"payload")
 
     def test_zstd(self):
-        from compression import zstd
+        from tests.hostile import zstd_compress
 
-        self.assertEqual(decompress(zstd.compress(b"payload"), "zstd"), b"payload")
+        self.assertEqual(decompress(zstd_compress(b"payload"), "zstd"), b"payload")
 
     def test_unknown_encoding(self):
         with self.assertRaises(ContentEncodingError):

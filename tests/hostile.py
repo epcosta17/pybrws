@@ -21,6 +21,7 @@ import socket
 import ssl
 import tempfile
 import threading
+import unittest
 from pathlib import Path
 
 from cryptography.hazmat.primitives import hashes, serialization
@@ -626,6 +627,20 @@ class ScriptedTls:
 
     def close(self) -> None:
         pass
+
+
+def zstd_compress(data: bytes) -> bytes:
+    """zstd from the standard library (3.14) or the zstandard package, so
+    the zstd tests run on 3.11 as well; skipped where neither exists."""
+    try:
+        from compression import zstd
+    except ImportError:
+        try:
+            import zstandard
+        except ImportError:
+            raise unittest.SkipTest("no zstd: needs Python 3.14 or zstandard")
+        return zstandard.ZstdCompressor().compress(data)
+    return zstd.compress(data)
 
 
 def frames_in(data: bytes) -> list[tuple[int, int, int, bytes]]:

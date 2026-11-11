@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from .cookies import CookieJar
-from .message import Response
+from .message import DEFAULT_MAX_BODY, Response
 from .profiles import firefox157
 from .session import Session
 from .tickets import TicketStore
@@ -62,8 +62,10 @@ class Fetcher:
 
     def __init__(self, *, concurrency: int = 8, profile=firefox157, proxy=None,
                  timeout: float = 20.0, verify: bool = True,
-                 follow_redirects: int = 5, retry: Retry | None = None) -> None:
+                 follow_redirects: int = 5, retry: Retry | None = None,
+                 max_body_size: int | None = DEFAULT_MAX_BODY) -> None:
         self.concurrency = concurrency
+        self.max_body_size = max_body_size
         self.profile = profile
         self.proxy = proxy
         self.timeout = timeout
@@ -83,7 +85,8 @@ class Fetcher:
         if session is None:
             session = Session(profile=self.profile, proxy=self.proxy,
                               timeout=self.timeout, verify=self.verify,
-                              follow_redirects=self.follow_redirects)
+                              follow_redirects=self.follow_redirects,
+                              max_body_size=self.max_body_size)
             # Shared on purpose: a cookie earned by one worker belongs to
             # the whole run, and so does a ticket.
             session.cookies = self.cookies

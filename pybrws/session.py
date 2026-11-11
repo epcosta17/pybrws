@@ -18,7 +18,7 @@ from .tickets import TicketStore
 from .handshake import connect
 from .http1 import Http1Connection, Http1Error
 from .http2 import Http2Connection, Http2Error
-from .message import Response, encode_body
+from .message import DEFAULT_MAX_BODY, Response, encode_body
 from .profiles import firefox157
 from .proxies import resolve
 from .records import TlsAlert
@@ -70,8 +70,10 @@ class Session:
 
     def __init__(self, *, profile=firefox157, proxy=None, timeout: float = 20.0,
                  follow_redirects: int = 5, verify: bool = True,
-                 trust_store=None) -> None:
+                 trust_store=None,
+                 max_body_size: int | None = DEFAULT_MAX_BODY) -> None:
         self.profile = profile
+        self.max_body_size = max_body_size
         self.proxy = proxy
         self.timeout = timeout
         self.follow_redirects = follow_redirects
@@ -93,9 +95,11 @@ class Session:
                       proxy=self.proxy, verify=self.verify,
                       trust_store=self.trust_store, tickets=self.tickets)
         if tls.alpn == "h2":
-            http = Http2Connection(tls, profile=self.profile)
+            http = Http2Connection(tls, profile=self.profile,
+                                   max_body_size=self.max_body_size)
         else:
-            http = Http1Connection(tls, profile=self.profile)
+            http = Http1Connection(tls, profile=self.profile,
+                                   max_body_size=self.max_body_size)
         return tls, http
 
     def _connection(self, host: str, port: int, timeout: float | None = None):
@@ -151,6 +155,18 @@ class Session:
         return header_tools.insert_before(base, "Cookie", joined,
                                           self.profile.H1_COOKIE_BEFORE)
 
+    def _send(self, host: str, port: int, http, method: str, path: str,
+              authority: str, headers, body: bytes) -> Response:
+        try:
+            return http.request(method, path, authority, headers=headers, body=body)
+        except Exception:
+            # A failure that is not worth a retry can still leave the
+            # connection mid-message -- a body refused for its size is
+            # still on the wire -- and then the pool must not offer it again.
+            if getattr(http, "broken", False):
+                self._discard(host, port)
+            raise
+
     def _once(self, url: str, headers, method: str = "GET",
               body: bytes = b"", timeout: float | None = None) -> Response:
         host, port, authority, path = split_url(url)
@@ -158,8 +174,8 @@ class Session:
         request_headers = self._headers_for(host, path,
                                             isinstance(http, Http2Connection), headers)
         try:
-            response = http.request(method, path, authority,
-                                    headers=request_headers, body=body)
+            response = self._send(host, port, http, method, path, authority,
+                                  request_headers, body)
         except RETRYABLE:
             self._discard(host, port)
             if not reused:
@@ -170,8 +186,8 @@ class Session:
             request_headers = self._headers_for(
                 host, path, isinstance(http, Http2Connection), headers
             )
-            response = http.request(method, path, authority,
-                                    headers=request_headers, body=body)
+            response = self._send(host, port, http, method, path, authority,
+                                  request_headers, body)
 
         if getattr(http, "broken", False):
             # The peer is closing it, or its header state is lost: it may
