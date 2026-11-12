@@ -19,3 +19,4 @@ transport-*.html
 
 # Notebooks are kept locally and not published with the package.
 notebooks/
+site/

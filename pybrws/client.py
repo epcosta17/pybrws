@@ -99,10 +99,9 @@ def _set(profile, name: str):
     """One of a profile's header lists, or a refusal that names it.
 
     A profile holds what was measured. Reaching for a list a browser was
-    never captured sending used to raise AttributeError from somewhere
-    unhelpful; this says which measurement is missing and how to take it,
-    because the alternative -- inventing a plausible set -- produces a
-    fingerprint that is wrong in a way nothing will reveal.
+    never captured sending raises Unmeasured, which says which measurement is
+    missing and how to take it. Inventing a plausible set instead would
+    produce a fingerprint that is wrong in a way nothing will reveal.
     """
     headers = getattr(profile, name, None)
     if headers is None:

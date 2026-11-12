@@ -6,20 +6,16 @@ which run one of their own. The synchronous pair is what makes an HTTP/3
 fetch look like the HTTP/2 one from the caller's side, which is the point --
 a scraper should not have to be rewritten because a host offers h3.
 
-The request is measured now, which it was not at first. The first version of
-this module sent the HTTP/2 navigation set with the HTTP/2 pseudo-header
-order, on the reasoning that HTTP/3 is HTTP/2 over QUIC. Two of the three
-parts of that guess were wrong, and curl_cffi disagreeing is what prompted
-the capture:
+The request is the one captured from a browser over QUIC, not the HTTP/2
+set carried over. HTTP/3 differs from HTTP/2 in the first fields of every
+request:
 
 - the pseudo-header order is `:method :scheme :authority :path` over QUIC
   against `:method :path :authority :scheme` over TCP;
 - `te: trailers` is not sent, `te` being an HTTP/2 mechanism;
-- `alt-used` is, carrying the authority.
+- `alt-used` is sent, carrying the authority.
 
-The ten shared headers do keep their HTTP/2 values and order, so the guess
-was not worthless -- but the two it got wrong are both in the first four
-fields of every request, which is the first thing anything looks at.
+The ten remaining headers keep their HTTP/2 values and order.
 
 See `profiles/firefox157_quic.py` and
 `fixtures/reference-firefox-157-quic-request.txt`.
