@@ -19,6 +19,7 @@ depend on it. For an outside reading prefer `pybrws probe`.
 
     pybrws verify --local
     pybrws verify --local --profile chrome155
+    pybrws verify --local --profile my_profile.py --capture my_hello.hex
     pybrws verify
 """
 
@@ -30,7 +31,7 @@ import json
 from pybrws import data, profiles
 from pybrws.emitter import build_client_hello
 from pybrws.handshake import connect
-from pybrws.hexio import parse_hex
+from pybrws.hexio import load_hex, parse_hex
 from pybrws.http2 import Http2Connection
 from pybrws.model import GREASE_VALUES, extension_name
 from pybrws.parser import parse_client_hello
@@ -96,17 +97,36 @@ def sni_of(hello) -> str:
     return ext.data[5:5 + length].decode("ascii", "replace")
 
 
-def local(profile_name: str, hostname: str | None) -> int:
-    """Diff the built hello against the captured one, offline."""
+def local(profile_name: str, hostname: str | None,
+          capture: str | None = None) -> int:
+    """Diff the built hello against the captured one, offline.
+
+    `capture` is a hex ClientHello file of the reader's own; without it the
+    built-in profile's shipped capture is used. A profile named by a file
+    has no shipped capture, so it needs one.
+    """
     try:
         profile = profiles.load(profile_name, transport="tcp")
     except profiles.ProfileError as error:
         raise SystemExit(str(error))
-    if profile_name not in CAPTURES:
+    if capture:
+        try:
+            captured = parse_client_hello(load_hex(capture))
+        except (OSError, ValueError) as error:
+            raise SystemExit("cannot read the capture %s: %s"
+                             % (capture, error))
+        capture_name = capture
+    elif profile_name in CAPTURES:
+        capture_name = CAPTURES[profile_name]
+        captured = parse_client_hello(parse_hex(data.read_text(capture_name)))
+    elif profiles._is_path(profile_name):
+        raise SystemExit("%s is your own profile, so there is no shipped "
+                         "capture to compare it with; pass --capture FILE "
+                         "with a hello from your browser" % profile_name)
+    else:
         raise SystemExit("no capture ships for %s; the shipped ones are for %s"
+                         " (or pass --capture FILE)"
                          % (profile_name, " and ".join(sorted(CAPTURES))))
-    capture_name = CAPTURES[profile_name]
-    captured = parse_client_hello(parse_hex(data.read_text(capture_name)))
     hostname = hostname or sni_of(captured)
     ours = parse_client_hello(build_client_hello(hostname, profile=profile))
 
@@ -240,13 +260,20 @@ def main(argv: list[str] | None = None) -> int:
                         help="with --local, the profile to build: a built-in "
                              "name or a .py file. Captures ship for "
                              + " and ".join(sorted(CAPTURES)))
+    parser.add_argument("--capture", default=None, metavar="FILE",
+                        help="with --local, a hex ClientHello from your own "
+                             "browser (as `pybrws capture hello` writes it) "
+                             "to compare the profile with; needed for a "
+                             ".py profile")
     parser.add_argument("--hostname", default=None,
                         help="goes in server_name; the capture's own host, "
                              "so the SNI payload can be compared too")
     args = parser.parse_args(argv)
 
+    if args.capture and not args.local:
+        raise SystemExit("--capture needs --local")
     if args.local:
-        return local(args.profile, args.hostname)
+        return local(args.profile, args.hostname, args.capture)
 
     reference = json.loads(data.read_text(REFERENCE))
     report = fetch(firefox157)
