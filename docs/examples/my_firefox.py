@@ -54,6 +54,10 @@ H1_COOKIE_BEFORE = firefox157.H1_COOKIE_BEFORE
 # carries none.
 H2_HEADERS_PRIORITY = firefox157.H2_HEADERS_PRIORITY
 
+# Where cookie fields go in an HTTP/2 set that lacks H2_COOKIE_BEFORE, as
+# the fetch POST does. Without it they go last.
+H2_COOKIE_BEFORE_FALLBACK = firefox157.H2_COOKIE_BEFORE_FALLBACK
+
 # How much the greased ECH payload grows when a session ticket is offered.
 # Without it a resumed hello keeps the fresh hello's ECH payload size.
 ech_growth_for_psk = firefox157.ech_growth_for_psk

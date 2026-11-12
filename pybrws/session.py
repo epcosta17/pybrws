@@ -166,17 +166,21 @@ class Session:
         base = header_tools.merge(header_set(self.profile, method, kind, http2),
                                   override)
         cookies = self.cookies.matching(host, path.split("?", 1)[0])
-        # A set captured carrying a cookie has a {cookie} slot, and the
-        # cookies take it. Otherwise they go before the anchor measured on
-        # navigations. No capture of a POST that carries cookies exists, so
-        # on a POST set their place is unmeasured: before the same anchor
-        # where the set has it, else last.
+        # The cookies take the set's {cookie} slot if it has one: firefox157's
+        # HTTP/1.1 image set was captured carrying a cookie there, and its
+        # HTTP/2 image set is derived from it. Otherwise they go before the
+        # profile's anchor, or before its HTTP/2 fallback when the set lacks
+        # the anchor, else last. Captures back that place on both profiles'
+        # navigations and HTTP/2 fetch POSTs, and on chrome155's HTTP/2 image
+        # request. No capture carries a cookie on a form POST or an HTTP/1.1
+        # POST: there the same rule applies, unmeasured.
         if http2:
             # Measured: Firefox sends one `cookie` field per cookie over
             # HTTP/2, which HPACK makes cheaper than one joined header.
             return header_tools.place_cookies(
                 base, "cookie", [c.name + "=" + c.value for c in cookies],
-                self.profile.H2_COOKIE_BEFORE)
+                self.profile.H2_COOKIE_BEFORE,
+                getattr(self.profile, "H2_COOKIE_BEFORE_FALLBACK", None))
         joined = ["; ".join(c.name + "=" + c.value for c in cookies)] if cookies else []
         return header_tools.place_cookies(base, "Cookie", joined,
                                           self.profile.H1_COOKIE_BEFORE)

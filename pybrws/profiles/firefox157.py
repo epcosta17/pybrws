@@ -214,6 +214,13 @@ H1_HEADERS = [
 H2_COOKIE_BEFORE = "upgrade-insecure-requests"
 H1_COOKIE_BEFORE = "Upgrade-Insecure-Requests"
 
+# A set without upgrade-insecure-requests takes its cookies before
+# sec-fetch-dest. Measured on a fetch POST over HTTP/2:
+# fixtures/reference-firefox-157-h2-post.txt carries two cookies between
+# origin and sec-fetch-dest. The HTTP/1.1 image capture has its Cookie
+# right before Sec-Fetch-Dest as well.
+H2_COOKIE_BEFORE_FALLBACK = "sec-fetch-dest"
+
 
 # Measured from fixtures/reference-firefox-157-post-form.txt and
 # fixtures/reference-firefox-157-post-fetch.txt.

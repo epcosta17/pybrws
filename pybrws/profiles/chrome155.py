@@ -28,10 +28,15 @@ Firefox is nearly everything:
 - **Mixed header casing over HTTP/1.1.** The client hints are lower case and
   everything else is capitalised, which is a fingerprint and not a style.
 
-Not measured, and so not here: resumption, HelloRetryRequest, the image and
-cookie-carrying request variants, and anything over QUIC. Chrome's QUIC
-hello was seen once in a capture that was taken for Firefox -- eleven
-extensions and Google transport parameters -- and that is all.
+Measured beyond the hello: a navigation over HTTP/1.1 and over HTTP/2, each
+also carrying cookies; fetch and form POSTs over both, the HTTP/2 fetch POST
+also carrying cookies; and an image request over HTTP/2. Not measured: the
+HTTP/1.1 image request (see UNMEASURED), cookies on a form POST or an
+HTTP/1.1 POST, a resumed hello, HelloRetryRequest, and anything over QUIC.
+A Session still resumes with this profile, in the shape measured for
+Firefox. Chrome's QUIC hello was seen once in a capture that was taken for
+Firefox -- eleven extensions and Google transport parameters -- and that is
+all.
 """
 
 from __future__ import annotations
