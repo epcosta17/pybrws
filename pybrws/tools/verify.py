@@ -592,12 +592,21 @@ def main(argv: list[str] | None = None) -> int:
                              "to compare the profile with; needed for a "
                              ".py profile")
     parser.add_argument("--hostname", default=None,
-                        help="goes in server_name; the capture's own host, "
-                             "so the SNI payload can be compared too")
+                        help="with --local, goes in server_name; the "
+                             "capture's own host, so the SNI payload can be "
+                             "compared too")
     args = parser.parse_args(argv)
 
     if args.capture and not args.local:
         raise SystemExit("--capture needs --local")
+    # Without --local, verify sends firefox157 to tls.peet.ws under that
+    # service's own name, so another profile or a hostname would be ignored,
+    # and the report would read as a pass for a profile never sent.
+    if args.profile != firefox157.NAME and not args.local:
+        raise SystemExit("--profile needs --local: without it, verify sends "
+                         "firefox157")
+    if args.hostname is not None and not args.local:
+        raise SystemExit("--hostname needs --local")
     if args.local:
         return local(args.profile, args.hostname, args.capture)
 

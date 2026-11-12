@@ -34,7 +34,7 @@ import argparse
 import json as jsonlib
 
 import pybrws.h3 as h3
-from pybrws import profiles
+from pybrws import emitter, profiles
 from pybrws.client import get
 
 DEFAULT_URL = "https://thumbprint.me/api/v1/probe"
@@ -126,6 +126,10 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         profile = profiles.load(args.profile, transport="tcp")
+        # One hello, built now: a profile that cannot make one stops here in
+        # its own line, rather than as a TCP arm that "failed" and a
+        # reading about reachability.
+        emitter.build_client_hello("example.com", profile=profile)
     except profiles.ProfileError as error:
         raise SystemExit(str(error))
 

@@ -35,15 +35,19 @@ dependencies = [
 # `pip install "pybrws[client]"` and `pybrws[zstd]` keep working.
 client = []
 zstd = []
-# HTTP/3 transport.
-http3 = ["aioquic"]
-# The httpx baseline that `pybrws ab` compares against.
-measure = ["httpx[http2]"]
+# HTTP/3 transport. pybrws.quic_impersonate patches aioquic's internals, so
+# the range starts at the minor release requirements-lock.txt tests (1.3.0)
+# and stops before the next major one.
+http3 = ["aioquic>=1.3,<2"]
+# The httpx baseline that `pybrws ab` compares against: the minor release
+# requirements-lock.txt tests (0.28.1), and later ones below 1.0.
+measure = ["httpx[http2]>=0.28,<1"]
 # Building the documentation site.
 docs = ["zensical>=0.1.1,<0.2", "mkdocstrings-python"]
-# Running the test suite. aioquic is also the oracle the Initial packet
-# decryptor is checked against; pybrws.quic itself needs only cryptography.
-dev = ["aioquic", "httpx[http2]"]
+# Running the test suite, with the same ranges. aioquic is also the oracle
+# the Initial packet decryptor is checked against; pybrws.quic itself needs
+# only cryptography.
+dev = ["aioquic>=1.3,<2", "httpx[http2]>=0.28,<1"]
 
 [project.scripts]
 pybrws = "pybrws.cli:main"

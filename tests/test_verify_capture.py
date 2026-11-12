@@ -7,6 +7,7 @@ import functools
 import io
 import random
 import re
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,7 +17,9 @@ from pybrws import cli, emitter, handshake, profiles
 from pybrws.hexio import load_hex
 from pybrws.model import Extension
 from pybrws.parser import parse_client_hello
-from pybrws.tools import verify
+# isolate and probe_fingerprint are imported here, before any test patches
+# sys.modules, so that restoring sys.modules cannot unload them.
+from pybrws.tools import ab_test, isolate, probe_fingerprint, verify  # noqa: F401
 from tests.profile_files import write_profile
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
@@ -770,6 +773,114 @@ class VerifyBuildsWhatAConnectionSendsTests(unittest.TestCase):
                                           rng=random.Random(3).randbytes)):
                     sent = self.first_flight(profile)
                 self.assertEqual(len(built), len(sent))
+
+
+class MeasuringToolsStopOnAHelloThatCannotBeBuiltTests(unittest.TestCase):
+    """ab, isolate and probe build one hello from the profile first. One that
+    cannot be built stops them in its one line, before their extras are
+    imported and before any request. ab used to send its httpx arms anyway,
+    then read every failed pybrws sample as a network failure."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.profile = str(write_profile(Path(tmp.name), X25519_FIRST,
+                                         "x25519_first.py"))
+        # ab's main sets these module globals; each patch puts one back.
+        for name in ("CLIENTS", "CONTROL", "PROFILE", "PROXY"):
+            patcher = mock.patch.object(ab_test, name, getattr(ab_test, name))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def pybrws(self, *argv):
+        """`pybrws ARGV` with the extras missing and every socket refused:
+        its exit status, stdout and stderr."""
+        opened = []
+
+        def refuse(sock, *args):
+            opened.append(args)
+            raise OSError("refused by the test")
+
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(sys.modules, {"httpx": None, "aioquic": None}), \
+                mock.patch("socket.socket.connect", refuse), \
+                mock.patch("socket.socket.sendto", refuse), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = cli.main(list(argv))
+            except SystemExit as exit_:
+                code = exit_.code
+                if isinstance(code, str):   # what the shell prints, status 1
+                    err.write(code + "\n")
+                    code = 1
+        self.assertEqual(opened, [], "a socket was opened")
+        return code, out.getvalue(), err.getvalue()
+
+    def assert_stops_in_one_line(self, *argv):
+        code, out, err = self.pybrws(*argv, "--profile", self.profile)
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertRegex(err, FAILED_IN_FIREFOX157)
+
+    def test_ab(self):
+        self.assert_stops_in_one_line(
+            "ab", "--targets", "https://127.0.0.1:9/", "--no-log",
+            "--rounds", "1", "--pause", "0")
+
+    def test_isolate(self):
+        self.assert_stops_in_one_line(
+            "isolate", "--targets", "https://127.0.0.1:9/",
+            "--proxy", "http://127.0.0.1:9", "--rounds", "1")
+
+    def test_probe(self):
+        self.assert_stops_in_one_line("probe", "--url", "https://127.0.0.1:9/")
+
+
+class _SocketOpened(Exception):
+    pass
+
+
+class OnlineVerifyRefusesWhatItWouldIgnoreTests(unittest.TestCase):
+    """Without --local, verify sends firefox157 to tls.peet.ws, whatever
+    --profile names, under that service's own name. So another --profile, or
+    any --hostname, is refused in one line, as --capture is, before anything
+    is sent: it used to print a pass for a profile that was never sent."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def refused(self, *argv) -> str:
+        with mock.patch.object(handshake, "open_socket",
+                               side_effect=_SocketOpened), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                self.assertRaises(SystemExit) as caught:
+            cli.main(["verify", *argv])
+        return caught.exception.code
+
+    def test_a_profile_file_needs_local(self):
+        path = write_profile(self.dir)
+        self.assertEqual(self.refused("--profile", str(path)),
+                         "--profile needs --local: without it, verify sends "
+                         "firefox157")
+
+    def test_another_builtin_profile_needs_local(self):
+        self.assertEqual(self.refused("--profile", "chrome155"),
+                         "--profile needs --local: without it, verify sends "
+                         "firefox157")
+
+    def test_a_hostname_needs_local(self):
+        self.assertEqual(self.refused("--hostname", HOSTNAME),
+                         "--hostname needs --local")
+
+    def test_firefox157_by_name_is_what_it_sends(self):
+        # Nothing would be ignored, so verify goes on to connect, which is
+        # where the test stops it.
+        with mock.patch.object(handshake, "open_socket",
+                               side_effect=_SocketOpened), \
+                self.assertRaises(_SocketOpened):
+            cli.main(["verify", "--profile", "firefox157"])
 
 
 if __name__ == "__main__":

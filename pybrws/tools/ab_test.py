@@ -38,7 +38,7 @@ from collections import defaultdict
 from pathlib import Path
 from urllib.parse import urljoin
 
-from pybrws import profiles
+from pybrws import emitter, profiles
 from pybrws.client import get
 from pybrws.profiles import firefox157
 
@@ -76,8 +76,11 @@ def via_pybrws(target: str, timeout: float):
 def via_baseline(target: str, timeout: float):
     import httpx
 
+    # trust_env=False: no proxy from HTTPS_PROXY or ALL_PROXY. The pybrws
+    # arm goes direct unless --proxy says otherwise, and an httpx arm behind
+    # a proxy would differ from it in address as well as fingerprint.
     with httpx.Client(timeout=timeout, http2=True, follow_redirects=True,
-                      max_redirects=MAX_REDIRECTS) as client:
+                      max_redirects=MAX_REDIRECTS, trust_env=False) as client:
         response = client.get(as_url(target))
         return response.status_code, response.content
 
@@ -101,8 +104,9 @@ def via_baseline_ff(target: str, timeout: float):
     """
     import httpx
 
+    # Direct whatever the environment says, as via_baseline is.
     with httpx.Client(timeout=timeout, http2=True, follow_redirects=True,
-                      max_redirects=MAX_REDIRECTS) as client:
+                      max_redirects=MAX_REDIRECTS, trust_env=False) as client:
         url = as_url(target)
         request = client.build_request("GET", url)
         request.headers = httpx.Headers(
@@ -424,6 +428,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         PROFILE = profiles.load(args.profile, transport="tcp")
+        # One hello, built before the extras and before any request. A
+        # profile that cannot make one would otherwise fail every pybrws
+        # sample, which reads as the network's fault, while the httpx arms
+        # still send.
+        emitter.build_client_hello("example.com", profile=PROFILE)
     except profiles.ProfileError as error:
         raise SystemExit(str(error))
     CONTROL = args.control

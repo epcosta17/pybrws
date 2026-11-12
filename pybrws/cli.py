@@ -17,7 +17,8 @@ from .h3 import Http3Error
 from .handshake import HandshakeError, TruncatedStream
 from .http1 import Http1Error
 from .http2 import Http2Error
-from .proxies import ProxyError
+from .proxies import ProxyError, parse_proxy
+from .quic_impersonate import NotInstalled
 from .records import TlsAlert, UnexpectedRecord
 from .tls12 import Tls12Error
 
@@ -26,7 +27,7 @@ from .tls12 import Tls12Error
 REPORTED = (UnsupportedUrl, TooManyRedirects, TlsAlert, ProxyError, CertificateError,
             Unmeasured, ContentEncodingError, Http1Error, Http2Error, Http3Error,
             HandshakeError, Tls12Error, UnexpectedRecord, TruncatedStream,
-            UnicodeError, profiles.ProfileError)
+            UnicodeError, profiles.ProfileError, NotInstalled)
 
 
 # `pybrws <name> ...` runs one of the method's tools; each module has
@@ -155,7 +156,8 @@ def describe_request(profile, args) -> str:
              "> transport: " + ("quic/h3" if args.http3 else "tcp"),
              "> profile: " + profile.NAME]
     if args.proxy:
-        lines.append("> proxy: " + args.proxy)
+        # str(Proxy) omits the password: -v output gets pasted into issues.
+        lines.append("> proxy: " + str(parse_proxy(args.proxy)))
     for name, value in args.header:
         lines.append("> override: " + name + ": " + value)
     return "\n".join(lines)
@@ -243,10 +245,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.http3 and args.proxy:
         raise SystemExit("--proxy does not apply to --http3: QUIC is UDP and "
                          "this client has no UDP proxy support")
-    if args.verbose:
-        print(describe_request(profile, args), file=sys.stderr)
 
     try:
+        if args.verbose:
+            # Inside the try: describing the proxy parses it, and a proxy
+            # that does not parse is the ProxyError the request would raise.
+            print(describe_request(profile, args), file=sys.stderr)
         if args.http3:
             response = fetch_http3(args, profile, overrides)
         else:

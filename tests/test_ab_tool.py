@@ -6,13 +6,14 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from pybrws.profiles import chrome155, firefox157
-from pybrws.tools import ab_test
+from pybrws.tools import ab_test, isolate
 from tests.profile_files import write_profile
 
 try:
@@ -161,6 +162,67 @@ class TestH3ArmProfile(unittest.TestCase):
         self.assertEqual(self.main("--arms", "pybrws", "--profile", "chrome155"),
                          0)
         self.assertEqual(len(self.called), 1)
+
+
+class _Stopped(Exception):
+    """Raised by a client's send, so nothing leaves the machine."""
+
+
+@unittest.skipIf(httpx is None, "httpx is not installed")
+class TestBaselinesTakeNoProxyFromTheEnvironment(unittest.TestCase):
+    """The pybrws arms go direct unless --proxy or --use-env says otherwise,
+    so the httpx arms must too. One that read HTTPS_PROXY or ALL_PROXY would
+    differ from pybrws in address as well as in fingerprint, and nothing in
+    the table would show it. Offline: each client is built as its arm builds
+    it, then stopped at its first send."""
+
+    PROXY = "http://127.0.0.1:9"
+    URL = "https://example.com/"
+
+    def setUp(self):
+        variables = {name: self.PROXY for name in
+                     ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy")}
+        patcher = mock.patch.dict(os.environ, variables)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for name in ("NO_PROXY", "no_proxy"):
+            os.environ.pop(name, None)
+
+    def client_built_by(self, call):
+        built = []
+        real_client = httpx.Client
+
+        def recording(*args, **options):
+            client = real_client(*args, **options)
+            client.send = mock.Mock(side_effect=_Stopped)
+            built.append(client)
+            return client
+
+        with mock.patch.object(httpx, "Client", recording), \
+                self.assertRaises(_Stopped):
+            call()
+        self.assertEqual(len(built), 1)
+        return built[0]
+
+    def proxied(self, client) -> bool:
+        """Does the client send an https URL through a proxy?"""
+        return (client._transport_for_url(httpx.URL(self.URL))
+                is not client._transport)
+
+    def test_the_direct_httpx_arms_ignore_proxy_variables(self):
+        arms = {
+            "ab httpx": lambda: ab_test.via_baseline(self.URL, 1.0),
+            "ab httpx+ff": lambda: ab_test.via_baseline_ff(self.URL, 1.0),
+            "isolate httpx direct": lambda: isolate.hx(self.URL, None),
+        }
+        for label, call in arms.items():
+            with self.subTest(arm=label):
+                self.assertFalse(self.proxied(self.client_built_by(call)))
+
+    def test_the_proxied_isolate_arm_keeps_its_proxy(self):
+        client = self.client_built_by(
+            lambda: isolate.hx(self.URL, "http://127.0.0.1:8"))
+        self.assertTrue(self.proxied(client))
 
 
 if __name__ == "__main__":

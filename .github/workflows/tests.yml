@@ -1,8 +1,11 @@
 name: tests
 
 on:
+  # Branches only: a tag runs the suite once, through release.yml.
   push:
+    branches: ["**"]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read

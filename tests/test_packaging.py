@@ -49,6 +49,25 @@ class PackagingMetadata(unittest.TestCase):
                 for banned in ("jupyterlab", "nbclient", "curl_cffi"):
                     self.assertNotIn(banned, requirement, name)
 
+    def test_the_extras_stay_within_the_releases_tested(self):
+        # quic_impersonate patches aioquic's internals, and ab compares
+        # against httpx. Each extra starts at the minor release
+        # requirements-lock.txt tests (aioquic 1.3.0, httpx 0.28.1) and
+        # stops before the next major one.
+        extras = _pyproject()["project"]["optional-dependencies"]
+        self.assertEqual(extras["http3"], ["aioquic>=1.3,<2"])
+        self.assertEqual(extras["measure"], ["httpx[http2]>=0.28,<1"])
+        self.assertEqual(extras["dev"],
+                         ["aioquic>=1.3,<2", "httpx[http2]>=0.28,<1"])
+
+    def test_the_version_is_the_packages(self):
+        # Two copies of one fact: a bump that missed one would ship a wheel
+        # whose pybrws.__version__ names another release.
+        import pybrws
+
+        self.assertEqual(_pyproject()["project"]["version"],
+                         pybrws.__version__)
+
 
 class DefaultStore(unittest.TestCase):
     """Mozilla's roots (the certifi bundle) plus the platform's."""

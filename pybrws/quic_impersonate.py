@@ -94,8 +94,18 @@ HANDSHAKE_COMPRESSED_CERTIFICATE = 0x19   # RFC 8879
 PARAMETER_SOURCE_CONNECTION_ID = 0x0F
 
 
+# The aioquic release requirements-lock.txt pins, which the seams below are
+# tested against. The http3 extra allows it and the later 1.x releases.
+TESTED_AIOQUIC = "1.3.0"
+
+
 class NotInstalled(Exception):
-    pass
+    """aioquic does not look the way the patches here expect. The message
+    ends with the aioquic release pybrws is tested with."""
+
+    def __str__(self) -> str:
+        return "%s (pybrws is tested with aioquic %s)" % (super().__str__(),
+                                                          TESTED_AIOQUIC)
 
 
 class _Connection:

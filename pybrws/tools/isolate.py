@@ -17,7 +17,7 @@ import os
 import time
 from functools import partial
 
-from pybrws import profiles
+from pybrws import emitter, profiles
 from pybrws.client import get
 
 
@@ -29,8 +29,11 @@ def pybrws(url, proxy, profile):
 def hx(url, proxy):
     import httpx
 
+    # trust_env=False: the direct arm stays direct with HTTPS_PROXY or
+    # ALL_PROXY set, as the pybrws arm does, and the proxied arm uses only
+    # the proxy given.
     with httpx.Client(timeout=25, http2=True, follow_redirects=True,
-                      proxy=proxy or None) as client:
+                      proxy=proxy or None, trust_env=False) as client:
         return client.get(url).status_code
 
 
@@ -62,6 +65,9 @@ def main(argv: list[str] | None = None) -> int:
                          "hosts or URLs, e.g. --targets https://example.com/")
     try:
         profile = profiles.load(args.profile, transport="tcp")
+        # One hello, built now: a profile that cannot make one stops here in
+        # its own line, rather than as a status in every pybrws cell.
+        emitter.build_client_hello("example.com", profile=profile)
     except profiles.ProfileError as error:
         raise SystemExit(str(error))
     # Imported once the arguments are good and before the first request, so
