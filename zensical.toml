@@ -28,6 +28,31 @@ nav = [
   { "Changelog" = "changelog.md" },
 ]
 
+# The same theme as barebidi's docs: light or dark as the reader's system is
+# set, with a toggle, in deep orange.
+[project.theme]
+features = [
+  "navigation.sections",
+  "navigation.top",
+  "navigation.footer",
+  "content.code.copy",
+  "search.highlight",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+primary = "deep orange"
+toggle.icon = "material/weather-night"
+toggle.name = "Dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+primary = "deep orange"
+toggle.icon = "material/weather-sunny"
+toggle.name = "Light mode"
+
 [project.plugins.mkdocstrings.handlers.python]
 paths = ["."]
 
