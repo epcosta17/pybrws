@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import traceback
 from typing import Callable, Sequence
 
 from .keyexchange import KeyExchange
@@ -104,10 +105,17 @@ def build_extensions(profile, ctx: Context) -> bytes:
 
 
 def _cannot_build(profile, error: Exception) -> ProfileError:
-    """A profile whose own values or functions cannot make a hello."""
+    """A profile whose own values or functions cannot make a hello.
+
+    One line for whoever wrote the profile: the error, then the file and
+    line where it was raised, which is often in their own file.
+    """
     name = getattr(profile, "NAME", None) or getattr(profile, "__name__", "?")
-    return ProfileError("cannot build a hello from profile %r: %s: %s"
-                        % (name, type(error).__name__, error))
+    frames = traceback.extract_tb(error.__traceback__)
+    place = (" (%s:%d)" % (os.path.basename(frames[-1].filename),
+                           frames[-1].lineno) if frames else "")
+    return ProfileError("cannot build a hello from profile %r: %s: %s%s"
+                        % (name, type(error).__name__, error, place))
 
 
 def key_exchange_for(profile):

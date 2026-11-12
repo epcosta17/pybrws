@@ -14,6 +14,7 @@ from unittest import mock
 
 from pybrws import cli, emitter, handshake, profiles
 from pybrws.hexio import load_hex
+from pybrws.model import Extension
 from pybrws.parser import parse_client_hello
 from pybrws.tools import verify
 from tests.profile_files import write_profile
@@ -48,6 +49,11 @@ TWO_SHARES = ("from pybrws.profiles.firefox157 import *\n"
 NO_SESSION_ID = ("from pybrws.profiles.firefox157 import *\n"
                  "NAME = 'no_session_id'\n"
                  "SESSION_ID_SIZE = 0\n")
+# The one line a copy with X25519_FIRST ends in: the error, then the file
+# and line where it was raised, in firefox157's key_share.
+FAILED_IN_FIREFOX157 = (r"^cannot build a hello from profile 'x25519_first': "
+                        r"ValueError: key_share for 0x11ec: expected 1216 "
+                        r"bytes from 0x001d, got 32 \(firefox157\.py:\d+\)$")
 # firefox157's key_share lays the shares out against firefox157's own list,
 # so this order cannot be built with it.
 X25519_FIRST = ("from pybrws.profiles.firefox157 import *\n"
@@ -111,6 +117,138 @@ OTHER_RECORD_VERSION = ("from pybrws.profiles.firefox157 import *\n"
 OTHER_COMPRESSION = ("from pybrws.profiles.firefox157 import *\n"
                      "NAME = 'other_compression'\n"
                      "COMPRESSION_METHODS = [1]\n")
+
+# The review's two runs: a changed field, and a DRAWN that names it.
+ONE_MORE_GROUP = CHROME_HEAD + '''\
+NAME = "one_more_group"
+
+
+def payload_for(kind, ctx):
+    if kind == 10:
+        groups = (ctx.grease("groups"), 0x11EC, 0x001D, 0x0017, 0x0018, 0x0019)
+        return vector(b"".join(u16(group) for group in groups), 2)
+    return chrome155.payload_for(kind, ctx)
+'''
+ONE_MORE_GROUP_DRAWN = ONE_MORE_GROUP + (
+    'DRAWN = dict(chrome155.DRAWN, supported_groups="greased value at the head")\n')
+ALPN_H2_DRAWN = '''\
+from pybrws.profiles import firefox157
+from pybrws.profiles.firefox157 import *
+
+NAME = "alpn_h2"
+EXTENSIONS = [(kind, bytes.fromhex("0003026832") if kind == 16 else payload)
+              for kind, payload in firefox157.EXTENSIONS]
+DRAWN = {"alpn": "drawn per connection", "length": "drawn per connection"}
+'''
+# chrome155 copies with an ECH payload of a size Chrome never sends, and
+# with the GREASE extensions moved one place in from each end.
+ECH_100 = CHROME_HEAD + '''\
+from pybrws.wire import u8
+
+NAME = "ech_100"
+
+
+def payload_for(kind, ctx):
+    if kind == 65037:
+        return (u8(0) + u16(1) + u16(1) + u8(ctx.random(1)[0])
+                + vector(ctx.random(32), 2) + vector(ctx.random(100), 2))
+    return chrome155.payload_for(kind, ctx)
+'''
+GREASE_MOVED_IN = CHROME_HEAD + '''\
+NAME = "grease_moved_in"
+
+
+def extension_order(ctx):
+    order = chrome155.extension_order(ctx)
+    return order[1:2] + order[:1] + order[2:-2] + order[-1:] + order[-2:-1]
+'''
+
+
+def firefox_ech(name: str, outer: int = 0, kdf: int = 1, aead: str = "1",
+                enc: int = 32, payload: int = 240) -> str:
+    """A copy of firefox157 whose greased ECH has these header values."""
+    return f'''\
+from pybrws.profiles import firefox157
+from pybrws.profiles.firefox157 import *
+from pybrws.wire import u8, u16, vector
+
+NAME = "{name}"
+
+
+def greased_ech(ctx):
+    return (u8({outer}) + u16({kdf}) + u16({aead}) + u8(ctx.random(1)[0])
+            + vector(ctx.random({enc}), 2) + vector(ctx.random({payload}), 2))
+
+
+EXTENSIONS = [(kind, greased_ech if kind == 65037 else payload)
+              for kind, payload in firefox157.EXTENSIONS]
+'''
+
+
+# A chrome155 copy whose greased key share draws a GREASE value of its own,
+# and one that sends the same GREASE extension type at both ends.
+OWN_SLOT = CHROME_HEAD + '''\
+NAME = "own_slot"
+
+
+def key_share(ctx):
+    entries = u16(ctx.grease("key_share")) + vector(b"\\x00", 2)
+    for (group, size), (offered, share) in zip(KEY_SHARE_GROUPS,
+                                               ctx.key_exchange.client_shares()):
+        entries += u16(group) + vector(share, 2)
+    return vector(entries, 2)
+
+
+def payload_for(kind, ctx):
+    if kind == 51:
+        return key_share(ctx)
+    return chrome155.payload_for(kind, ctx)
+'''
+REPEATED_GREASE = CHROME_HEAD + '''\
+NAME = "repeated_grease"
+
+
+def extension_order(ctx):
+    order = chrome155.extension_order(ctx)
+    return order[:-1] + order[:1]
+'''
+# A profile whose own key_share fails, on line 8 of its file.
+NAME_ERROR = '''\
+from pybrws.profiles import firefox157
+from pybrws.profiles.firefox157 import *
+
+NAME = "name_error"
+
+
+def key_share(ctx):
+    return undefined_name
+
+
+EXTENSIONS = [(kind, key_share if kind == 51 else payload)
+              for kind, payload in firefox157.EXTENSIONS]
+'''
+
+
+def write_capture(directory: Path, name: str, raw: bytes) -> str:
+    path = Path(directory) / name
+    path.write_text(raw.hex() + "\n", encoding="utf-8")
+    return str(path)
+
+
+def with_ech_payload(raw: bytes, size: int) -> bytes:
+    """`raw`, a ClientHello record, with its greased ECH payload `size` bytes."""
+    hello = parse_client_hello(raw)
+    rebuilt = []
+    for extension in hello.extensions:
+        if extension.type == 0xFE0D:
+            data = extension.data
+            cut = 8 + int.from_bytes(data[6:8], "big")
+            extension = Extension(extension.type,
+                                  data[:cut] + size.to_bytes(2, "big")
+                                  + bytes(size))
+        rebuilt.append(extension)
+    hello.extensions = rebuilt
+    return emitter.serialise(hello, int.from_bytes(raw[1:3], "big"))
 
 
 def run(main, argv):
@@ -220,7 +358,7 @@ class VerifyComparesLengthsTests(unittest.TestCase):
         code, out = self.verify(WRONG_ECH, "wrong_ech.py")
         self.assertEqual(code, 1, out)
         self.assertIn("UNEXPECTED", line_for(out, "encrypted_client_hello"))
-        self.assertIn("250 bytes, 282 in the capture",
+        self.assertIn("payload length 208, 240 in the capture",
                       line_for(out, "encrypted_client_hello"))
         self.assertIn("UNEXPECTED", line_for(out, "ours"))
         self.assertIn("Not a pass.", out)
@@ -293,10 +431,10 @@ class VerifyNormalisesGreaseTests(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("UNEXPECTED", line_for(out, "supported_groups"))
 
-    def test_drawn_does_not_excuse_a_list_that_differs(self):
-        code, out = self.verify(OTHER_GROUPS_DRAWN, "other_groups_drawn.py")
-        self.assertEqual(code, 1, out)
-        self.assertIn("UNEXPECTED", line_for(out, "supported_groups"))
+    def test_drawn_cannot_name_a_list(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.verify(OTHER_GROUPS_DRAWN, "other_groups_drawn.py")
+        self.assertIn("'supported_groups'", str(caught.exception))
 
     def test_another_extension_set_fails_on_the_set_not_the_order(self):
         code, out = self.verify(OTHER_SET, "other_set.py")
@@ -355,8 +493,188 @@ class VerifyNormalisesGreaseTests(unittest.TestCase):
         self.assertIn("16 of 18", line_for(out, "payloads"))
 
     def test_chrome155_draws_only_the_order_and_the_ech_size(self):
-        self.assertEqual(set(profiles.chrome155.DRAWN),
-                         {"extensions", "encrypted_client_hello", "length"})
+        self.assertEqual(profiles.chrome155.DRAWN,
+                         {"extensions": "order drawn per connection",
+                          "encrypted_client_hello": (144, 208, 240)})
+
+
+class VerifyDrawnRulesTests(unittest.TestCase):
+    """DRAWN holds the extension order, with a note, and the lengths a field
+    drawn per connection is drawn from. A field's content is compared first,
+    whatever DRAWN says, and anything else in DRAWN stops verify."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def verify(self, text: str, name: str, capture: str = CHROME):
+        path = write_profile(self.dir, text, name)
+        return run(verify.main, ["--local", "--profile", str(path),
+                                 "--capture", capture])
+
+    def stops(self, text: str, name: str, capture: str = CHROME) -> str:
+        with self.assertRaises(SystemExit) as caught:
+            self.verify(text, name, capture)
+        message = str(caught.exception)
+        self.assertNotIn("\n", message)
+        self.assertIn("DRAWN can hold", message)
+        return message
+
+    def test_drawn_naming_a_list_stops_verify(self):
+        self.assertIn("'supported_groups'",
+                      self.stops(ONE_MORE_GROUP_DRAWN, "one_more_group_drawn.py"))
+
+    def test_drawn_naming_alpn_and_length_stops_verify(self):
+        self.assertIn("'alpn'",
+                      self.stops(ALPN_H2_DRAWN, "alpn_h2.py", FIREFOX))
+
+    def test_a_drawn_field_needs_its_lengths(self):
+        text = ECH_100 + ('DRAWN = {"encrypted_client_hello": '
+                          '"payload length drawn"}\n')
+        self.assertIn("'encrypted_client_hello'",
+                      self.stops(text, "ech_note.py"))
+
+    def test_one_more_group_fails_with_chrome155s_drawn(self):
+        code, out = self.verify(ONE_MORE_GROUP, "one_more_group.py")
+        self.assertEqual(code, 1, out)
+        self.assertIn("UNEXPECTED", line_for(out, "supported_groups"))
+
+    def test_an_ech_payload_outside_the_drawn_lengths_fails(self):
+        code, out = self.verify(ECH_100, "ech_100.py")
+        self.assertEqual(code, 1, out)
+        line = line_for(out, "encrypted_client_hello")
+        self.assertIn("UNEXPECTED", line)
+        self.assertIn("payload length 100", line)
+        self.assertIn("(144, 208, 240)", line)
+
+    def test_a_capture_outside_the_drawn_lengths_fails(self):
+        capture = write_capture(self.dir, "chrome-100.hex",
+                                with_ech_payload(load_hex(CHROME), 100))
+        code, out = run(verify.main, ["--local", "--profile", "chrome155",
+                                      "--capture", capture])
+        self.assertEqual(code, 1, out)
+        line = line_for(out, "encrypted_client_hello")
+        self.assertIn("UNEXPECTED", line)
+        self.assertIn("100 in the capture", line)
+
+    def test_grease_extensions_moved_off_the_ends_fail(self):
+        code, out = self.verify(GREASE_MOVED_IN, "grease_moved_in.py")
+        self.assertEqual(code, 1, out)
+        line = line_for(out, "GREASE extensions")
+        self.assertIn("UNEXPECTED", line)
+        self.assertIn("positions 1 and 18, 0 and 19 in the capture", line)
+
+
+class VerifyEchHeaderTests(unittest.TestCase):
+    """The greased ECH's random parts are free; its header is not."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def verify(self, text: str, name: str):
+        path = write_profile(self.dir, text, name)
+        return run(verify.main, ["--local", "--profile", str(path),
+                                 "--capture", FIREFOX])
+
+    def test_each_header_field_that_differs_fails_and_is_named(self):
+        for field, text, words in (
+                ("outer type", firefox_ech("outer", outer=1), "outer type 1, 0"),
+                ("KDF", firefox_ech("kdf", kdf=2), "KDF 0x0002, 0x0001"),
+                ("enc length", firefox_ech("enc", enc=64, payload=208),
+                 "enc length 64, 32")):
+            with self.subTest(field=field):
+                code, out = self.verify(text, field.replace(" ", "_") + ".py")
+                self.assertEqual(code, 1, out)
+                line = line_for(out, "encrypted_client_hello")
+                self.assertIn("UNEXPECTED -- ECH header", line)
+                self.assertIn(words, line)
+
+    def test_the_aead_is_free(self):
+        # Firefox draws its AEAD, 0x0001 or 0x0003; the capture has 0x0001.
+        self.assertEqual(parse_client_hello(load_hex(FIREFOX))
+                         .extension(0xFE0D).data[3:5], b"\x00\x01")
+        code, out = self.verify(firefox_ech("aead_3", aead="3"), "aead_3.py")
+        self.assertEqual(code, 0, out)
+        self.assertIn("same string as the capture", out)
+
+
+class VerifyGreaseRegularitiesTests(unittest.TestCase):
+    """What GREASE normalising would hide: the value supported_groups and
+    key_share share, and an extension type sent twice."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def test_key_share_must_share_supported_groups_grease(self):
+        path = write_profile(self.dir, OWN_SLOT, "own_slot.py")
+        profile = profiles.load(str(path))
+        for seed in range(100):
+            hello = parse_client_hello(emitter.build_client_hello(
+                HOSTNAME, profile=profile, rng=random.Random(seed).randbytes))
+            if (hello.extension(10).data[2:4]
+                    != hello.extension(51).data[2:4]):
+                break
+        else:
+            self.fail("no seed draws two different GREASE values")
+        build = functools.partial(emitter.build_client_hello,
+                                  rng=random.Random(seed).randbytes)
+        with mock.patch.object(verify, "build_client_hello", build):
+            code, out = run(verify.main, ["--local", "--profile", str(path),
+                                          "--capture", CHROME])
+        self.assertEqual(code, 1, out)
+        self.assertIn("UNEXPECTED", line_for(out, "shared GREASE"))
+
+    def test_an_extension_type_sent_twice_fails(self):
+        path = write_profile(self.dir, REPEATED_GREASE, "repeated_grease.py")
+        code, out = run(verify.main, ["--local", "--profile", str(path),
+                                      "--capture", CHROME])
+        self.assertEqual(code, 1, out)
+        self.assertIn("UNEXPECTED", line_for(out, "repeated type"))
+
+
+class VerifyPaddingTests(unittest.TestCase):
+    def test_padding_bytes_are_free_and_its_size_is_not(self):
+        raw = load_hex(FIREFOX)
+        hello = parse_client_hello(raw)
+        hello.extensions = list(hello.extensions) + [Extension(21, bytes(10))]
+        with tempfile.TemporaryDirectory() as tmp:
+            capture = write_capture(Path(tmp), "padded.hex",
+                                    emitter.serialise(hello, 0x0301))
+            for size, code_wanted in ((10, 0), (12, 1)):
+                path = write_profile(
+                    Path(tmp),
+                    "from pybrws.profiles import firefox157\n"
+                    "from pybrws.profiles.firefox157 import *\n"
+                    "NAME = 'padded'\n"
+                    "EXTENSIONS = list(firefox157.EXTENSIONS) + "
+                    "[(21, b'\\xff' * %d)]\n" % size, "padded_%d.py" % size)
+                with self.subTest(size=size):
+                    code, out = run(verify.main, ["--local", "--profile",
+                                                  str(path), "--capture",
+                                                  capture])
+                    self.assertEqual(code, code_wanted, out)
+                    self.assertIn("must (" if size == 10 else
+                                  "UNEXPECTED -- 12 bytes, 10 in the capture",
+                                  line_for(out, "padding"))
+
+
+class VerifyBareCaptureTests(unittest.TestCase):
+    """A hello copied from Wireshark's handshake layer has no record header."""
+
+    def test_a_capture_without_its_record_header_passes_with_a_note(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            capture = write_capture(Path(tmp), "bare.hex",
+                                    load_hex(FIREFOX)[5:])
+            code, out = run(verify.main, ["--local", "--profile",
+                                          "firefox157", "--capture", capture])
+        self.assertEqual(code, 0, out)
+        self.assertIn("same string as the capture", out)
+        self.assertIn("none in the capture", line_for(out, "record"))
 
 
 class _Recorder:
@@ -408,10 +726,17 @@ class VerifyBuildsWhatAConnectionSendsTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as caught:
             verify.main(["--local", "--profile", str(path),
                          "--capture", FIREFOX])
+        self.assertRegex(str(caught.exception), FAILED_IN_FIREFOX157)
+
+    def test_the_place_a_profiles_own_code_failed_is_named(self):
+        path = write_profile(self.dir, NAME_ERROR, "name_error.py")
+        with self.assertRaises(SystemExit) as caught:
+            verify.main(["--local", "--profile", str(path),
+                         "--capture", FIREFOX])
         self.assertEqual(str(caught.exception),
-                         "cannot build a hello from profile 'x25519_first': "
-                         "ValueError: key_share for 0x11ec: expected 1216 "
-                         "bytes from 0x001d, got 32")
+                         "cannot build a hello from profile 'name_error': "
+                         "NameError: name 'undefined_name' is not defined "
+                         "(name_error.py:8)")
 
     def test_the_library_raises_profile_error_before_any_socket(self):
         profile = profiles.load(str(write_profile(self.dir, X25519_FIRST,
@@ -431,10 +756,7 @@ class VerifyBuildsWhatAConnectionSendsTests(unittest.TestCase):
         path = write_profile(self.dir, X25519_FIRST, "x25519_first.py")
         with self.assertRaises(SystemExit) as caught:
             ja4.main(["--profile", str(path)])
-        self.assertEqual(str(caught.exception),
-                         "cannot build a hello from profile 'x25519_first': "
-                         "ValueError: key_share for 0x11ec: expected 1216 "
-                         "bytes from 0x001d, got 32")
+        self.assertRegex(str(caught.exception), FAILED_IN_FIREFOX157)
 
     def test_the_builtin_profiles_are_built_as_a_connection_builds_them(self):
         for profile in (profiles.firefox157, profiles.chrome155):

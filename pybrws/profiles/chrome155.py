@@ -56,14 +56,6 @@ from ..wire import u8, u16, vector
 
 NAME = "chrome155"
 
-# What `pybrws verify` should expect to differ from any one capture, and why.
-# A copy made with `from pybrws.profiles.chrome155 import *` inherits it.
-DRAWN = {
-    "extensions": "order drawn per connection",
-    "encrypted_client_hello": "payload length drawn from 144, 208, 240",
-    "length": "ECH payload length drawn from 144, 208, 240",
-}
-
 LEGACY_VERSION = 0x0303
 RECORD_VERSION = 0x0301
 SESSION_ID_SIZE = 32
@@ -168,6 +160,15 @@ ECH_ENC_SIZE = 32
 # set or the distribution, so this is a draw over what was seen and is marked
 # as undermeasured. More captures of the hello alone would settle it.
 ECH_PAYLOAD_SIZES = (144, 208, 240)
+
+# What `pybrws verify` should expect to differ from any one capture: the
+# extension order, and the ECH payload's length, drawn from the lengths
+# above. A copy made with `from pybrws.profiles.chrome155 import *`
+# inherits it.
+DRAWN = {
+    "extensions": "order drawn per connection",
+    "encrypted_client_hello": ECH_PAYLOAD_SIZES,
+}
 
 # Two constants, not one, because they are two different facts.
 #

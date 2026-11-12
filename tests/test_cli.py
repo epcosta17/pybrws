@@ -156,19 +156,21 @@ class TestAProfileThatCannotBuildAHello(unittest.TestCase):
                              "NAME = 'x25519_first'\n"
                              "KEY_SHARE_GROUPS = [(0x001D, 32), (0x11EC, 1216)]\n",
                              "x25519_first.py")
-        self.assertEqual(message,
-                         "ProfileError: cannot build a hello from profile "
-                         "'x25519_first': ValueError: key_share for 0x11ec: "
-                         "expected 1216 bytes from 0x001d, got 32")
+        self.assertRegex(message,
+                         r"^ProfileError: cannot build a hello from profile "
+                         r"'x25519_first': ValueError: key_share for 0x11ec: "
+                         r"expected 1216 bytes from 0x001d, got 32 "
+                         r"\(firefox157\.py:\d+\)$")
 
     def test_a_group_no_key_exchange_knows(self):
         message = self.fetch("from pybrws.profiles.firefox157 import *\n"
                              "NAME = 'unknown_group'\n"
                              "KEY_SHARE_GROUPS = [(0x11EC, 1216), (0x9999, 32)]\n",
                              "unknown_group.py")
-        self.assertEqual(message,
-                         "ProfileError: cannot build a hello from profile "
-                         "'unknown_group': ValueError: unsupported group 0x9999")
+        self.assertRegex(message,
+                         r"^ProfileError: cannot build a hello from profile "
+                         r"'unknown_group': ValueError: unsupported group "
+                         r"0x9999 \(keyexchange\.py:\d+\)$")
 
 
 if __name__ == "__main__":
