@@ -299,9 +299,14 @@ class TestTicketBinding(unittest.TestCase):
         with Session(trust_store=self.store) as first, \
                 Session(trust_store=self.store) as second:
             second.tickets = first.tickets
+            # Recorded as opened: http_ok answers Connection: close, so the
+            # pool rightly lets the connection go once the response is read.
+            opened = []
+            dial = second._open
+            second._open = lambda *a, **k: opened.append(dial(*a, **k)) or opened[-1]
             self.assertEqual(first.get(url).status, 200)
             self.assertEqual(second.get(url).status, 200)
-            tls, _http = next(iter(second._pool.values()))
+            tls, _http = opened[0]
             self.assertTrue(tls.resumed)
 
 

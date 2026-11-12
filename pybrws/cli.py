@@ -11,10 +11,21 @@ from . import profiles
 from . import headers as header_tools
 from .client import (REDIRECT_STATUSES, TooManyRedirects, UnsupportedUrl,
                      Unmeasured, redirect_headers, request)
-from .message import Response
+from .message import DEFAULT_MAX_BODY, ContentEncodingError, Response
 from .certs import CertificateError
+from .h3 import Http3Error
+from .handshake import HandshakeError
+from .http1 import Http1Error
+from .http2 import Http2Error
 from .proxies import ProxyError
-from .records import TlsAlert
+from .records import TlsAlert, UnexpectedRecord
+from .tls12 import Tls12Error
+
+# What the library raises for a server, a response or an input it will not
+# take: reported in one line, as curl does, not as a traceback.
+REPORTED = (UnsupportedUrl, TooManyRedirects, TlsAlert, ProxyError, CertificateError,
+            Unmeasured, ContentEncodingError, Http1Error, Http2Error, Http3Error,
+            HandshakeError, Tls12Error, UnexpectedRecord, UnicodeError)
 
 
 def parse_header(raw: str) -> tuple[str, str]:
@@ -70,7 +81,9 @@ def fetch_http3(args, profile, overrides) -> Response:
         # capture for, where this used to send a GET whatever -X and -d said.
         response = h3.request(url, method=args.request.upper(), data=args.data,
                               timeout=args.timeout, headers=overrides or None,
-                              profile=profile, verify=not args.insecure)
+                              profile=profile, verify=not args.insecure,
+                              max_body_size=getattr(args, "max_body_size",
+                                                    DEFAULT_MAX_BODY))
         response.url = url
         location = response.header("location")
         # The statuses client.request follows, so both arms agree on what
@@ -151,6 +164,9 @@ def build_parser() -> argparse.ArgumentParser:
                              "profile and a separate code path, not a "
                              "negotiation")
     parser.add_argument("--timeout", type=float, default=20.0, metavar="SECONDS")
+    parser.add_argument("--max-filesize", type=int, default=None, metavar="BYTES",
+                        help="the most a response body may be, received or "
+                             "decoded (default 128 MiB); 0 lifts the cap")
     return parser
 
 
@@ -158,6 +174,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.request is None:
         args.request = "POST" if args.data else "GET"
+    if args.max_filesize is None:
+        args.max_body_size = DEFAULT_MAX_BODY
+    else:
+        args.max_body_size = args.max_filesize or None   # 0: no cap
     overrides = list(args.header)
     if args.data and not header_tools.has(overrides, "content-type"):
         # curl's default for -d, and a server will otherwise guess.
@@ -186,9 +206,9 @@ def main(argv: list[str] | None = None) -> int:
                 follow_redirects=args.max_redirs if args.location else 0,
                 proxy=args.proxy,
                 verify=not args.insecure,
+                max_body_size=args.max_body_size,
             )
-    except (UnsupportedUrl, TooManyRedirects, TlsAlert, ProxyError,
-            CertificateError, Unmeasured) as exc:
+    except REPORTED as exc:
         raise SystemExit(type(exc).__name__ + ": " + str(exc))
     except OSError as exc:
         raise SystemExit("connection failed: " + str(exc))

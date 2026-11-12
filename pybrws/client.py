@@ -52,6 +52,15 @@ class Unmeasured(Exception):
     """A profile has no capture for this kind of request."""
 
 
+def origin_of(url: str) -> str:
+    """The origin a browser serialises for Origin and Referer: https, the
+    A-label host in lower case, an IPv6 literal in brackets, and the port
+    only when it is not 443. Not the URL's netloc, which keeps whatever it
+    was written with -- user:password@ included."""
+    _host, _port, authority, _path = split_target(url)
+    return "https://" + authority
+
+
 def _origin(url: str) -> tuple[str, str, int]:
     parts = urlsplit(url)
     scheme = parts.scheme.lower()
@@ -205,7 +214,7 @@ def request(url: str, *, method: str = "GET", profile=firefox157,
             out while the server was still redirecting.
     """
     body, content_type = encode_body(data, json)
-    origin = "https://" + (urlsplit(url).netloc or "")
+    origin = origin_of(url)
     context = {
         "origin": origin,
         "referer": origin + "/" if referer is None else referer,
@@ -269,7 +278,7 @@ def stream(url: str, *, method: str = "GET", profile=firefox157,
         headers = header_tools.as_pairs(headers) + [("Content-Type", content_type)]
 
     host, port, authority, path = split_target(url)
-    origin = "https://" + (urlsplit(url).netloc or "")
+    origin = origin_of(url)
     context = {
         "origin": origin,
         "referer": origin + "/" if referer is None else referer,

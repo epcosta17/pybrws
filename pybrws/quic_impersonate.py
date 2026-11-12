@@ -385,6 +385,11 @@ def install(profile=None, rng: Callable[[int], bytes] = os.urandom) -> None:
         except ValueError as exc:   # BufferReadError among them
             raise tls.AlertDecodeError("the decompressed Certificate does not "
                                        "parse: %s" % exc) from exc
+        if not certificate.certificates:
+            # aioquic's own handler would take the first entry blindly and
+            # raise IndexError; RFC 8446 4.4.2.4 names decode_error.
+            raise tls.AlertDecodeError("the server's Certificate holds no "
+                                       "certificate (RFC 8446 4.4.2.4)")
         try:
             self._set_peer_certificate(certificate)
         except ValueError as exc:   # DER that is no certificate

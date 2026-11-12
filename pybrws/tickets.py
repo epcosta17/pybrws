@@ -71,11 +71,14 @@ def ticket_key(host: str, port: int, verify: bool, trust_store) -> tuple:
     one checked when it was earned. So a ticket from a connection that did
     not verify, or that trusted other anchors, must never resume one that
     does: it would authenticate a server nothing ever checked. And a ticket
-    for one port is a different server's. The trust store is compared by
-    identity, which is what one process shares between its sessions.
+    for one port is a different server's. The trust store is the object
+    itself, compared by identity -- what one process shares between its
+    sessions. Not its id(): once a store is gone Python hands that number to
+    the next object, and a ticket earned under one set of anchors resumed a
+    connection another set would refuse. Held in the key, the store lives as
+    long as its tickets do.
     """
-    return (host.lower(), port, bool(verify),
-            id(trust_store) if trust_store is not None else None)
+    return (host.lower(), port, bool(verify), trust_store)
 
 
 class TicketStore:

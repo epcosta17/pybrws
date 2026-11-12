@@ -99,8 +99,16 @@ class CertificateAuthority:
         self.certificate = self.key = None
         if self.cert_path.exists() and self.key_path.exists():
             # A CA written by an earlier version sits at the umask's default.
-            _tighten(self.directory)
+            # The key is always tightened. The directory only when it is the
+            # default one: a directory named with --ca-dir (., ~) belongs to
+            # the user, so it is warned about rather than chmod'ed.
             _tighten(self.key_path)
+            if self.directory.resolve() == DEFAULT_CA_DIR.resolve():
+                _tighten(self.directory)
+            elif os.name == "posix" and stat.S_IMODE(self.directory.stat().st_mode) & 0o077:
+                print("left %s as it is: other users can list it, though the CA "
+                      "key in it is readable by you alone" % self.directory,
+                      file=sys.stderr)
             certificate = x509.load_pem_x509_certificate(self.cert_path.read_bytes())
             try:
                 certificate.extensions.get_extension_for_class(

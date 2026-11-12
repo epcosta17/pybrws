@@ -187,8 +187,25 @@ class IncrementalDecoder:
         return not self._kind
 
     def feed(self, chunk: bytes) -> bytes:
-        """Decode `chunk` and return its output whole: `pieces`, joined."""
-        return b"".join(self.pieces(chunk))
+        """Decode `chunk` and return its output whole.
+
+        That output is held at once, so it takes the buffered cap: the
+        decoder's `max_size`, or DEFAULT_MAX_BODY for one call when it has
+        none -- 405 bytes of brotli made 256 MiB in a single call. Identity
+        is exempt, its output being its input. `pieces` hands the same
+        output out in bounded steps, with no total.
+        """
+        limit = self.max_size
+        if limit is None and not self.identity:
+            limit = DEFAULT_MAX_BODY
+        out = []
+        size = 0
+        for piece in self.pieces(chunk):
+            size += len(piece)
+            if limit is not None and size > limit:
+                raise body_too_large(limit)
+            out.append(piece)
+        return b"".join(out)
 
     def pieces(self, chunk: bytes, step: int = 1 << 20) -> Iterator[bytes]:
         """Decode `chunk`, yielding its output in pieces of at most `step`."""

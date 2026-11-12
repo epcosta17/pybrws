@@ -72,11 +72,14 @@ class StreamRefused(Http2Error):
 
     `requests` carries them, in order, so a caller can send them again
     elsewhere -- safely for any method, since none of them was processed.
+    `settled` holds requests of the same batch that were dealt with in the
+    meantime, as (request, response or error): not to be sent again.
     """
 
     def __init__(self, message: str, requests=None) -> None:
         super().__init__(message)
         self.requests = list(requests or [])
+        self.settled: list = []
 
 
 class _Stream:
@@ -172,6 +175,8 @@ class Http2Connection:
             SETTING_MAX_FRAME_SIZE, DEFAULT_MAX_FRAME)
         self._stream_windows: dict[int, int] = {}
         self._open: dict[int, _Stream] = {}
+        # Header blocks arriving for streams no longer tracked, until whole.
+        self._orphan_blocks: dict[int, bytearray] = {}
         self._peer_initial_window = DEFAULT_WINDOW
         self.peer_max_streams = DEFAULT_MAX_STREAMS
         # Set once the connection can no longer be trusted to carry another
@@ -365,9 +370,12 @@ class Http2Connection:
 
         If the peer refuses some -- a GOAWAY below them, or REFUSED_STREAM --
         everything before the first refused one is yielded, then
-        StreamRefused is raised carrying that request and every one after
-        it, none of which the server processed. Before this it waited for
-        them forever.
+        StreamRefused is raised. Its `requests` are the ones the server
+        never processed: those refused, and those not yet sent. A refusal
+        of one stream says nothing about its neighbours, so the requests
+        after it that were answered meanwhile are not among them; they are
+        on its `settled` attribute, each as (request, response or error).
+        Before this it waited for refused streams forever.
         """
         batch = list(requests)
         limit = max(1, min(self.peer_max_streams, len(batch))) if batch else 1
@@ -390,6 +398,18 @@ class Http2Connection:
             while queue and len(in_flight) < limit:
                 start(*queue.pop(0))
 
+        def collect() -> list[int]:
+            # Every stream that is now done, not only the one the last frame
+            # belonged to: a GOAWAY finishes several at once.
+            done = [sid for sid in in_flight if self._open[sid].done]
+            for stream_id in done:
+                index = in_flight.pop(stream_id)
+                try:
+                    outcomes[index] = self._finish(stream_id)
+                except Exception as exc:   # kept, raised in request order
+                    outcomes[index] = exc
+            return done
+
         fill()
         for wanted in range(len(batch)):
             while wanted not in outcomes:
@@ -398,20 +418,23 @@ class Http2Connection:
                     if wanted in outcomes or not in_flight:
                         break
                 self._pump()
-                # Collect every stream that is now done, not only the one the
-                # frame belonged to: a GOAWAY finishes several at once.
-                done = [sid for sid in in_flight if self._open[sid].done]
-                for stream_id in done:
-                    index = in_flight.pop(stream_id)
-                    try:
-                        outcomes[index] = self._finish(stream_id)
-                    except Exception as exc:   # kept, raised in request order
-                        outcomes[index] = exc
-                if done:
+                if collect():
                     fill()
             outcome = outcomes.pop(wanted)
             if isinstance(outcome, StreamRefused):
-                raise StreamRefused(str(outcome), requests=batch[wanted:])
+                # Before saying what was never processed, let what is in
+                # flight finish: those answered are not to be sent again.
+                while in_flight:
+                    self._pump()
+                    collect()
+                unprocessed = sorted([wanted] + [index for index, _spec in queue]
+                                     + [index for index, value in outcomes.items()
+                                        if isinstance(value, StreamRefused)])
+                error = StreamRefused(str(outcome),
+                                      requests=[batch[i] for i in unprocessed])
+                error.settled = [(batch[i], outcomes[i]) for i in sorted(outcomes)
+                                 if i not in unprocessed]
+                raise error
             if isinstance(outcome, Exception):
                 raise outcome
             yield outcome
@@ -452,7 +475,12 @@ class Http2Connection:
                     self._apply_settings(payload)
                     self.tls.send(frame(SETTINGS, FLAG_ACK, 0))
             elif frame_type == GOAWAY:
-                raise Http2Error("GOAWAY while sending the request body")
+                # As anywhere else: above `last` this stream was never
+                # processed, and a POST may go again; at or below it the
+                # server is still serving it, so the upload goes on.
+                self._on_goaway(payload)
+                if self._open[stream_id].error is not None:
+                    raise self._abandon_upload(stream_id)
             elif frame_type == RST_STREAM and frame_stream == stream_id:
                 code = int.from_bytes(payload[:4], "big")
                 if code == 0 and self._answered(stream_id):
@@ -460,9 +488,61 @@ class Http2Connection:
                     # RST_STREAM(NO_ERROR) means "stop sending, here is the
                     # answer". The answer is in the deferred frames.
                     return 0
-                raise Http2Error("stream reset while sending the request body")
+                self._on_reset(self._open[stream_id], code)
+                raise self._abandon_upload(stream_id)
             else:
                 self._pending.append((frame_type, flags, frame_stream, payload))
+
+    def _orphan(self, frame_type: int, flags: int, stream_id: int,
+                payload: bytes) -> None:
+        """A frame for a stream no longer tracked: a streaming response the
+        caller stopped reading, whose frames keep coming since nothing tells
+        the server to stop (D10). Nothing in it is wanted, but two things it
+        carries still count. Its header blocks change the HPACK table every
+        later block is read against, so they are decoded; skipping one made
+        later responses decode the wrong headers. And its DATA used up
+        connection window, which is credited back so the connection does
+        not stall."""
+        if frame_type in (HEADERS, CONTINUATION):
+            block = (_strip_padding(flags, payload, priority=bool(flags & FLAG_PRIORITY))
+                     if frame_type == HEADERS else payload)
+            pending = self._orphan_blocks.setdefault(stream_id, bytearray())
+            if len(pending) + len(block) > MAX_HEADER_BLOCK:
+                raise self._connection_error(
+                    "a header block past %d bytes (CONTINUATION without end)"
+                    % MAX_HEADER_BLOCK)
+            pending += block
+            if flags & FLAG_END_HEADERS:
+                self._decode(bytes(self._orphan_blocks.pop(stream_id)))
+        elif frame_type == DATA and payload:
+            self.tls.send(frame(WINDOW_UPDATE, 0, 0, len(payload).to_bytes(4, "big")))
+
+    def _on_goaway(self, payload: bytes) -> None:
+        code = int.from_bytes(payload[4:8], "big")
+        last = int.from_bytes(payload[:4], "big") & 0x7FFFFFFF
+        # The peer is closing. Streams up to `last` may still complete;
+        # those above it were never processed and never will be.
+        self.goaway_last = last
+        self.broken = True
+        for open_id, stream in self._open.items():
+            if open_id > last and not stream.done:
+                stream.error = StreamRefused(
+                    "GOAWAY (error code %d) above stream %d" % (code, last))
+                stream.done = True
+
+    @staticmethod
+    def _on_reset(stream: _Stream, code: int) -> None:
+        if code == 0x7:   # REFUSED_STREAM: never processed (RFC 9113 8.7)
+            stream.error = StreamRefused("stream refused by the peer")
+        else:
+            stream.error = Http2Error("stream reset, error code " + str(code))
+        stream.done = True
+
+    def _abandon_upload(self, stream_id: int) -> Exception:
+        """The error that ends an upload, its stream forgotten: the caller
+        never got the stream id, so nothing would collect it."""
+        self._stream_windows.pop(stream_id, None)
+        return self._open.pop(stream_id).error
 
     def _answered(self, stream_id: int) -> bool:
         """Whether the deferred frames already end this stream's response."""
@@ -475,6 +555,11 @@ class Http2Connection:
             self.peer_window += increment
         elif stream_id in self._stream_windows:
             self._stream_windows[stream_id] += increment
+
+    def can_reuse(self) -> bool:
+        """Whether another request may be opened here: not after a GOAWAY or
+        a connection error."""
+        return not self.broken
 
     def _connection_error(self, message: str) -> Http2Error:
         self.broken = True
@@ -542,32 +627,18 @@ class Http2Connection:
                 self.tls.send(frame(PING, FLAG_ACK, 0, payload))
             return None
         if frame_type == GOAWAY:
-            code = int.from_bytes(payload[4:8], "big")
-            last = int.from_bytes(payload[:4], "big") & 0x7FFFFFFF
-            # The peer is closing. Streams up to `last` may still complete;
-            # those above it were never processed and never will be.
-            self.goaway_last = last
-            self.broken = True
-            for open_id, stream in self._open.items():
-                if open_id > last and not stream.done:
-                    stream.error = StreamRefused(
-                        "GOAWAY (error code %d) above stream %d" % (code, last))
-                    stream.done = True
+            self._on_goaway(payload)
             return None
 
         stream = self._open.get(stream_id)
         if stream is None:
+            self._orphan(frame_type, flags, stream_id, payload)
             return None
         if stream_id == self._current and frame_type in (HEADERS, CONTINUATION, DATA):
             self.response_started = True
 
         if frame_type == RST_STREAM:
-            code = int.from_bytes(payload[:4], "big")
-            if code == 0x7:   # REFUSED_STREAM: never processed (RFC 9113 8.7)
-                stream.error = StreamRefused("stream refused by the peer")
-            else:
-                stream.error = Http2Error("stream reset, error code " + str(code))
-            stream.done = True
+            self._on_reset(stream, int.from_bytes(payload[:4], "big"))
         elif frame_type in (HEADERS, CONTINUATION):
             block = (_strip_padding(flags, payload,
                                     priority=bool(flags & FLAG_PRIORITY))

@@ -640,6 +640,12 @@ class ScriptedTls:
     def close(self) -> None:
         pass
 
+    def __enter__(self) -> "ScriptedTls":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
 
 class QuicServer:
     """An HTTP/3 server on loopback: aioquic's own `serve`, on an event loop
@@ -652,8 +658,9 @@ class QuicServer:
     session tickets; `.resumed` records whether each handshake resumed."""
 
     def __init__(self, *, ca, host: str = "127.0.0.1", certificate_host=None,
-                 status: int = 200, body: bytes = b"ok", retry: bool = False,
-                 on_request: str = "answer", tickets: bool = False) -> None:
+                 status: int | bytes = 200, body: bytes = b"ok", retry: bool = False,
+                 on_request: str = "answer", tickets: bool = False,
+                 headers=()) -> None:
         import asyncio
 
         from aioquic.asyncio import serve
@@ -695,9 +702,10 @@ class QuicServer:
                             self._quic.close(error_code=0x102, reason_phrase="test close")
                             self.transmit()
                             continue
+                        code = status if isinstance(status, bytes) else str(status).encode()
                         self._http.send_headers(http_event.stream_id, [
-                            (b":status", str(status).encode()),
-                            (b"content-length", str(len(body)).encode())])
+                            (b":status", code),
+                            (b"content-length", str(len(body)).encode())] + list(headers))
                         self._http.send_data(http_event.stream_id, body, end_stream=True)
                         self.transmit()
 

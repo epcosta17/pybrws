@@ -33,7 +33,7 @@ from urllib.parse import urlsplit
 from . import headers as header_tools
 from . import hosts
 from . import quic_impersonate
-from .message import Response, decompress, encode_body
+from .message import DEFAULT_MAX_BODY, Response, body_too_large, decompress, encode_body
 from .profiles import firefox157, firefox157_quic
 
 DEFAULT_PORT = 443
@@ -93,6 +93,9 @@ def _protocol():
             self._http = None
             self._pending: dict[int, asyncio.Future] = {}
             self._parts: dict[int, tuple[list, bytearray]] = {}
+            # The most a response body may be, received or decoded; None
+            # lifts it. open_connection sets it from the caller's.
+            self.max_body_size: int | None = DEFAULT_MAX_BODY
             # Ours rather than aioquic's wait_connected(), which awaits a
             # shielded future: cancelling that wait on a timeout left an
             # exception in it that asyncio then logged as never retrieved.
@@ -152,6 +155,12 @@ def _protocol():
                 if isinstance(http_event, HeadersReceived):
                     fields.extend(http_event.headers)
                 elif isinstance(http_event, DataReceived):
+                    if (self.max_body_size is not None
+                            and len(body) + len(http_event.data) > self.max_body_size):
+                        # Refused before it is held whole, as over TCP; what
+                        # still arrives for the stream is dropped above.
+                        self._fail(stream_id, body_too_large(self.max_body_size))
+                        continue
                     body.extend(http_event.data)
                 if http_event.stream_ended:
                     self._finish(stream_id)
@@ -171,20 +180,31 @@ def _protocol():
             waiter = self._pending.pop(stream_id, None)
             if waiter is None or waiter.done():
                 return
+            try:
+                waiter.set_result(self._response(fields, body))
+            except Exception as exc:
+                # This request's error, not the event loop's: raised here it
+                # escaped into asyncio, and the caller waited out its timeout.
+                waiter.set_exception(exc)
+
+        def _response(self, fields, body: bytearray) -> Response:
             status = 0
             headers = []
             for name, value in fields:
                 name = header_tools.from_wire(name)
                 value = header_tools.from_wire(value)
                 if name == ":status":
+                    if not (len(value) == 3 and value.isascii() and value.isdigit()):
+                        raise Http3Error("malformed :status %r" % value)
                     status = int(value)
                 elif not name.startswith(":"):
                     headers.append((name, value))
             response = Response(status=status, headers=headers,
                                 http_version="h3")
             encoding = response.header("content-encoding") or ""
-            response.body = decompress(bytes(body), encoding)
-            waiter.set_result(response)
+            response.body = decompress(bytes(body), encoding,
+                                       max_size=self.max_body_size)
+            return response
 
         def connection_lost(self, exc) -> None:
             for waiter in self._pending.values():
@@ -241,10 +261,13 @@ class Http3Client:
 
 async def open_connection(url: str, *, profile=firefox157_quic,
                           verify: bool = True, timeout: float = 30.0,
-                          cadata: bytes | None = None):
+                          cadata: bytes | None = None,
+                          max_body_size: int | None = DEFAULT_MAX_BODY):
     """Connect and hand back (client, closer). The caller closes.
 
     `cadata`: PEM certificates to trust as anchors, as aioquic takes them.
+    `max_body_size`: the most a response body may be, received or decoded,
+    before BodyTooLarge; None lifts it.
     """
     from aioquic.asyncio import connect
 
@@ -258,6 +281,7 @@ async def open_connection(url: str, *, profile=firefox157_quic,
     manager = connect(host, port, configuration=configuration,
                       create_protocol=_protocol(), wait_connected=False)
     protocol = await manager.__aenter__()
+    protocol.max_body_size = max_body_size
     protocol.transmit()   # the first flight, which wait_connected=False holds
     try:
         await asyncio.wait_for(protocol.handshake, timeout=timeout)
@@ -270,7 +294,8 @@ async def open_connection(url: str, *, profile=firefox157_quic,
 async def fetch(url: str, *, method: str = "GET", headers=None,
                 data=None, json=None, profile=firefox157_quic,
                 verify: bool = True, timeout: float = 30.0,
-                cadata: bytes | None = None) -> Response:
+                cadata: bytes | None = None,
+                max_body_size: int | None = DEFAULT_MAX_BODY) -> Response:
     """One request on its own connection, from inside a loop.
 
     Raises:
@@ -295,7 +320,8 @@ async def fetch(url: str, *, method: str = "GET", headers=None,
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     client, manager = await open_connection(url, profile=profile, verify=verify,
-                                            timeout=timeout, cadata=cadata)
+                                            timeout=timeout, cadata=cadata,
+                                            max_body_size=max_body_size)
     try:
         _host, _port, _authority, path = split_target(url)
         response = await client.request(method, path, headers=merged, body=body,

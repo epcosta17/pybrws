@@ -380,9 +380,27 @@ class TestCaKeyPermissions(unittest.TestCase):
         with contextlib.redirect_stderr(err):
             again = CertificateAuthority(self.directory)
         self.assertEqual(again.certificate, first.certificate)   # loaded, not replaced
-        self.assertEqual(mode_of(self.directory), 0o700)
         self.assertEqual(mode_of(self.directory / "ca-key.pem"), 0o600)
+        # A directory the user named (--ca-dir . or ~) is theirs: warned
+        # about, not chmod'ed. The key in it is what needed protecting.
+        self.assertEqual(mode_of(self.directory), 0o755)
         self.assertIn("ca-key.pem", err.getvalue())
+        self.assertIn("left %s as it is" % self.directory, err.getvalue())
+
+    def test_the_default_directory_is_tightened(self):
+        import contextlib
+        import io
+        import os
+        from unittest import mock
+
+        from pybrws import proxy
+
+        proxy.CertificateAuthority(self.directory)
+        os.chmod(self.directory, 0o755)
+        with mock.patch.object(proxy, "DEFAULT_CA_DIR", self.directory), \
+                contextlib.redirect_stderr(io.StringIO()):
+            proxy.CertificateAuthority(self.directory)
+        self.assertEqual(mode_of(self.directory), 0o700)
 
     def test_write_private_replaces_a_loose_file(self):
         import os

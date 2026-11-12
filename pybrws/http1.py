@@ -6,10 +6,12 @@ both come from the profile rather than from a dictionary.
 
 from __future__ import annotations
 
+import re
+import select
+
 from .handshake import Connection
 from . import headers as header_tools
-from .message import (DEFAULT_MAX_BODY, BodyTooLarge, Response, body_too_large,
-                      decompress)
+from .message import DEFAULT_MAX_BODY, Response, body_too_large, decompress
 from .profiles import firefox157
 
 MAX_HEADER_BYTES = 1 << 18
@@ -84,6 +86,31 @@ class _StreamReader:
         return data
 
 
+def _input_waiting(tls) -> bool:
+    """Whether bytes or an EOF wait on the connection's socket."""
+    sock = getattr(tls, "sock", None)
+    if sock is None:
+        return False   # not a socket (a scripted transport): nothing to see
+    pending = getattr(sock, "pending", None)   # TLS to a proxy: decrypted, unread
+    if pending is not None and pending():
+        return True
+    try:
+        readable, _, _ = select.select([sock], [], [], 0)
+    except (OSError, ValueError):
+        return True    # closed underneath us
+    return bool(readable)
+
+
+def _size(text: bytes, pattern: bytes, base: int, what: str) -> int:
+    """A framing number: digits only, as RFC 9112 writes them. int() also
+    takes a sign, spaces and underscores, and a negative length sliced the
+    buffer from its end."""
+    text = text.strip()
+    if not re.fullmatch(pattern, text):
+        raise Http1Error("malformed %s %r" % (what, text[:40]))
+    return int(text, base)
+
+
 def _parse_status_line(line: bytes) -> tuple[str, int]:
     parts = line.split(b" ", 2)
     if len(parts) < 2 or not parts[0].startswith(b"HTTP/"):
@@ -156,8 +183,27 @@ class Http1Connection:
         """Send one request and read its complete response."""
         request = self.build_request(method, path, authority, headers, body, context)
         self._sent_at = self.reader.received
-        self.tls.send(request)
-        return self._read_response(method)
+        try:
+            self.tls.send(request)
+            return self._read_response(method)
+        except BaseException:
+            # Whatever it was -- bad framing, a cap, a timeout, an interrupt
+            # -- the connection is somewhere inside a message now, and the
+            # next request written there would read the rest of this one.
+            self.broken = True
+            raise
+
+    def can_reuse(self) -> bool:
+        """Whether another request may be written here.
+
+        Not once marked broken, and not once anything has arrived since the
+        last response: on an idle HTTP/1.1 connection that is the server
+        closing it -- a close_notify, an EOF, a 408 -- and a request written
+        there would fail with no way to tell whether it was seen.
+        """
+        if self.broken or self.reader.buffer or self.reader.eof:
+            return False
+        return not _input_waiting(self.tls)
 
     def get(self, path: str, authority: str, *, headers=None) -> Response:
         return self.request("GET", path, authority, headers=headers)
@@ -171,7 +217,7 @@ class Http1Connection:
             return self._read_chunked()
         length = lookup.get("content-length")
         if length is not None:
-            size = int(length)
+            size = _size(length.encode("latin-1"), rb"[0-9]+", 10, "Content-Length")
             if self.max_body_size is not None and size > self.max_body_size:
                 raise body_too_large(self.max_body_size)   # before reading any
             return self.reader.read_exactly(size)
@@ -181,7 +227,7 @@ class Http1Connection:
         body = bytearray()
         while True:
             line = self.reader.read_until(b"\r\n", 1024)
-            size = int(line.split(b";", 1)[0] or b"0", 16)
+            size = _size(line.split(b";", 1)[0], rb"[0-9A-Fa-f]+", 16, "chunk size")
             if size == 0:
                 # Optional trailer fields, then an empty line.
                 while self.reader.read_until(b"\r\n", MAX_HEADER_BYTES):
@@ -205,11 +251,14 @@ class Http1Connection:
                 break
 
         headers = _parse_headers(header_block)
-        try:
-            body = self._read_body(headers, status, method)
-        except BodyTooLarge:
+        body = self._read_body(headers, status, method)
+        tokens = {token.strip().lower() for name, value in headers
+                  if name.lower() == "connection" for token in value.split(",")}
+        if ("close" in tokens or self.reader.eof
+                or (version == "HTTP/1.0" and "keep-alive" not in tokens)):
+            # The server is done with this connection; it cannot carry
+            # another request (RFC 9112 9.3, 9.6).
             self.broken = True
-            raise
         response = Response(status=status, headers=headers, http_version=version)
         response.body = decompress(body, response.header("content-encoding") or "",
                                    max_size=self.max_body_size)

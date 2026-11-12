@@ -12,7 +12,7 @@ from urllib.parse import urljoin, urlsplit
 
 from . import hosts
 from .client import (REDIRECT_STATUSES, TooManyRedirects, UnsupportedUrl,
-                     header_set, redirect_headers)
+                     header_set, origin_of, redirect_headers)
 from . import headers as header_tools
 from .cookies import CookieJar
 from .tickets import TicketStore
@@ -126,7 +126,11 @@ class Session:
         key = self._key(host, port)
         existing = self._pool.get(key)
         if existing is not None:
-            return existing, True
+            reusable = getattr(existing[1], "can_reuse", None)
+            if reusable is None or reusable():
+                return existing, True
+            # The server closed it, or it cannot carry another request.
+            self._discard(host, port)
         created = self._open(host, port, timeout)
         self._pool[key] = created
         return created, False
@@ -184,7 +188,7 @@ class Session:
         try:
             return http.request(method, path, authority, headers=headers,
                                 body=body, context=context)
-        except Exception:
+        except BaseException:
             # A failure that is not worth a retry can still leave the
             # connection mid-message -- a body refused for its size is
             # still on the wire -- and then the pool must not offer it again.
@@ -261,7 +265,7 @@ class Session:
         # The same slots client.request fills: a measured POST set carries
         # Origin, Referer and Content-Type in the places the capture put
         # them, instead of a Content-Type tacked on at the end.
-        origin = "https://" + (urlsplit(url).netloc or "")
+        origin = origin_of(url)
         context = {
             "origin": origin,
             "referer": origin + "/" if referer is None else referer,
