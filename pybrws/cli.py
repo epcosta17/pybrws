@@ -21,12 +21,12 @@ from .proxies import ProxyError
 from .records import TlsAlert, UnexpectedRecord
 from .tls12 import Tls12Error
 
-# What the library raises for a server, a response or an input it will not
-# take: reported in one line, as curl does, not as a traceback.
+# What the library raises for a server, a response, a profile or an input it
+# will not take: reported in one line, as curl does, not as a traceback.
 REPORTED = (UnsupportedUrl, TooManyRedirects, TlsAlert, ProxyError, CertificateError,
             Unmeasured, ContentEncodingError, Http1Error, Http2Error, Http3Error,
             HandshakeError, Tls12Error, UnexpectedRecord, TruncatedStream,
-            UnicodeError)
+            UnicodeError, profiles.ProfileError)
 
 
 # `pybrws <name> ...` runs one of the method's tools; each module has

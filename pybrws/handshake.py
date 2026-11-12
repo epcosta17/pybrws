@@ -12,7 +12,7 @@ import socket
 from . import certs, hosts
 from hmac import compare_digest
 
-from .emitter import build_client_hello, retry_hello, with_psk
+from .emitter import build_client_hello, key_exchange_for, retry_hello, with_psk
 from . import tls12
 from . import keyexchange
 from .keyexchange import KeyExchange
@@ -576,7 +576,9 @@ def connect(
     """
     # One ASCII form for SNI, DNS and certificate checks alike (hosts.py).
     host = hosts.ascii_host(host)
-    key_exchange = KeyExchange([group for group, _ in profile.KEY_SHARE_GROUPS])
+    # Both raise ProfileError, before any socket is opened, for a profile
+    # whose values or functions cannot make a hello.
+    key_exchange = key_exchange_for(profile)
     client_hello = build_client_hello(host, profile=profile, key_exchange=key_exchange)
 
     key = ticket_key(host, port, verify, trust_store)

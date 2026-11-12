@@ -7,7 +7,7 @@ from typing import Callable, Sequence
 
 from .keyexchange import KeyExchange
 from .model import Extension, GREASE_DRAW
-from .profiles import firefox157
+from .profiles import ProfileError, firefox157
 from .wire import u8, u16, u24, extension, vector
 
 HANDSHAKE_CLIENT_HELLO = 0x01
@@ -103,6 +103,34 @@ def build_extensions(profile, ctx: Context) -> bytes:
     return bytes(out)
 
 
+def _cannot_build(profile, error: Exception) -> ProfileError:
+    """A profile whose own values or functions cannot make a hello."""
+    name = getattr(profile, "NAME", None) or getattr(profile, "__name__", "?")
+    return ProfileError("cannot build a hello from profile %r: %s: %s"
+                        % (name, type(error).__name__, error))
+
+
+def key_exchange_for(profile):
+    """The key exchange for the profile's own KEY_SHARE_GROUPS, or None.
+
+    It is the one `handshake.connect` makes and the one `build_client_hello`
+    makes when it is given none, so the hello `pybrws verify` builds is the
+    hello a connection sends. Groups come from the profile passed in, not
+    from whichever module its key_share function was written in: a copy of
+    firefox157 that names other groups keeps firefox157's function.
+
+    Raises:
+        ProfileError: a group no key exchange here knows.
+    """
+    groups = getattr(profile, "KEY_SHARE_GROUPS", None)
+    if not groups:
+        return None
+    try:
+        return KeyExchange([group for group, _ in groups])
+    except Exception as error:
+        raise _cannot_build(profile, error) from error
+
+
 def build_client_hello(
     hostname: str,
     *,
@@ -116,21 +144,28 @@ def build_client_hello(
         hostname: the name to put in the `server_name` extension.
         profile: a module describing the client to imitate.
         rng: returns n random bytes; defaults to `os.urandom`.
-        key_exchange: supplies the key_share entries. When it is None, one is
-            made for the profile's own KEY_SHARE_GROUPS, as
-            `handshake.connect` makes it; pass one to keep the private keys.
+        key_exchange: supplies the key_share entries. When it is None, the
+            one `key_exchange_for(profile)` makes, as `handshake.connect`
+            does; pass one to keep the private keys.
 
     Returns:
         The record, ready to write to a socket.
+
+    Raises:
+        ProfileError: the profile's values or functions cannot make a hello,
+            such as a firefox157 key_share handed groups firefox157 does not
+            send. The message names the profile and the error.
     """
-    # The groups come from the profile passed in, not from whichever module
-    # the key_share function was written in: a copy of firefox157 that names
-    # other groups keeps firefox157's function, and the hello `pybrws verify`
-    # builds has to be the one a connection sends.
-    groups = getattr(profile, "KEY_SHARE_GROUPS", None)
-    if key_exchange is None and groups:
-        key_exchange = KeyExchange([group for group, _ in groups])
-    ctx = Context(hostname, rng or os.urandom, key_exchange)
+    if key_exchange is None:
+        key_exchange = key_exchange_for(profile)
+    try:
+        return _build(hostname, profile, rng or os.urandom, key_exchange)
+    except Exception as error:
+        raise _cannot_build(profile, error) from error
+
+
+def _build(hostname: str, profile, rng: Rng, key_exchange) -> bytes:
+    ctx = Context(hostname, rng, key_exchange)
 
     # A profile whose cipher list carries a per-connection GREASE value
     # supplies a callable; one with a fixed list supplies the list.

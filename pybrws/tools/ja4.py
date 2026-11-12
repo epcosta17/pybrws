@@ -190,8 +190,11 @@ def main(argv: list[str] | None = None) -> int:
         # as it connects, so build_client_hello has none to give.
         raise SystemExit("%s is a QUIC profile; ja4 computes the TCP hello "
                          "only" % args.profile)
-    hello = parse_client_hello(build_client_hello(args.hostname,
-                                                  profile=module))
+    try:
+        hello = parse_client_hello(build_client_hello(args.hostname,
+                                                      profile=module))
+    except profiles.ProfileError as error:
+        raise SystemExit(str(error))
     result = compute(hello, drop)
 
     print("%s%s" % (args.profile,

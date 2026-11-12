@@ -408,10 +408,33 @@ class VerifyBuildsWhatAConnectionSendsTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as caught:
             verify.main(["--local", "--profile", str(path),
                          "--capture", FIREFOX])
-        message = str(caught.exception)
-        self.assertIn("cannot build a hello from %s" % path, message)
-        self.assertIn("ValueError: key_share for 0x11ec", message)
-        self.assertNotIn("\n", message)
+        self.assertEqual(str(caught.exception),
+                         "cannot build a hello from profile 'x25519_first': "
+                         "ValueError: key_share for 0x11ec: expected 1216 "
+                         "bytes from 0x001d, got 32")
+
+    def test_the_library_raises_profile_error_before_any_socket(self):
+        profile = profiles.load(str(write_profile(self.dir, X25519_FIRST,
+                                                  "x25519_first.py")))
+        with self.assertRaises(profiles.ProfileError) as caught:
+            emitter.build_client_hello(HOSTNAME, profile=profile)
+        self.assertTrue(str(caught.exception).startswith(
+            "cannot build a hello from profile 'x25519_first': ValueError"))
+        no_socket = AssertionError("a socket was opened")
+        with mock.patch.object(handshake, "open_socket",
+                               side_effect=no_socket), \
+                self.assertRaises(profiles.ProfileError):
+            handshake.connect(HOSTNAME, 4443, profile=profile)
+
+    def test_ja4_reports_a_hello_that_cannot_be_built_in_one_line(self):
+        from pybrws.tools import ja4
+        path = write_profile(self.dir, X25519_FIRST, "x25519_first.py")
+        with self.assertRaises(SystemExit) as caught:
+            ja4.main(["--profile", str(path)])
+        self.assertEqual(str(caught.exception),
+                         "cannot build a hello from profile 'x25519_first': "
+                         "ValueError: key_share for 0x11ec: expected 1216 "
+                         "bytes from 0x001d, got 32")
 
     def test_the_builtin_profiles_are_built_as_a_connection_builds_them(self):
         for profile in (profiles.firefox157, profiles.chrome155):

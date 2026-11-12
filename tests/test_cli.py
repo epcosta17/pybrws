@@ -1,10 +1,13 @@
 """Tests for pybrws.cli."""
 
 import argparse
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
-from pybrws import cli
+from pybrws import cli, handshake
+from tests.profile_files import write_profile
 from pybrws.cli import build_parser, parse_header, render_head, resolve_profile
 from pybrws.handshake import TruncatedStream
 from pybrws.headers import merge
@@ -129,6 +132,43 @@ class TestErrors(unittest.TestCase):
         message = str(caught.exception.code)
         self.assertTrue(message.startswith("TruncatedStream: the peer closed"))
         self.assertNotIn("\n", message)
+
+
+class TestAProfileThatCannotBuildAHello(unittest.TestCase):
+    """A profile whose values or functions refuse to make a hello is a
+    finding about the profile: one line, and no socket opened."""
+
+    def fetch(self, text: str, name: str) -> str:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_profile(Path(tmp), text, name)
+            no_socket = AssertionError("a socket was opened")
+            with mock.patch.object(handshake, "open_socket",
+                                   side_effect=no_socket), \
+                    self.assertRaises(SystemExit) as caught:
+                cli.main(["-s", "--profile", str(path),
+                          "https://example.com/"])
+        message = str(caught.exception.code)
+        self.assertNotIn("\n", message)
+        return message
+
+    def test_groups_firefox157s_key_share_cannot_lay_out(self):
+        message = self.fetch("from pybrws.profiles.firefox157 import *\n"
+                             "NAME = 'x25519_first'\n"
+                             "KEY_SHARE_GROUPS = [(0x001D, 32), (0x11EC, 1216)]\n",
+                             "x25519_first.py")
+        self.assertEqual(message,
+                         "ProfileError: cannot build a hello from profile "
+                         "'x25519_first': ValueError: key_share for 0x11ec: "
+                         "expected 1216 bytes from 0x001d, got 32")
+
+    def test_a_group_no_key_exchange_knows(self):
+        message = self.fetch("from pybrws.profiles.firefox157 import *\n"
+                             "NAME = 'unknown_group'\n"
+                             "KEY_SHARE_GROUPS = [(0x11EC, 1216), (0x9999, 32)]\n",
+                             "unknown_group.py")
+        self.assertEqual(message,
+                         "ProfileError: cannot build a hello from profile "
+                         "'unknown_group': ValueError: unsupported group 0x9999")
 
 
 if __name__ == "__main__":

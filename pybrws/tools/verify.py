@@ -208,12 +208,11 @@ def local(profile_name: str, hostname: str | None,
     hostname = hostname or sni_of(captured)
     try:
         ours = parse_client_hello(build_client_hello(hostname, profile=profile))
-    except Exception as error:
+    except profiles.ProfileError as error:
         # A profile's own function can refuse what it is given, such as a
         # firefox157 key_share handed groups firefox157 does not send. That
         # is a finding about the profile, said in one line like the others.
-        raise SystemExit("cannot build a hello from %s: %s: %s"
-                         % (profile_name, type(error).__name__, error))
+        raise SystemExit(str(error))
 
     drawn = getattr(profile, "DRAWN", {})
     # Each field whose size differs from the capture's, as (ours, real). Its

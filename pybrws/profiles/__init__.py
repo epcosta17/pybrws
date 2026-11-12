@@ -51,7 +51,8 @@ _EXTENSION_HINT = "EXTENSIONS, or extension_order and payload_for"
 
 
 class ProfileError(ValueError):
-    """A profile could not be found, imported or does not meet the contract."""
+    """A profile could not be found, imported or does not meet the contract,
+    or its own values or functions cannot make a hello."""
 
 
 class WrongTransport(ProfileError):
