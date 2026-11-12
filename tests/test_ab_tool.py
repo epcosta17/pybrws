@@ -1,19 +1,10 @@
-"""tools/ab_test.py: what counts as served (M1 of the 2026-11-11 review)."""
+"""pybrws.tools.ab_test: what counts as served (M1 of the 2026-11-11 review)."""
 
 from __future__ import annotations
 
-import importlib.util
 import unittest
-from pathlib import Path
 
-TOOL = Path(__file__).resolve().parent.parent / "tools" / "ab_test.py"
-
-
-def load_tool():
-    spec = importlib.util.spec_from_file_location("ab_test", TOOL)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from pybrws.tools import ab_test
 
 
 class TestChallengeMarkers(unittest.TestCase):
@@ -24,7 +15,7 @@ class TestChallengeMarkers(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.tool = load_tool()
+        cls.tool = ab_test
 
     def test_large_page_mentioning_access_denied_is_served(self):
         body = (b"<html><head><title>Access Denied: a film review</title></head>"

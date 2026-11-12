@@ -497,11 +497,7 @@ class TestParsers(unittest.TestCase):
 
     @unittest.skipIf(QuicConnection is None, "aioquic is not installed")
     def test_datagram_iterators_skip_malformed(self):
-        import sys
-        from pathlib import Path
-
-        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
-        import read_quic
+        from pybrws.tools import read_quic
 
         qi.install()
         self.addCleanup(qi.uninstall)

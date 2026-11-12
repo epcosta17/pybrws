@@ -27,7 +27,7 @@ dev = ["httpx[http2]", "jupyterlab", "nbclient", "aioquic", "curl_cffi"]
 # portability notes
 # was written without being run.
 [tool.setuptools]
-packages = ["pybrws", "pybrws.profiles", "pybrws.data"]
+packages = ["pybrws", "pybrws.profiles", "pybrws.data", "pybrws.tools"]
 
 [tool.setuptools.package-data]
 "pybrws.data" = ["*.hex", "*.json"]
