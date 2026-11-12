@@ -115,6 +115,10 @@ def via_baseline_ff(target: str, timeout: float):
 def via_pybrws_h3(target: str, timeout: float):
     """Same client and same headers as the h2 arm, over QUIC instead.
 
+    It always sends firefox157_quic, Firefox 157's QUIC hello and headers, so
+    main() runs it only beside --profile firefox157: with any other profile
+    the two arms would differ in browser as well as transport.
+
     This is the arm that answers whether the transport changes the outcome.
     Pairing it against the httpx arm would not: that moves fingerprint and
     transport at once, and a difference could not be attributed to either.
@@ -381,16 +385,18 @@ def main(argv: list[str] | None = None) -> int:
                         help="the profile the pybrws arm sends, a built-in "
                              "name or a .py file; httpx+ff carries its "
                              "headers. pybrws-h3 always sends "
-                             "firefox157_quic, the only one measured over QUIC")
+                             "firefox157_quic, the only one measured over "
+                             "QUIC, so it runs only with firefox157")
     parser.add_argument("--rounds", type=int, default=4)
     parser.add_argument("--arms", nargs="+", default=DEFAULT_ARMS,
                         choices=sorted(ALL_CLIENTS),
                         help="which clients to run. httpx+ff is httpx "
                              "carrying the headers of the profile in use, "
-                             "Firefox 157's by default. Adding pybrws-h3 "
-                             "turns this into a transport comparison: "
-                             "pybrws-h3 against pybrws is the only pair whose "
-                             "single variable is the transport")
+                             "Firefox 157's by default. Adding pybrws-h3, "
+                             "which needs --profile firefox157, turns this "
+                             "into a transport comparison: pybrws-h3 against "
+                             "pybrws is the only pair whose single variable "
+                             "is the transport")
     parser.add_argument("--timeout", type=float, default=25.0)
     parser.add_argument("--pause", type=float, default=1.0,
                         help="seconds between requests, to stay polite")
@@ -425,6 +431,13 @@ def main(argv: list[str] | None = None) -> int:
     if "pybrws-h3" in CLIENTS and (args.proxy or args.use_env):
         raise SystemExit("the h3 arm has no proxy path, so --proxy would "
                          "compare a proxied arm against a direct one")
+    # By identity, so a copy of firefox157 under another NAME is refused too:
+    # only the built-in firefox157 makes the pair differ in transport alone.
+    if "pybrws-h3" in CLIENTS and PROFILE is not firefox157:
+        raise SystemExit("pybrws-h3 sends Firefox 157's QUIC hello, so with "
+                         "--profile %s the pybrws and pybrws-h3 arms would "
+                         "differ in browser as well as transport; drop "
+                         "pybrws-h3 or use --profile firefox157" % args.profile)
 
     PROXY = None
     if args.proxy:
