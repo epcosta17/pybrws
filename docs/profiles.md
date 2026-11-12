@@ -99,7 +99,13 @@ LEGACY_VERSION = firefox157.LEGACY_VERSION
 CIPHER_SUITES = firefox157.CIPHER_SUITES
 ```
 
-Checked against the Firefox 157 capture that ships in the package, saved as `my_firefox.hex`. The report repeats the command on its first line:
+Checked against the Firefox 157 capture that ships in the package, which this command saves as `my_firefox.hex`:
+
+```console
+python -c "from pybrws import data; open('my_firefox.hex', 'w').write(data.read_text('reference-firefox-157-windows-fresh.hex'))"
+```
+
+The report repeats the verify command on its first line:
 
 ```text
 $ pybrws verify --local --profile my_firefox.py --capture my_firefox.hex

@@ -8,6 +8,12 @@ own browser sends, then check the result:
     pybrws verify --local --profile my_firefox.py --capture my_firefox.hex
     pybrws --profile my_firefox.py https://example.com/
 
+my_firefox.hex is your browser's hello, as `pybrws capture hello` writes it.
+To check this file before changing it, this command saves the Firefox 157
+capture that ships with pybrws under that name:
+
+    python -c "from pybrws import data; open('my_firefox.hex', 'w').write(data.read_text('reference-firefox-157-windows-fresh.hex'))"
+
 pybrws loads this file on its own, outside any package, so its imports are
 absolute.
 

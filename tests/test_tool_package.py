@@ -9,6 +9,7 @@ stay as wrappers, so a checkout runs them the way it always has.
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import importlib
 import inspect
@@ -86,6 +87,20 @@ class TestToolPackage(unittest.TestCase):
                     tool(name).main(["--help"])
                 self.assertEqual(stopped.exception.code, 0)
                 self.assertIn("usage: pybrws " + command, shown.getvalue())
+
+    def test_no_docstring_names_the_fixtures_directory(self):
+        # --help prints a tool's docstring to an installed user, who has no
+        # fixtures/ directory.
+        documented = (ast.Module, ast.ClassDef, ast.FunctionDef,
+                      ast.AsyncFunctionDef)
+        for path in sorted((ROOT / "pybrws" / "tools").glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, documented):
+                    with self.subTest(module=path.name,
+                                      name=getattr(node, "name", None)):
+                        self.assertNotIn("fixtures/",
+                                         ast.get_docstring(node) or "")
 
     def test_isolate_needs_a_proxy_and_targets(self):
         isolate = tool("isolate")

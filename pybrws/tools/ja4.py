@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
 """Compute a profile's JA4 locally, without asking anyone.
 
-Until now every JA4 in this project came from a server: ours, or
-tls.peet.ws, or thumbprint.me. That means a change to a profile could only
-be checked by making a request, and a question like "what would our
-fingerprint be if this one extension came out" could not be answered at all
-without editing the profile and going back out to the network.
-
-The computation is small and the spec is public, so there is no reason for
-that. This prints JA4 and JA4_r for a profile, and `--drop` answers the
-counterfactual directly.
+This prints JA4 and JA4_r for the hello a profile builds, with no request
+made, so a change to a profile can be checked before anything is sent.
+`--drop` answers the counterfactual directly: what the fingerprint would be
+if one extension came out, without editing the profile.
 
 The method is JA4, specified by FoxIO at https://github.com/FoxIO-LLC/ja4.
 Only JA4 -- the TLS client fingerprint -- is computed here, and FoxIO

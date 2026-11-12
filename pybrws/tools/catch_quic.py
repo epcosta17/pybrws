@@ -6,12 +6,12 @@ in CRYPTO frames inside Initial packets, which are encrypted under keys
 derived from a salt published in RFC 9001. So the ClientHello is still there
 and still readable, and everything the TCP profile measures still applies.
 
-What does not carry over is the extension list. Firefox 157's QUIC hello,
-fixtures/reference-firefox-157-quic.hex, leaves out session_ticket, the TLS
-1.2 resumption mechanism, along with ec_point_formats and
-signed_certificate_timestamp. It keeps record_size_limit, and it adds
-quic_transport_parameters (57), which is a fingerprint in its own right --
-an ordered list of values a client picks for itself. Assuming the TCP profile
+What does not carry over is the extension list. Firefox 157's QUIC hello
+(reference-firefox-157-quic.hex, in the repository's fixtures) leaves out
+session_ticket, the TLS 1.2 resumption mechanism, along with ec_point_formats
+and signed_certificate_timestamp. It keeps record_size_limit, and it adds
+quic_transport_parameters (57), which is a fingerprint in its own right -- an
+ordered list of values a client picks for itself. Assuming the TCP profile
 applies would be inventing a measurement, so this tool exists to take one.
 
 The server is aioquic's, which already decrypts Initial packets; the raw

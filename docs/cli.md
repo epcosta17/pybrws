@@ -250,7 +250,7 @@ Without `--local`, verify fetches `https://tls.peet.ws/api/all` with firefox157 
 | `--local` | compare with a capture, offline |
 | `--profile NAME` | with `--local`, the profile to build: a built-in name or a `.py` file (`firefox157`) |
 | `--capture FILE` | with `--local`, a hex ClientHello from your browser, with or without its record header; needed for a `.py` profile |
-| `--hostname NAME` | the name to put in `server_name`, instead of the capture's; the report's `sni` line and first line then say so |
+| `--hostname NAME` | with `--local`, the name to put in `server_name`, instead of the capture's; the report's `sni` line and first line then say so |
 | `--json` | without `--local`, print the service's full report |
 
 ## probe

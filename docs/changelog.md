@@ -21,7 +21,7 @@ The first release on PyPI.
 ### Limits and refusals
 
 - A request whose header set the profile lacks raises `Unmeasured`: Chrome's image request over HTTP/1.1. HTTP/3 refuses every method but GET and HEAD, and offers no session ticket.
-- A profile whose own values or functions cannot make a hello raises `ProfileError` before any socket is opened. The command line, `verify` and `ja4` report it in one line that ends with the file and line where it failed.
+- A profile whose own values or functions cannot make a hello raises `ProfileError` before any socket is opened. The command line, `verify`, `ja4`, `probe`, `ab` and `isolate` report it in one line that ends with the file and line where it failed.
 - Sent without a capture behind it, as [Profiles](profiles.md#sent-without-a-capture) details:
     - chrome155's resumed hello;
     - the hello after a HelloRetryRequest;

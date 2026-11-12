@@ -209,7 +209,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="skip certificate verification, as curl's -k does")
     parser.add_argument("--profile", default=None, metavar="NAME",
                         help="firefox157 or chrome155 over TCP, "
-                             "firefox157_quic with --http3")
+                             "firefox157_quic with --http3; or a .py "
+                             "profile file")
     parser.add_argument("--http3", action="store_true",
                         help="fetch over HTTP/3 instead of TCP. A separate "
                              "profile and a separate code path, not a "

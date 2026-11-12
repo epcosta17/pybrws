@@ -4,7 +4,7 @@ aioquic is asyncio and the rest of this client is not, so this module offers
 both: `Http3Client` for anyone already in an event loop, and `get`/`request`,
 which run one of their own. The synchronous pair is what makes an HTTP/3
 fetch look like the HTTP/2 one from the caller's side, which is the point --
-a scraper should not have to be rewritten because a host offers h3.
+a caller should not have to be rewritten because a host offers h3.
 
 The request is the one captured from a browser over QUIC, not the HTTP/2
 set carried over. HTTP/3 differs from HTTP/2 in the first fields of every

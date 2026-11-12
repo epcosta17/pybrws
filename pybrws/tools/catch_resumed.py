@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Capture a browser's resumed ClientHello, the one carrying pre_shared_key.
 
-A Session resumes by default, so most requests after the first send a
-resumed ClientHello, and that is a hello of its own. In Firefox 157's,
-fixtures/reference-firefox-157-windows-resumed.hex, session_ticket is gone and
-pre_shared_key goes last. The count stays at 17 and JA4 at t13d1517h2, but the
-extension hash changes, from _3cbfd9057e0d to _e6dcd7ae0a9e, and the greased
-ECH extension grows by 288 bytes. A second identity has to be measured, not
-guessed.
+A Session resumes by default, so most requests after the first send a resumed
+ClientHello, and that is a hello of its own. In Firefox 157's
+(reference-firefox-157-windows-resumed.hex, in the repository's fixtures),
+session_ticket is gone and pre_shared_key goes last. The count stays at 17
+and JA4 at t13d1517h2, but the extension hash changes, from _3cbfd9057e0d to
+_e6dcd7ae0a9e, and the greased ECH extension grows by 288 bytes. A second
+identity has to be measured, not guessed.
 
 Capturing it needs two things at once that the other tools each do by half:
 the handshake has to *complete*, so the server can issue a NewSessionTicket

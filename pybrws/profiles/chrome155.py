@@ -175,8 +175,8 @@ DRAWN = {
 # CAPTURED_ACCEPT_LANGUAGE is what the capture holds, and the fixture tests
 # compare against it. It is the locale of the machine the capture was taken
 # on, which makes it a fingerprint of a person rather than of a browser:
-# shipping it would mark every request as coming from one particular Chrome
-# in Mexico.
+# shipping it would mark every request as coming from one particular
+# machine's Chrome.
 #
 # ACCEPT_LANGUAGE is what this profile actually sends. The common default,
 # which is the point -- a header meant to blend in should not be unusual.

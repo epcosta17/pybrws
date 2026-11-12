@@ -180,7 +180,9 @@ def system_store() -> Store:
 def default_store() -> Store:
     """The roots a connection is verified against by default: Mozilla's
     (the certifi bundle) plus whatever the platform adds, an enterprise CA
-    for example. It is the same mix Firefox uses.
+    for example. That is close to Firefox's mix: Firefox adds only the roots
+    an administrator or user installed on the system, not the platform's
+    whole root program.
 
     A certificate that is in both counts once. A source that cannot be read
     counts as having none.
