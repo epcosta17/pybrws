@@ -6,9 +6,11 @@ unmeasured, and that the measured parts are wired to the profile rather than
 retyped.
 """
 
+import asyncio
 import unittest
 
 from pathlib import Path
+from unittest import mock
 
 from pybrws import h3
 from pybrws.profiles import firefox157
@@ -172,6 +174,46 @@ class TestTheModuleStandsAlone(unittest.TestCase):
             sys.meta_path.remove(blocker)
             sys.modules.clear()
             sys.modules.update(saved)
+
+
+class TestTheSyncCallsInsideARunningLoop(unittest.TestCase):
+    """h3.get blocks until the answer, also where an event loop already runs.
+
+    Jupyter runs every cell inside a running loop, and asyncio.run refuses to
+    start a second loop in that thread. fetch is replaced here, so no packet
+    is sent: what is tested is how the synchronous call reaches it.
+    """
+
+    def setUp(self):
+        self.calls = []
+
+        async def fake_fetch(url, **kwargs):
+            self.calls.append((url, kwargs))
+            if kwargs.get("headers") == "fail":
+                raise ValueError("refused")
+            return "the response"
+
+        patcher = mock.patch.object(h3, "fetch", fake_fetch)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_get_with_no_loop_running(self):
+        self.assertEqual(h3.get("https://example.com/"), "the response")
+        self.assertEqual(self.calls, [("https://example.com/", {"method": "GET"})])
+
+    def test_get_inside_a_running_loop(self):
+        async def cell():
+            return h3.get("https://example.com/")
+
+        self.assertEqual(asyncio.run(cell()), "the response")
+        self.assertEqual(self.calls, [("https://example.com/", {"method": "GET"})])
+
+    def test_an_error_inside_a_running_loop_reaches_the_caller(self):
+        async def cell():
+            return h3.get("https://example.com/", headers="fail")
+
+        with self.assertRaisesRegex(ValueError, "refused"):
+            asyncio.run(cell())
 
 
 if __name__ == "__main__":
