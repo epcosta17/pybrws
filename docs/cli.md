@@ -241,7 +241,7 @@ ja4  t13d1517h2_8daaf6152771_3cbfd9057e0d
      same string as the capture
 ```
 
-A field marked `must` is drawn afresh for every connection; one marked `drawn` is listed in the profile's [`DRAWN`](profiles.md#drawn). A pass is the same JA4 as the capture and no difference outside those two kinds: the JA4 line reads "same string as the capture", and verify exits 0. Otherwise it ends with "Something differs that should not. Not a pass." and exits 1.
+A field marked `must` is drawn afresh for every connection: its bytes differ, but its size must be the capture's. One marked `drawn` is excused by the profile's [`DRAWN`](profiles.md#drawn), which can name only the order of the extensions and sizes. A GREASE value compares equal to any other GREASE value; everything else in the lists that carry one must be the capture's. A pass is the same JA4 as the capture and no difference outside those two kinds: the JA4 line reads "same string as the capture", and verify exits 0. Otherwise it ends with "Something differs that should not. Not a pass." and exits 1.
 
 Without `--local`, verify fetches `https://tls.peet.ws/api/all` with firefox157 and compares that service's reading with the reading of Firefox 157 that ships in the package. For an outside reading over TCP and QUIC, `pybrws probe` is the other choice.
 

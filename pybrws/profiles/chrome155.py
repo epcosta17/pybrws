@@ -23,8 +23,10 @@ Firefox is nearly everything:
   (0x44cd), a constant 186-byte list of five-byte identifiers at 0xca34 whose
   shape matches trust anchor ids, and two constant bytes at 0x12e0 whose
   purpose is unknown. Named here from their shape, not from a standard.
-- **A different HTTP/2 fingerprint in every field.** Not one value matches
-  Firefox's, down to which settings are sent at all.
+- **A different HTTP/2 fingerprint.** The first two settings, header table
+  size 65536 and push 0, are Firefox's. The window sizes, the first stream,
+  the priority and the pseudo-header order are not, and Chrome sends setting
+  6 where Firefox sends 5.
 - **Mixed header casing over HTTP/1.1.** The client hints are lower case and
   everything else is capitalised, which is a fingerprint and not a style.
 
@@ -347,8 +349,8 @@ def greased_ech(ctx) -> bytes:
 
 # -- HTTP/2 ------------------------------------------------------------------
 
-# Not one of these matches Firefox, down to which settings are sent: Chrome
-# sends 6 (max header list size) where Firefox sends 5 (max frame size).
+# Settings 1 and 2 hold Firefox's values; the window size does not, and
+# Chrome sends 6 (max header list size) where Firefox sends 5 (max frame size).
 H2_SETTINGS = ((1, 65536), (2, 0), (4, 6291456), (6, 262144))
 H2_CONNECTION_WINDOW_UPDATE = 15663105
 H2_FIRST_STREAM_ID = 1

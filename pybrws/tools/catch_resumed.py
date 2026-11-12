@@ -2,9 +2,12 @@
 """Capture a browser's resumed ClientHello, the one carrying pre_shared_key.
 
 A Session resumes by default, so most requests after the first send a
-ClientHello that no capture covered: adding pre_shared_key takes our own JA4
-from t13d1517h2 to t13d1518h2 and changes every other hash with it. That is a
-second identity, and until it is measured it is only a guess.
+resumed ClientHello, and that is a hello of its own. In Firefox 157's,
+fixtures/reference-firefox-157-windows-resumed.hex, pre_shared_key takes
+session_ticket's place. The count stays at 17 and JA4 at t13d1517h2, but the
+extension hash changes, from _3cbfd9057e0d to _e6dcd7ae0a9e, and the greased
+ECH extension grows by 288 bytes. A second identity has to be measured, not
+guessed.
 
 Capturing it needs two things at once that the other tools each do by half:
 the handshake has to *complete*, so the server can issue a NewSessionTicket

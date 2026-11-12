@@ -10,6 +10,10 @@ own browser sends, then check the result:
 
 pybrws loads this file on its own, outside any package, so its imports are
 absolute.
+
+A value taken from firefox157 is copied. A function taken from it reads
+firefox157's module, not this file: the comments on KEY_SHARE_GROUPS,
+EXTENSIONS and ech_growth_for_psk say what each one ties to firefox157.
 """
 
 from pybrws.profiles import firefox157
@@ -26,12 +30,25 @@ SESSION_ID_SIZE = firefox157.SESSION_ID_SIZE
 COMPRESSION_METHODS = firefox157.COMPRESSION_METHODS
 
 # The key shares, as (group, public key size) in the order they are sent.
+# A connection makes one key pair for each group here, and so does `pybrws
+# verify`. firefox157's key_share, in EXTENSIONS below, then lays the shares
+# out against firefox157's own list: Firefox's first groups in Firefox's
+# order (X25519MLKEM768, x25519, secp256r1) are sent as named here, any
+# other list raises ValueError, and a group after the third is left out.
+# For other groups, write a key_share function here and put it in
+# EXTENSIONS.
 KEY_SHARE_GROUPS = firefox157.KEY_SHARE_GROUPS
 
 # The extensions in wire order, as (type, payload). Bytes are sent as they
-# are; a function is called with the connection for each hello. A browser
-# that draws its order per connection is written as extension_order(ctx)
-# and payload_for(type, ctx) instead (see chrome155).
+# are; a function is called with the connection for each hello. This is
+# firefox157's list: 14 payloads are its bytes and three are its functions.
+# server_name builds the name from the host. key_share works as the comment
+# above says. greased_ech uses firefox157's ECH values (AEAD id 0x0001 or
+# 0x0003, a 32-byte key, a 240-byte payload), so an ECH_PAYLOAD_SIZE in this
+# file would change nothing. To change a payload, write the list out here,
+# with your own bytes or function in its place. A browser that draws its
+# order per connection is written as extension_order(ctx) and
+# payload_for(type, ctx) instead (see chrome155).
 EXTENSIONS = firefox157.EXTENSIONS
 
 # HTTP/2: the SETTINGS frame, the connection WINDOW_UPDATE, the first stream
@@ -60,6 +77,8 @@ H2_COOKIE_BEFORE_FALLBACK = firefox157.H2_COOKIE_BEFORE_FALLBACK
 
 # How much the greased ECH payload grows when a session ticket is offered.
 # Without it a resumed hello keeps the fresh hello's ECH payload size.
+# firefox157's adds one byte to the pre_shared_key extension's size, as
+# measured; write your own function to change that.
 ech_growth_for_psk = firefox157.ech_growth_for_psk
 
 # The header sets of other kinds of request. A request whose set is missing
@@ -74,5 +93,5 @@ H1_IMAGE_HEADERS = firefox157.H1_IMAGE_HEADERS
 H2_IMAGE_HEADERS = firefox157.H2_IMAGE_HEADERS
 
 # No DRAWN: firefox157 sends the same shape every time, so `pybrws verify`
-# compares this profile strictly. A profile whose browser draws a field per
-# connection names it in DRAWN (see chrome155).
+# compares this profile strictly. A profile whose browser draws its extension
+# order or a field's size per connection names it in DRAWN (see chrome155).

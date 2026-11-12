@@ -123,7 +123,21 @@ ja4  t13d1517h2_8daaf6152771_3cbfd9057e0d
      same string as the capture
 ```
 
-The fields marked `must` are drawn afresh for every connection, so a hello that copied them would be broken, not closer.
+The fields marked `must` are drawn afresh for every connection, so a hello that copied them would be broken, not closer. Their sizes are compared all the same: see [DRAWN](#drawn).
+
+### What a reused name ties to firefox157
+
+The example takes its values from firefox157 by name. A value is copied. A function is firefox157's own, and it reads firefox157's module, not your file:
+
+| Name in the example | Tied to firefox157 | To change it, write in your file |
+|---|---|---|
+| `EXTENSIONS` | every payload: 14 are firefox157's bytes, and three are functions, `server_name`, `key_share` and `greased_ech` | the list, with the bytes or the function you need |
+| `server_name`, in `EXTENSIONS` | nothing: it builds the payload from the host | |
+| `key_share`, in `EXTENSIONS` | lays the shares out against firefox157's own `KEY_SHARE_GROUPS`. A list that holds Firefox's first groups in Firefox's order (X25519MLKEM768, x25519, secp256r1) is sent as your `KEY_SHARE_GROUPS` names it. Any other list raises `ValueError`, and a group after the third is left out | a `key_share` function, put in `EXTENSIONS` |
+| `greased_ech`, in `EXTENSIONS` | firefox157's ECH values: AEAD id `0x0001` or `0x0003`, a 32-byte key, a 240-byte payload. An `ECH_PAYLOAD_SIZE` in your file changes nothing | a `greased_ech` function, put in `EXTENSIONS` |
+| `ech_growth_for_psk` | firefox157's growth: the pre_shared_key extension's size, plus one byte | the function |
+
+The connection makes its key pairs for your `KEY_SHARE_GROUPS`, and so does `pybrws verify`. A copy of chrome155 is tied the same way: its functions read chrome155's constants, so a list such as `REAL_SUPPORTED_GROUPS` changed in your file changes nothing until you write the function that reads it.
 
 ## The contract over TCP
 
@@ -165,7 +179,7 @@ A payload of `None` leaves the extension out: `server_name` for an IP address, f
 | `ctx.choice(values)` | one of `values` |
 | `ctx.grease(slot)` | a GREASE value, drawn once per connection for each slot name |
 | `ctx.once(key, factory)` | `factory()`, computed once per connection |
-| `ctx.key_exchange` | the key exchange behind `key_share`; a profile creates one when it is `None` |
+| `ctx.key_exchange` | the key exchange behind `key_share`, made for the profile's `KEY_SHARE_GROUPS` before the hello is built, as a connection makes it |
 
 Header values may hold placeholders that are filled for each request: `{authority}`, `{content_length}`, `{content_type}`, `{origin}`, `{referer}` and `{cookie}`. A placeholder filled with an empty value removes its header. `{cookie}` marks where a set was captured carrying a cookie: see [Where cookies go](#where-cookies-go).
 
@@ -177,7 +191,7 @@ Optional names, which the client reads when they are there:
 | `H2_COOKIE_BEFORE_FALLBACK` | the HTTP/2 header that `cookie` fields go before in a set that lacks `H2_COOKIE_BEFORE` | they go last |
 | `ech_growth_for_psk(size)` | how many bytes the greased ECH payload grows when a session ticket is offered | a resumed hello keeps the ECH payload's size |
 | `H1_POST_XHR_HEADERS`, `H2_POST_XHR_HEADERS`, `H1_POST_FORM_HEADERS`, `H2_POST_FORM_HEADERS`, `H1_POST_FORM_SCRIPT_HEADERS`, `H2_POST_FORM_SCRIPT_HEADERS`, `H1_IMAGE_HEADERS`, `H2_IMAGE_HEADERS` | the header sets of the other kinds of request | that kind of request raises `Unmeasured` |
-| `DRAWN` | the fields `pybrws verify` should expect to differ from a capture, and why | the profile is compared strictly |
+| `DRAWN` | what `pybrws verify` should expect to differ from a capture by design, the extension order or a size, and why | the profile is compared strictly |
 
 ### Where cookies go
 
@@ -203,20 +217,39 @@ In the built-in profiles, where each set puts them, and whether a capture backs 
 
 ### DRAWN
 
-`DRAWN` maps field names from the report of `pybrws verify --local` to the reason each one is drawn per connection. `chrome155` declares it:
+`DRAWN` names what a browser draws per connection beyond its random values, each with the reason that `pybrws verify --local` prints for it. `chrome155` declares it:
 
 ```python
 DRAWN = {
     "extensions": "order drawn per connection",
-    "supported_groups": "greased value at the head",
-    "supported_versions": "greased value at the head",
-    "signature_algorithms": "greased value at the head",
-    "cipher suites": "greased value at the head",
+    "encrypted_client_hello": "payload length drawn from 144, 208, 240",
     "length": "ECH payload length drawn from 144, 208, 240",
 }
 ```
 
-verify reports a field in `DRAWN` as `drawn (reason)` instead of `UNEXPECTED -- investigate`, and does not fail on it. The keys are the report's row names (`version`, `cipher suites`, `extensions`) and extension names (`supported_groups`, `signature_algorithms`, ...). A `length` entry gives the reason on the report's `ours` line when the hello's length differs from the capture's.
+verify compares every field of the hello it builds with the capture. These it always compares, and `DRAWN` cannot excuse them:
+
+- the record version, the legacy version and the compression methods;
+- the cipher suites, in order;
+- the set of extension types: none missing, none added;
+- every extension's payload, byte for byte, apart from the fields below;
+- the lists inside `supported_groups`, `signature_algorithms` and `supported_versions`, in order, and the groups and key sizes in `key_share`;
+- the payloads of the GREASE extensions;
+- the size of every field, and of the whole hello.
+
+A GREASE value is drawn per connection, so in every list that carries one it compares equal to any other GREASE value. Where it stands, and every other value in the list, must be the capture's.
+
+Four fields are drawn afresh for every connection and are reported as `must (reason)`: the random, the session id, the keys in `key_share`, and the greased ECH's contents. Their bytes must differ from the capture's; their sizes must not.
+
+`DRAWN` can excuse three things, and nothing else:
+
+| Key | Excuses | Reported as |
+|---|---|---|
+| `extensions` | the order of the extensions, not their set | `extensions .... differs   drawn (reason)` |
+| an extension's name, such as `encrypted_client_hello` | that extension's size | `drawn (reason)` on that extension's line |
+| `length` | the size of the whole hello, when the sizes `DRAWN` excuses account for every byte of the difference | `drawn (reason)` on the report's `ours` line |
+
+Anything else that differs is `UNEXPECTED` and fails. A size is `UNEXPECTED -- N bytes, M in the capture`, and a list names what differs, such as `UNEXPECTED -- other groups` or `UNEXPECTED -- the same suites in another order`. chrome155 names the order of its extensions and the size of its ECH payload, both drawn per connection, and so the whole hello's length.
 
 `verify` reads `DRAWN` from the profile it loaded, so a copy made with `from pybrws.profiles.chrome155 import *` inherits it. `firefox157` declares none, and neither does the example file: a profile without `DRAWN` is compared strictly.
 

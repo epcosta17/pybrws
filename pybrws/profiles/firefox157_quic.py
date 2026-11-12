@@ -17,7 +17,7 @@ connections in the same capture. What differs from the TCP profile:
 - Three cipher suites, the TLS 1.3 ones only, since QUIC forbids TLS 1.2.
 - An empty legacy session id. The TCP hello sends 32 bytes for middlebox
   compatibility, which QUIC has no need of.
-- Five supported groups, against the TCP profile's six.
+- The same five supported groups as over TCP, in the same order.
 - `quic_transport_parameters`, which has no TCP equivalent: fourteen values
   in an order of the client's own, not sorted the way a library's are.
 """
