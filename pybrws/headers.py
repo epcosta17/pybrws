@@ -112,6 +112,28 @@ def insert_all_before(headers: Headers, name: str, values,
     return out
 
 
+#: Marks where a header set was captured carrying a cookie.
+COOKIE_SLOT = "{cookie}"
+
+
+def place_cookies(headers: Headers, name: str, values, anchor: str | None):
+    """Put a request's cookie headers where its header set says they go.
+
+    A set with a `{cookie}` slot was captured carrying a cookie there, so the
+    values take the slot, under its name, and with no values the slot's
+    header is left out. A set without one takes them before `anchor`, where
+    the navigation captures put them, and with no values stays as it is.
+    """
+    headers = list(headers)
+    for index, (slot_name, value) in enumerate(headers):
+        if COOKIE_SLOT in value:
+            return (headers[:index] + [(slot_name, cookie) for cookie in values]
+                    + headers[index + 1:])
+    if not values:
+        return headers
+    return insert_all_before(headers, name, values, anchor)
+
+
 def get(headers: Headers, name: str) -> str | None:
     wanted = name.lower()
     for key, value in headers:

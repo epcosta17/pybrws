@@ -14,7 +14,7 @@ from .client import (REDIRECT_STATUSES, TooManyRedirects, UnsupportedUrl,
 from .message import DEFAULT_MAX_BODY, ContentEncodingError, Response
 from .certs import CertificateError
 from .h3 import Http3Error
-from .handshake import HandshakeError
+from .handshake import HandshakeError, TruncatedStream
 from .http1 import Http1Error
 from .http2 import Http2Error
 from .proxies import ProxyError
@@ -25,7 +25,8 @@ from .tls12 import Tls12Error
 # take: reported in one line, as curl does, not as a traceback.
 REPORTED = (UnsupportedUrl, TooManyRedirects, TlsAlert, ProxyError, CertificateError,
             Unmeasured, ContentEncodingError, Http1Error, Http2Error, Http3Error,
-            HandshakeError, Tls12Error, UnexpectedRecord, UnicodeError)
+            HandshakeError, Tls12Error, UnexpectedRecord, TruncatedStream,
+            UnicodeError)
 
 
 # `pybrws <name> ...` runs one of the method's tools; each module has

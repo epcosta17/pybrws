@@ -160,7 +160,10 @@ class Http1Connection:
                       body: bytes = b"", context=None) -> bytes:
         if headers is None:
             headers = self.profile.H1_HEADERS
-        fields = {"authority": authority, "content_length": str(len(body))}
+        # No cookie unless the context gives one: a {cookie} slot nobody
+        # filled is left out, never sent as written.
+        fields = {"authority": authority, "content_length": str(len(body)),
+                  "cookie": ""}
         if context:
             fields.update(context)
         headers = header_tools.fill(headers, **fields)

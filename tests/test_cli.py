@@ -2,8 +2,11 @@
 
 import argparse
 import unittest
+from unittest import mock
 
+from pybrws import cli
 from pybrws.cli import build_parser, parse_header, render_head, resolve_profile
+from pybrws.handshake import TruncatedStream
 from pybrws.headers import merge
 from pybrws.message import Response
 from pybrws.profiles import chrome155, firefox157
@@ -111,6 +114,21 @@ class TestParser(unittest.TestCase):
             ["-H", "A: 1", "-H", "B: 2", "https://a.test/"]
         )
         self.assertEqual(args.header, [("A", "1"), ("B", "2")])
+
+
+class TestErrors(unittest.TestCase):
+    def test_a_truncated_stream_is_one_line(self):
+        # A peer that closes without close_notify: an error the client
+        # reports, not a traceback.
+        cut = TruncatedStream("the peer closed the connection without "
+                              "close_notify; anything being read may be "
+                              "truncated")
+        with mock.patch.object(cli, "request", side_effect=cut):
+            with self.assertRaises(SystemExit) as caught:
+                cli.main(["-s", "https://example.com/"])
+        message = str(caught.exception.code)
+        self.assertTrue(message.startswith("TruncatedStream: the peer closed"))
+        self.assertNotIn("\n", message)
 
 
 if __name__ == "__main__":

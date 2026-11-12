@@ -558,8 +558,10 @@ def connect(
             signature. Turning this off makes the connection trivially
             interceptable, which a proxy tested during development was
             doing.
-        trust_store: anchors to trust instead of the system's.
-            tickets: a TicketStore. One is offered if it holds a ticket for
+        trust_store: the roots the chain must lead to, a
+            `cryptography.x509.verification.Store`. None means
+            `certs.default_store()`: Mozilla's roots plus the platform's.
+        tickets: a TicketStore. One is offered if it holds a ticket for
             this host, and any the server issues are kept, so a second
             connection resumes rather than starting over.
 

@@ -180,8 +180,9 @@ def request(url: str, *, method: str = "GET", profile=firefox157,
 
     Args:
         url: an https URL.
-        method: the HTTP method. Only the request line changes; a profile
-            carries no measured header set for anything but a navigation.
+        method: the HTTP method. GET and HEAD send the profile's navigation
+            headers, unless `kind` is "image"; any other method sends the
+            set `kind` names.
         profile: the client to imitate.
         timeout: socket timeout in seconds.
         headers: values merged into the profile's header list, keeping its
@@ -201,7 +202,9 @@ def request(url: str, *, method: str = "GET", profile=firefox157,
             target's own origin, since every captured POST carries one.
         verify: check the server's certificate. Off makes the connection
             interceptable without any sign of it.
-        trust_store: anchors to trust instead of the system's.
+        trust_store: the roots the chain must lead to, a
+            `cryptography.x509.verification.Store`. None means
+            `certs.default_store()`: Mozilla's roots plus the platform's.
         max_body_size: the most a body may be, received or decoded, before
             BodyTooLarge (128 MiB); None lifts the cap.
 

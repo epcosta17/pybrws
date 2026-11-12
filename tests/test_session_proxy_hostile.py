@@ -14,9 +14,11 @@ from unittest import mock
 from hpack import Encoder
 
 from pybrws import session as session_module
+from pybrws.handshake import HandshakeError
 from pybrws.http2 import (FLAG_END_HEADERS, FLAG_END_STREAM, GOAWAY, HEADERS,
-                          StreamRefused, frame)
+                          Http2Connection, StreamRefused, frame)
 from pybrws.profiles import firefox157
+from pybrws.records import UnexpectedRecord
 from pybrws.session import Session
 
 from tests import hostile
@@ -113,6 +115,42 @@ class TestRetryPolicy(unittest.TestCase):
 
 
 H1_503 = b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n"
+
+
+class TestHttp2AfterATlsError(unittest.TestCase):
+    """A TLS error under the HTTP/2 frames leaves the connection in a state
+    nothing can vouch for, as it does over HTTP/1.1: it is not reused."""
+
+    ERRORS = (HandshakeError("a handshake message spans the key change"),
+              UnexpectedRecord("plaintext after the keys changed"))
+
+    def test_the_session_drops_the_connection(self):
+        for error in self.ERRORS:
+            with self.subTest(error=type(error).__name__):
+                with Transports([h2_ok(), error], [h2_ok()], alpn="h2") as transports:
+                    with Session(proxy=False) as session:
+                        session.get("https://example.com/")
+                        with self.assertRaises(type(error)):
+                            session.get("https://example.com/again")
+                        self.assertEqual(session._pool, {})
+                        self.assertEqual(
+                            session.get("https://example.com/third").status, 200)
+                self.assertEqual([bool(tls.sent) for tls in transports.made],
+                                 [True, True])
+
+    def test_the_connection_says_it_cannot_carry_another_request(self):
+        connection = Http2Connection(hostile.ScriptedTls(
+            [HandshakeError("a handshake message spans the key change")]))
+        with self.assertRaises(HandshakeError):
+            connection.request("GET", "/", "example.com")
+        self.assertFalse(connection.can_reuse())
+
+    def test_a_header_refused_before_sending_leaves_it_usable(self):
+        # As over HTTP/1.1: nothing went out, so nothing is in doubt.
+        connection = Http2Connection(hostile.ScriptedTls([]))
+        with self.assertRaises(ValueError):
+            connection.request("GET", "/", "example.com", headers=[("x-a", "a\nb")])
+        self.assertTrue(connection.can_reuse())
 
 
 class TestFetcherRetry(unittest.TestCase):

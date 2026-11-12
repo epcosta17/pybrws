@@ -468,7 +468,7 @@ def configuration(server_name: str, *, profile=firefox157_quic,
     if not verify:
         settings["verify_mode"] = 0
     if cadata is not None:
-        settings["cadata"] = cadata   # PEM: anchors to trust besides the system's
+        settings["cadata"] = cadata   # PEM: aioquic trusts these instead of certifi's roots
     settings.update(overrides)
     config = QuicConfiguration(**settings)
     # The mark the patches look for: only connections made from this

@@ -253,10 +253,21 @@ class Http2Connection:
                 body: bytes = b"", context=None) -> Response:
         """Send one request and read its complete response."""
         self.response_started = False
-        stream_id = self.send_request(method, path, authority, headers=headers,
-                                      body=body, context=context)
-        self._current = stream_id
-        return self._read_response(stream_id)
+        unsent = self.next_stream_id
+        try:
+            stream_id = self.send_request(method, path, authority, headers=headers,
+                                          body=body, context=context)
+            self._current = stream_id
+            return self._read_response(stream_id)
+        except BaseException:
+            # Once the stream has gone out, whatever this was -- a TLS error
+            # under the frames, a reset, a cap, a timeout, an interrupt --
+            # leaves the connection in a state nothing vouches for, as over
+            # HTTP/1.1, so a pool holding it drops it. A header refused before
+            # anything was encoded or sent leaves it as it was.
+            if self.next_stream_id != unsent:
+                self.broken = True
+            raise
 
     def send_request(self, method: str, path: str, authority: str, *,
                      headers=None, body: bytes = b"", context=None) -> int:
@@ -277,7 +288,10 @@ class Http2Connection:
         }
         if headers is None:
             headers = self.profile.H2_NAVIGATION_HEADERS
-        fields = {"authority": authority, "content_length": str(len(body))}
+        # No cookie unless the context gives one: a {cookie} slot nobody
+        # filled is left out, never sent as written.
+        fields = {"authority": authority, "content_length": str(len(body)),
+                  "cookie": ""}
         if context:
             fields.update(context)
         headers = header_tools.fill(headers, **fields)

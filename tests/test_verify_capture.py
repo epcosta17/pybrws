@@ -60,6 +60,16 @@ class VerifyCaptureTests(unittest.TestCase):
         self.assertEqual(out.splitlines()[0],
                          "$ pybrws verify --local --profile firefox157")
 
+    def test_sni_line_says_where_the_name_came_from(self):
+        _, out = run(verify.main, ["--local"])
+        self.assertIn("sni      pybrws.127.0.0.1.nip.io   (taken from the capture)",
+                      out.splitlines())
+        _, out = run(verify.main, ["--local", "--hostname", "example.com"])
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "$ pybrws verify --local --profile firefox157"
+                                   " --hostname example.com")
+        self.assertIn("sni      example.com   (given with --hostname)", lines)
+
     def test_same_through_the_cli(self):
         code, out = run(cli.main, ["verify", "--local", "--profile",
                                    self.profile, "--capture", FIREFOX])

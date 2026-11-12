@@ -166,21 +166,19 @@ class Session:
         base = header_tools.merge(header_set(self.profile, method, kind, http2),
                                   override)
         cookies = self.cookies.matching(host, path.split("?", 1)[0])
-        if not cookies:
-            return base
-        # The cookie anchors were measured on navigations. No capture of a
-        # POST that carries cookies exists, so on a POST set their place is
-        # unmeasured: before the same anchor where the set has it, else last.
+        # A set captured carrying a cookie has a {cookie} slot, and the
+        # cookies take it. Otherwise they go before the anchor measured on
+        # navigations. No capture of a POST that carries cookies exists, so
+        # on a POST set their place is unmeasured: before the same anchor
+        # where the set has it, else last.
         if http2:
             # Measured: Firefox sends one `cookie` field per cookie over
             # HTTP/2, which HPACK makes cheaper than one joined header.
-            return header_tools.insert_all_before(
-                base, "cookie",
-                [c.name + "=" + c.value for c in cookies],
-                self.profile.H2_COOKIE_BEFORE,
-            )
-        joined = "; ".join(c.name + "=" + c.value for c in cookies)
-        return header_tools.insert_before(base, "Cookie", joined,
+            return header_tools.place_cookies(
+                base, "cookie", [c.name + "=" + c.value for c in cookies],
+                self.profile.H2_COOKIE_BEFORE)
+        joined = ["; ".join(c.name + "=" + c.value for c in cookies)] if cookies else []
+        return header_tools.place_cookies(base, "Cookie", joined,
                                           self.profile.H1_COOKIE_BEFORE)
 
     def _send(self, host: str, port: int, http, method: str, path: str,

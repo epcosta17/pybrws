@@ -114,13 +114,16 @@ def local(profile_name: str, hostname: str | None,
         raise SystemExit("no capture ships for %s; the shipped ones are for %s"
                          " (or pass --capture FILE)"
                          % (profile_name, " and ".join(sorted(CAPTURES))))
+    given = bool(hostname)
     hostname = hostname or sni_of(captured)
     ours = parse_client_hello(build_client_hello(hostname, profile=profile))
 
-    print("$ pybrws verify --local --profile %s%s\n"
-          % (profile_name, " --capture %s" % capture if capture else ""))
+    print("$ pybrws verify --local --profile %s%s%s\n"
+          % (profile_name, " --capture %s" % capture if capture else "",
+             " --hostname %s" % hostname if given else ""))
     print("capture  %s" % capture_name)
-    print("sni      %s   (taken from the capture)" % hostname)
+    print("sni      %s   (%s)" % (hostname, "given with --hostname" if given
+                                  else "taken from the capture"))
     drawn = getattr(profile, "DRAWN", {})
     same_length = len(ours.raw) == len(captured.raw)
     print("ours     %d bytes%s" % (len(ours.raw),
