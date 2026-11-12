@@ -94,7 +94,17 @@ pybrws verify --local --profile my_firefox.py --capture firefox.hex
 ```
 
 ```text
-cannot build a hello from my_firefox.py: ValueError: key_share for 0x11ec: expected 1216 bytes from 0x001d, got 32
+cannot build a hello from profile 'my_firefox': ValueError: key_share for 0x11ec: expected 1216 bytes from 0x001d, got 32
+```
+
+A connection stops at the same place, before any socket is opened, and says the same in one line:
+
+```console
+pybrws https://example.com/ --profile my_firefox.py
+```
+
+```text
+ProfileError: cannot build a hello from profile 'my_firefox': ValueError: key_share for 0x11ec: expected 1216 bytes from 0x001d, got 32
 ```
 
 For a list like that, write `key_share` in your file and put it in `EXTENSIONS`. In my_firefox.py, these lines take the place of the `KEY_SHARE_GROUPS` and `EXTENSIONS` lines:

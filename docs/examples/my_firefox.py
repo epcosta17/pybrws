@@ -34,7 +34,8 @@ COMPRESSION_METHODS = firefox157.COMPRESSION_METHODS
 # verify`. firefox157's key_share, in EXTENSIONS below, then lays the shares
 # out against firefox157's own list: Firefox's first groups in Firefox's
 # order (X25519MLKEM768, x25519, secp256r1) are sent as named here, any
-# other list raises ValueError, and a group after the third is left out.
+# other list stops the hello with ProfileError, and a group after the third
+# is left out.
 # For other groups, write a key_share function here and put it in
 # EXTENSIONS.
 KEY_SHARE_GROUPS = firefox157.KEY_SHARE_GROUPS

@@ -133,7 +133,7 @@ The example takes its values from firefox157 by name. A value is copied. A funct
 |---|---|---|
 | `EXTENSIONS` | every payload: 14 are firefox157's bytes, and three are functions, `server_name`, `key_share` and `greased_ech` | the list, with the bytes or the function you need |
 | `server_name`, in `EXTENSIONS` | nothing: it builds the payload from the host | |
-| `key_share`, in `EXTENSIONS` | lays the shares out against firefox157's own `KEY_SHARE_GROUPS`. A list that holds Firefox's first groups in Firefox's order (X25519MLKEM768, x25519, secp256r1) is sent as your `KEY_SHARE_GROUPS` names it. Any other list raises `ValueError`, and a group after the third is left out | a `key_share` function, put in `EXTENSIONS` |
+| `key_share`, in `EXTENSIONS` | lays the shares out against firefox157's own `KEY_SHARE_GROUPS`. A list that holds Firefox's first groups in Firefox's order (X25519MLKEM768, x25519, secp256r1) is sent as your `KEY_SHARE_GROUPS` names it. Any other list stops the hello with `ProfileError`, before any socket is opened, and a group after the third is left out | a `key_share` function, put in `EXTENSIONS` |
 | `greased_ech`, in `EXTENSIONS` | firefox157's ECH values: AEAD id `0x0001` or `0x0003`, a 32-byte key, a 240-byte payload. An `ECH_PAYLOAD_SIZE` in your file changes nothing | a `greased_ech` function, put in `EXTENSIONS` |
 | `ech_growth_for_psk` | firefox157's growth: the pre_shared_key extension's size, plus one byte | the function |
 
