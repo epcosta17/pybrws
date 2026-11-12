@@ -29,7 +29,7 @@ A command that needs a missing extra stops before it sends anything, with one li
 pybrws ab needs httpx: pip install 'pybrws[measure]'
 ```
 
-## Ten lines
+## Example
 
 ```python
 from pybrws.client import get

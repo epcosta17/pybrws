@@ -31,21 +31,31 @@ What each one draws afresh for every connection, besides the random values every
 
 ## What a profile refuses
 
-A profile holds what was measured. A request it has no capture for raises an error that names the missing capture, instead of sending a guess.
+A request whose header set the profile lacks raises `Unmeasured`, naming the capture that would supply it. HTTP/3 refuses every method but GET and HEAD.
 
 | Request | `firefox157` | `chrome155` | `firefox157_quic` |
 |---|---|---|---|
 | GET or HEAD | sent | sent | sent |
 | POST, `kind` `"xhr"`, `"form"` or `"form-script"` | sent | sent | `Unmeasured`: no HTTP/3 POST captured |
 | `kind="image"` over HTTP/2 | sent | sent | not offered |
-| `kind="image"` over HTTP/1.1 | sent | `Unmeasured`: listed in `chrome155.UNMEASURED` | not offered |
+| `kind="image"` over HTTP/1.1 | sent | `Unmeasured`: chrome155 has no `H1_IMAGE_HEADERS` | not offered |
 
 ```text
 Unmeasured: pybrws.profiles.chrome155 has no H1_IMAGE_HEADERS: that request kind was never captured for this browser. pybrws capture request and pybrws capture h2 take it.
 Unmeasured: no Firefox HTTP/3 POST has been captured, so there is no measured header set to send. pybrws capture quic takes one; until then send it over TCP.
 ```
 
-Resumption: over TCP a `Session` resumes TLS 1.3 with the session tickets servers issue. Over QUIC no session ticket is offered, because no resumed Firefox QUIC hello has been captured.
+Resumption: over TCP a `Session` resumes TLS 1.3 with the session tickets servers issue. Firefox 157's resumed hello was captured; Chrome 155's was not, as the next list says. Over QUIC no session ticket is offered, because no resumed Firefox QUIC hello has been captured.
+
+### Sent without a capture
+
+These go on the wire although no capture backs their exact shape:
+
+- **chrome155's resumed ClientHello.** A `Session` offers a session ticket with any TCP profile, and the resumed hello is built the way Firefox 157's was captured: `pre_shared_key` takes the place of `session_ticket`. No resumed Chrome hello is among the captures chrome155 was built from.
+- **The second ClientHello after a HelloRetryRequest**, with either profile. No capture shows a browser answering one. When the server sends a cookie, the `cookie` extension goes after every other extension but `pre_shared_key`, which RFC 8446 requires to be last.
+- **firefox157's HTTP/2 form POSTs and image requests.** Those sets are derived from the HTTP/1.1 captures by one rule: drop Host and Connection, lower-case the names, add `te: trailers`. The rule reproduces the captured HTTP/2 `fetch()` POST field for field.
+- **Cookies in a POST set.** Their place was captured on navigations and image requests; a POST set takes them before the same anchor, or last when it has none.
+- **Methods other than GET, HEAD and POST**, such as PUT or DELETE. They send the POST set that `kind` names.
 
 ## Writing your own
 
@@ -87,7 +97,7 @@ LEGACY_VERSION = firefox157.LEGACY_VERSION
 CIPHER_SUITES = firefox157.CIPHER_SUITES
 ```
 
-Checked against the capture firefox157 was read from, saved as `my_firefox.hex`. The report repeats the command on its first line:
+Checked against the Firefox 157 capture that ships in the package, saved as `my_firefox.hex`. The report repeats the command on its first line:
 
 ```text
 $ pybrws verify --local --profile my_firefox.py --capture my_firefox.hex
@@ -131,9 +141,9 @@ A TCP profile defines every name in `profiles.REQUIRED_TCP`, and its extensions 
 | `H2_FIRST_STREAM_ID` | the first request's stream id | `3` |
 | `H2_PSEUDO_ORDER` | the order of `:method`, `:path`, `:authority` and `:scheme` | `:method :path :authority :scheme` |
 | `H2_NAVIGATION_HEADERS` | a navigation's HTTP/2 headers as `(name, value)`, in order | 11 headers |
-| `H2_COOKIE_BEFORE` | the HTTP/2 header that `cookie` fields go before | `"upgrade-insecure-requests"` |
+| `H2_COOKIE_BEFORE` | the HTTP/2 header that `cookie` fields go before, in a set with no `{cookie}` slot | `"upgrade-insecure-requests"` |
 | `H1_HEADERS` | a navigation's HTTP/1.1 headers, in order and in their case | 12 headers |
-| `H1_COOKIE_BEFORE` | the HTTP/1.1 header that `Cookie` goes before; `None` puts it last | `"Upgrade-Insecure-Requests"` |
+| `H1_COOKIE_BEFORE` | the HTTP/1.1 header that `Cookie` goes before, in a set with no `{cookie}` slot; `None` puts it last | `"Upgrade-Insecure-Requests"` |
 
 The extensions:
 
@@ -155,7 +165,9 @@ A payload of `None` leaves the extension out: `server_name` for an IP address, f
 | `ctx.once(key, factory)` | `factory()`, computed once per connection |
 | `ctx.key_exchange` | the key exchange behind `key_share`; a profile creates one when it is `None` |
 
-Header values may hold placeholders that are filled for each request: `{authority}`, `{content_length}`, `{content_type}`, `{origin}` and `{referer}`. A placeholder filled with an empty value removes its header.
+Header values may hold placeholders that are filled for each request: `{authority}`, `{content_length}`, `{content_type}`, `{origin}`, `{referer}` and `{cookie}`. A placeholder filled with an empty value removes its header.
+
+`{cookie}` marks where a set was captured carrying a cookie: firefox157's HTTP/1.1 image set, and the HTTP/2 one derived from it. A `Session` puts its cookies there, joined in one `Cookie` header over HTTP/1.1 and one `cookie` field each over HTTP/2. With no cookie the header is left out.
 
 Optional names, which the client reads when they are there:
 

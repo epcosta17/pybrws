@@ -21,7 +21,7 @@ The trusted roots, by default, are Mozilla's and the platform's:
 
 Each of the first two raises `CertificateError` when it ends up with no root at all. Pass a store as `trust_store=` to `get`, `post`, `request`, `stream` or `Session`. A `Fetcher` takes no store: its sessions use the default.
 
-Mozilla's half needs nothing from the platform, so a Python whose platform store is empty or out of date still verifies a public site. The platform's half is read through Python's `ssl` module, which honours `SSL_CERT_FILE`: to trust a CA of your own in every request, put it in a PEM bundle and point `SSL_CERT_FILE` at that file. Mozilla's half stays.
+Mozilla's half needs nothing from the platform, so a Python whose platform store is empty or out of date still verifies a public site. The platform's half is read through Python's `ssl` module, which honours `SSL_CERT_FILE`: to trust a CA of your own in every request, put it in a PEM bundle and point `SSL_CERT_FILE` at that file. On Linux and macOS the file takes the place of the platform's bundle, so it should hold every root you still want from there; on Windows it is read besides the system store. Mozilla's half stays either way.
 
 `verify=False`, or `-k` on the command line, skips the chain check and, on TLS 1.3, the CertificateVerify check. Anyone on the path can then read and change the traffic without any sign of it.
 
@@ -83,7 +83,7 @@ HandshakeError: a handshake message spans the key change (RFC 8446 5.1: unexpect
 Http2Error: PROTOCOL_ERROR: SETTINGS_ENABLE_PUSH 2 (RFC 9113 6.5.2)
 ```
 
-What a client sends as it aborts is behaviour that no browser capture covers, and pybrws sends only what was measured. A `Session` never reuses a connection that saw a protocol error.
+No browser capture covers what a client sends as it aborts, so pybrws sends nothing then. A `Session` never reuses a connection that saw a protocol error, over HTTP/1.1 or HTTP/2.
 
 Over HTTP/3 the connection is aioquic's, and aioquic closes it with a QUIC CONNECTION_CLOSE frame.
 

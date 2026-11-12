@@ -20,7 +20,7 @@ response = request("https://example.com/", method="HEAD")
 | `data` | none | the body: bytes, a string, or a mapping to form-encode |
 | `json` | none | an object to send as JSON |
 | `kind` | `"xhr"` | which captured header set a POST sends: `"xhr"` for a `fetch()` call, `"form"` for a person submitting a form, `"form-script"` for a page submitting one; `"image"` sends an image request |
-| `referer` | the URL's origin, as `https://example.com/` | the page the request comes from; an empty string sends none |
+| `referer` | the URL's origin, as `https://example.com/` | the Referer of the sets that carry one, the POST and image sets; an empty string leaves it out. A navigation carries none: add one with `headers=` |
 | `follow_redirects` | `0` | how many redirects to follow; 0 returns the redirect itself, as curl does without `-L` |
 | `timeout` | `20.0` | the socket timeout, in seconds |
 | `proxy` | from the environment | see [Proxies and NO_PROXY](#proxies-and-no_proxy) |
@@ -28,7 +28,7 @@ response = request("https://example.com/", method="HEAD")
 | `trust_store` | Mozilla's and the platform's roots | see [Trust stores](#trust-stores) |
 | `max_body_size` | 128 MiB | see [max_body_size](#max_body_size) |
 
-A GET or HEAD sends the profile's navigation headers, unless `kind="image"`. Any other method sends the set `kind` names.
+A GET or HEAD sends the profile's navigation headers, unless `kind="image"`. Any other method sends the POST set `kind` names: see [Sent without a capture](profiles.md#sent-without-a-capture).
 
 The response:
 

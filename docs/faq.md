@@ -22,7 +22,7 @@ No. A page that needs script to show its content comes back as the HTML the serv
 
 ## Why does a POST over HTTP/3 raise `Unmeasured`?
 
-No Firefox HTTP/3 POST has been captured, so there is no measured header set to send. Send the POST over TCP. The same error comes from any request kind a profile has no capture for: see [What a profile refuses](profiles.md#what-a-profile-refuses).
+No Firefox HTTP/3 POST has been captured, so there is no measured header set to send. Send the POST over TCP. Over TCP the same error comes from a request whose header set the profile lacks; [What a profile refuses](profiles.md#what-a-profile-refuses) has the list, and what is sent without a capture behind it.
 
 ## Why does `pybrws verify --local` print "differs" lines and still pass?
 
@@ -30,7 +30,7 @@ The random, the session id, the key share and the greased ECH payload are drawn 
 
 ## I get `CertificateError: certificate chain rejected`. What now?
 
-The chain does not lead to one of Mozilla's roots or the platform's. If the server uses a CA of your own, pass it with `trust_store=`, or add it to a bundle named by `SSL_CERT_FILE`; see [Verification and trust](advanced.md#verification-and-trust). `verify=False` (`-k`) turns checking off, and with it any protection against interception.
+The certificate failed validation, whatever the cause: a chain that leads to no trusted root, a name that does not match the host, an expired certificate. The text after the prefix is the validator's reason. If the server uses a CA of your own, pass it with `trust_store=`, or add it to a bundle named by `SSL_CERT_FILE`; see [Verification and trust](advanced.md#verification-and-trust). `verify=False` (`-k`) turns checking off, and with it any protection against interception.
 
 ## Does it work through a proxy?
 

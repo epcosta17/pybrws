@@ -20,11 +20,12 @@ The first release on PyPI.
 
 ### Limits and refusals
 
-- A request kind a profile has no capture for raises `Unmeasured` instead of sending a guess: any HTTP/3 method but GET and HEAD, and Chrome's image request over HTTP/1.1. No session ticket is offered over QUIC.
-- A request goes again only when that is safe: any method if the server provably never processed it, otherwise GET, HEAD and OPTIONS before any answer arrived.
+- A request whose header set the profile lacks raises `Unmeasured`: Chrome's image request over HTTP/1.1. HTTP/3 refuses every method but GET and HEAD, and offers no session ticket. What is still sent without a capture behind it is listed under [Profiles](profiles.md#sent-without-a-capture).
+- A request goes again only when that is safe: any method if the server provably never processed it, otherwise GET, HEAD and OPTIONS before any answer arrived. A `Fetcher` whose `Retry` allows more than one attempt also asks again, for GET, HEAD and OPTIONS, after a 429, 500, 502, 503 or 504.
 - Bodies are decoded from gzip, deflate, br and zstd, and capped at 128 MiB as received and as decoded unless `max_body_size` says otherwise.
 - A compressed body cut short, or a TLS stream that ends without close_notify, raises instead of returning a short body.
-- On a protocol error over TCP the client raises and closes the connection, and sends nothing to the peer.
+- On a protocol error over TCP the client raises and closes the connection, and sends nothing to the peer. A `Session` does not reuse it, over HTTP/1.1 or HTTP/2.
+- A header set captured carrying a cookie marks the place with a `{cookie}` slot: a `Session`'s cookies go there, and with none the header is left out.
 
 ### Command line
 
