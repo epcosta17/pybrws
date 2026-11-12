@@ -1,6 +1,7 @@
 """Tests for pybrws.emitter against the reference capture."""
 
 import os
+import types
 import unittest
 from pathlib import Path
 
@@ -227,6 +228,35 @@ class TestTheTwoKindsOfProfile(unittest.TestCase):
         built = parse_client_hello(build_client_hello("a.test", profile=Greased))
         self.assertEqual(len(calls), 1)
         self.assertEqual(list(built.cipher_suites), [0x0A0A, 0x1301])
+
+
+class TestTheDefaultKeyExchange(unittest.TestCase):
+    """Without a key exchange passed in, the hello's key shares are made for
+    the profile's own KEY_SHARE_GROUPS, as `handshake.connect` makes them."""
+
+    def test_it_follows_the_profile_passed_in(self):
+        # firefox157's key_share lays out whatever the key exchange holds, so
+        # a copy that names two groups must get two shares, not firefox157's
+        # three.
+        copy = types.ModuleType("two_shares")
+        copy.__dict__.update({name: value
+                              for name, value in vars(firefox157).items()
+                              if not name.startswith("__")})
+        copy.KEY_SHARE_GROUPS = [(0x11EC, 1216), (0x001D, 32)]
+        hello = parse_client_hello(build_client_hello("a.test", profile=copy))
+        self.assertEqual(len(hello.extension(51).data), 2 + (4 + 1216) + (4 + 32))
+
+    def test_a_profile_without_key_shares_needs_none(self):
+        class Bare:
+            LEGACY_VERSION = firefox157.LEGACY_VERSION
+            RECORD_VERSION = firefox157.RECORD_VERSION
+            SESSION_ID_SIZE = firefox157.SESSION_ID_SIZE
+            COMPRESSION_METHODS = firefox157.COMPRESSION_METHODS
+            CIPHER_SUITES = (0x1301,)
+            EXTENSIONS = []
+
+        hello = parse_client_hello(build_client_hello("a.test", profile=Bare))
+        self.assertIsNone(hello.extension(51))
 
 
 if __name__ == "__main__":

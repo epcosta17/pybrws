@@ -54,7 +54,9 @@ CAPTURES = {
 # carries a real keypair whose private half the server's answer is useless
 # without, and a replayed random defeats the handshake's own replay
 # protection. So they are reported as differing on purpose, and it is the
-# only honest way to show a byte comparison of a live handshake.
+# only honest way to show a byte comparison of a live handshake. Their sizes
+# are still compared: a wrong-sized key share or ECH payload is a fault that
+# a byte comparison of fresh randomness would otherwise hide.
 MUST_DIFFER = {
     "random": "32 fresh random bytes",
     "session_id": "32 fresh random bytes",
@@ -66,7 +68,9 @@ MUST_DIFFER = {
 # A profile that models a browser which varies declares DRAWN: the fields
 # that differ from one capture by design, and why. Without it a profile is
 # compared strictly. Pretending otherwise would report the model working as
-# the model failing; see pybrws/profiles/chrome155.py.
+# the model failing; see pybrws/profiles/chrome155.py. A size that differs
+# needs DRAWN too: "length" for the whole hello, a field's own name for that
+# field.
 
 
 def sni_of(hello) -> str:
@@ -116,7 +120,14 @@ def local(profile_name: str, hostname: str | None,
                          % (profile_name, " and ".join(sorted(CAPTURES))))
     given = bool(hostname)
     hostname = hostname or sni_of(captured)
-    ours = parse_client_hello(build_client_hello(hostname, profile=profile))
+    try:
+        ours = parse_client_hello(build_client_hello(hostname, profile=profile))
+    except Exception as error:
+        # A profile's own function can refuse what it is given, such as a
+        # firefox157 key_share handed groups firefox157 does not send. That
+        # is a finding about the profile, said in one line like the others.
+        raise SystemExit("cannot build a hello from %s: %s: %s"
+                         % (profile_name, type(error).__name__, error))
 
     print("$ pybrws verify --local --profile %s%s%s\n"
           % (profile_name, " --capture %s" % capture if capture else "",
@@ -126,9 +137,13 @@ def local(profile_name: str, hostname: str | None,
                                   else "taken from the capture"))
     drawn = getattr(profile, "DRAWN", {})
     same_length = len(ours.raw) == len(captured.raw)
-    print("ours     %d bytes%s" % (len(ours.raw),
-          "" if same_length or "length" not in drawn
-          else "   drawn (%s)" % drawn["length"]))
+    if same_length:
+        length_note = ""
+    elif "length" in drawn:
+        length_note = "   drawn (%s)" % drawn["length"]
+    else:
+        length_note = "   UNEXPECTED -- investigate"
+    print("ours     %d bytes%s" % (len(ours.raw), length_note))
     print("real     %d bytes" % len(captured.raw))
     print()
 
@@ -138,6 +153,12 @@ def local(profile_name: str, hostname: str | None,
         ("session_id", ours.session_id == captured.session_id,
          "%d bytes each" % len(captured.session_id)),
     ]
+    # Each field whose size differs from the capture's, as (ours, real). Its
+    # bytes may differ by design; its size may not, unless DRAWN says why.
+    resized: dict[str, tuple[int, int]] = {}
+    if len(ours.session_id) != len(captured.session_id):
+        resized["session_id"] = (len(ours.session_id),
+                                 len(captured.session_id))
 
     def strip(values):
         return [v for v in values if v not in GREASE_VALUES]
@@ -160,6 +181,8 @@ def local(profile_name: str, hostname: str | None,
         a, b = ours.extension(ext_type), captured.extension(ext_type)
         if a is None or b is None or a.data != b.data:
             differing.append(ext_type)
+        if a is not None and b is not None and len(a.data) != len(b.data):
+            resized[extension_name(ext_type)] = (len(a.data), len(b.data))
     # Always reported, with the count, because "payloads match" next to a
     # list of differing payloads is a contradiction and the number is the
     # more useful fact anyway.
@@ -189,9 +212,12 @@ def local(profile_name: str, hostname: str | None,
     if changed:
         print()
     for name in dict.fromkeys(changed):
-        why = MUST_DIFFER.get(name)
-        if why:
-            note = "must (%s)" % why
+        sizes = resized.get(name)
+        if sizes:
+            note = ("drawn (%s)" % drawn[name] if name in drawn
+                    else "UNEXPECTED -- %d bytes, %d in the capture" % sizes)
+        elif name in MUST_DIFFER:
+            note = "must (%s)" % MUST_DIFFER[name]
         elif name in drawn:
             note = "drawn (%s)" % drawn[name]
         else:
@@ -211,6 +237,9 @@ def local(profile_name: str, hostname: str | None,
     surprises = [t for t in differing if extension_name(t) not in allowed]
     surprises += [name for name, ok, _ in rows
                   if not ok and name not in allowed]
+    surprises += [name for name in resized if name not in drawn]
+    if not same_length and "length" not in drawn:
+        surprises.append("length")
     bad = surprises or computed["ja4"] != reference["ja4"]
     if bad:
         print("\nSomething differs that should not. Not a pass.")

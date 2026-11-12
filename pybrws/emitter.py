@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from typing import Callable, Sequence
 
+from .keyexchange import KeyExchange
 from .model import Extension, GREASE_DRAW
 from .profiles import firefox157
 from .wire import u8, u16, u24, extension, vector
@@ -115,12 +116,20 @@ def build_client_hello(
         hostname: the name to put in the `server_name` extension.
         profile: a module describing the client to imitate.
         rng: returns n random bytes; defaults to `os.urandom`.
-        key_exchange: supplies the key_share entries. A profile creates its
-            own when this is None; pass one to keep the private keys.
+        key_exchange: supplies the key_share entries. When it is None, one is
+            made for the profile's own KEY_SHARE_GROUPS, as
+            `handshake.connect` makes it; pass one to keep the private keys.
 
     Returns:
         The record, ready to write to a socket.
     """
+    # The groups come from the profile passed in, not from whichever module
+    # the key_share function was written in: a copy of firefox157 that names
+    # other groups keeps firefox157's function, and the hello `pybrws verify`
+    # builds has to be the one a connection sends.
+    groups = getattr(profile, "KEY_SHARE_GROUPS", None)
+    if key_exchange is None and groups:
+        key_exchange = KeyExchange([group for group, _ in groups])
     ctx = Context(hostname, rng or os.urandom, key_exchange)
 
     # A profile whose cipher list carries a per-connection GREASE value

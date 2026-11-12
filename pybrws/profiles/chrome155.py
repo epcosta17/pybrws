@@ -62,6 +62,7 @@ DRAWN = {
     "supported_versions": "greased value at the head",
     "signature_algorithms": "greased value at the head",
     "cipher suites": "greased value at the head",
+    "encrypted_client_hello": "payload length drawn from 144, 208, 240",
     "length": "ECH payload length drawn from 144, 208, 240",
 }
 
