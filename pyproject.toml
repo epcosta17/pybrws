@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pybrws"
-version = "0.1.0"
+version = "0.1.1"
 description = "An HTTPS client that sends what Firefox 157 and Chrome 155 send over TLS and HTTP/2, and what Firefox 157 sends over HTTP/3"
 readme = "README.md"
 requires-python = ">=3.11"
