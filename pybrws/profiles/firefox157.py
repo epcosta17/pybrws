@@ -60,10 +60,8 @@ ECH_PAYLOAD_SIZE = 240
 # The residual is still not explained. What it is *not* is padding keyed to the
 # hello's size: the 66-character-name capture has a hello 43 bytes longer and
 # reports the same residual of 1. What remains untested is a different
-# pre_shared_key size, which needs a ticket of a different length -- see
-# notes/OVERVIEW.md for the two levers that did not work. So this is fitted
-# to a
-# constant, now with two observations behind it rather than one.
+# pre_shared_key size, which needs a ticket of a different length. So this is
+# fitted to a constant, now with two observations behind it rather than one.
 #   fixtures/reference-firefox-157-windows-fresh.hex
 #   fixtures/reference-firefox-157-windows-resumed.hex
 ECH_PSK_GROWTH_RESIDUAL = 1
@@ -81,7 +79,7 @@ def ech_growth_for_psk(psk_extension_size: int) -> int:
 
 def server_name(ctx) -> bytes | None:
     """None for an IP literal: RFC 6066 3 forbids one here and Firefox sends
-    no server_name at all (the bare-IP capture, NOTEBOOK phase 1)."""
+    no server_name at all (seen in a capture made to a bare IP address)."""
     if hosts.is_ip_literal(ctx.hostname):
         return None
     host = hosts.ascii_host(ctx.hostname).encode("ascii")

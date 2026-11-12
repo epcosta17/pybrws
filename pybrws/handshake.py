@@ -1,6 +1,8 @@
 """TLS 1.3 client handshake.
 
-Certificates are accepted without verification. See the note in README.
+By default the server's certificate chain is checked against the trust store
+and its CertificateVerify signature is checked (see certs.py); verify=False
+turns both checks off.
 """
 
 from __future__ import annotations
