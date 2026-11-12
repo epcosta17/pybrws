@@ -63,12 +63,8 @@ def as_url(target: str) -> str:
 
 
 PROXY = None  # set from --proxy; None means a direct connection
-PROFILE = firefox157  # the pybrws arm's, set from --profile
-
-
-# Firefox's measured HTTP/2 navigation headers, used by the httpx+ff arm so
-# that the one variable between it and the plain httpx arm is the header set.
-FIREFOX_HEADERS = list(firefox157.H2_NAVIGATION_HEADERS)
+# Set from --profile: the pybrws arm sends it, and httpx+ff its headers.
+PROFILE = firefox157
 
 
 def via_pybrws(target: str, timeout: float):
@@ -87,17 +83,21 @@ def via_baseline(target: str, timeout: float):
 
 
 def via_baseline_ff(target: str, timeout: float):
-    """httpx carrying Firefox's exact headers, over the OpenSSL TLS stack.
+    """httpx carrying the pybrws arm's exact headers, over OpenSSL's TLS.
+
+    The headers are those of the profile in use, Firefox 157's by default,
+    which is where the arm's name comes from.
 
     The plain httpx arm differs from pybrws in two things at once: the
     protocol fingerprint AND the headers (httpx sends its own User-Agent and
     a bare Accept). So a target that serves pybrws and refuses httpx is not
     evidence the *fingerprint* did it -- the headers could have. This arm
-    isolates that: same OpenSSL fingerprint as httpx, but Firefox's header
-    list. If it is served where plain httpx is refused, the headers were the
-    deciding factor and the fingerprint bought nothing on that host; if it is
-    refused like plain httpx while pybrws is served, the fingerprint is what
-    mattered. Without this arm the A/B credits the fingerprint for both.
+    isolates that: same OpenSSL fingerprint as httpx, but the pybrws arm's
+    header list. If it is served where plain httpx is refused, the headers
+    were the deciding factor and the fingerprint bought nothing on that host;
+    if it is refused like plain httpx while pybrws is served, the fingerprint
+    is what mattered. Without this arm the A/B credits the fingerprint for
+    both.
     """
     import httpx
 
@@ -106,7 +106,8 @@ def via_baseline_ff(target: str, timeout: float):
         url = as_url(target)
         request = client.build_request("GET", url)
         request.headers = httpx.Headers(
-            [("host", httpx.URL(url).netloc.decode())] + FIREFOX_HEADERS)
+            [("host", httpx.URL(url).netloc.decode())]
+            + list(PROFILE.H2_NAVIGATION_HEADERS))
         response = client.send(request, follow_redirects=True)
         return response.status_code, response.content
 
@@ -151,7 +152,12 @@ ALL_CLIENTS = {
 DEFAULT_ARMS = ["pybrws", "httpx", "httpx+ff"]
 CLIENTS = {name: ALL_CLIENTS[name] for name in DEFAULT_ARMS}
 
-PROFILES = {"pybrws-h3": "firefox157_quic"}
+# The profile each arm's requests carry, as the log's `profile` field records
+# it. pybrws sends the whole of PROFILE and httpx+ff its headers, so those
+# two log PROFILE.NAME. The arms below do not change with --profile:
+# pybrws-h3 always sends firefox157_quic, and plain httpx carries no profile
+# and is logged as firefox157, which is what a default run logs for it.
+PROFILES = {"pybrws-h3": "firefox157_quic", "httpx": firefox157.NAME}
 
 # Phrases that mark a body as a block or a JavaScript challenge rather than
 # the page, so a 200 that is really an interstitial is not scored as served.
@@ -372,16 +378,19 @@ def main(argv: list[str] | None = None) -> int:
                         help="a target that serves every client, run in every "
                              "round as the control")
     parser.add_argument("--profile", default="firefox157",
-                        help="the pybrws arm's profile, a built-in name or a "
-                             ".py file. pybrws-h3 always sends "
+                        help="the profile the pybrws arm sends, a built-in "
+                             "name or a .py file; httpx+ff carries its "
+                             "headers. pybrws-h3 always sends "
                              "firefox157_quic, the only one measured over QUIC")
     parser.add_argument("--rounds", type=int, default=4)
     parser.add_argument("--arms", nargs="+", default=DEFAULT_ARMS,
                         choices=sorted(ALL_CLIENTS),
-                        help="which clients to run. Adding pybrws-h3 turns "
-                             "this into a transport comparison: pybrws-h3 "
-                             "against pybrws is the only pair whose single "
-                             "variable is the transport")
+                        help="which clients to run. httpx+ff is httpx "
+                             "carrying the headers of the profile in use, "
+                             "Firefox 157's by default. Adding pybrws-h3 "
+                             "turns this into a transport comparison: "
+                             "pybrws-h3 against pybrws is the only pair whose "
+                             "single variable is the transport")
     parser.add_argument("--timeout", type=float, default=25.0)
     parser.add_argument("--pause", type=float, default=1.0,
                         help="seconds between requests, to stay polite")
