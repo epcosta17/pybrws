@@ -95,4 +95,5 @@ H2_IMAGE_HEADERS = firefox157.H2_IMAGE_HEADERS
 
 # No DRAWN: firefox157 sends the same shape every time, so `pybrws verify`
 # compares this profile strictly. A profile whose browser draws its extension
-# order or a field's size per connection names it in DRAWN (see chrome155).
+# order, or the length of a field drawn per connection, names it in DRAWN
+# (see chrome155).

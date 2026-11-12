@@ -21,6 +21,7 @@ The first release on PyPI.
 ### Limits and refusals
 
 - A request whose header set the profile lacks raises `Unmeasured`: Chrome's image request over HTTP/1.1. HTTP/3 refuses every method but GET and HEAD, and offers no session ticket.
+- A profile whose own values or functions cannot make a hello raises `ProfileError` before any socket is opened. The command line, `verify` and `ja4` report it in one line that ends with the file and line where it failed.
 - Sent without a capture behind it, as [Profiles](profiles.md#sent-without-a-capture) details:
     - chrome155's resumed hello;
     - the hello after a HelloRetryRequest;
@@ -39,5 +40,5 @@ The first release on PyPI.
 
 - `pybrws URL`: a fetch shaped like curl's, following redirects as a browser does.
 - The method's tools as subcommands: `capture hello`, `capture request`, `capture h2`, `capture quic`, `capture resumed`, `read-quic`, `ja4`, `verify`, `probe`, `ab`, `isolate` and `waf`.
-- `pybrws verify --local` compares a profile with a browser capture, offline. The captures for `firefox157` and `chrome155` ship in the package, and `--capture` takes one of your own.
+- `pybrws verify --local` compares a profile with a browser capture, offline, field by field and content first, with GREASE values compared as equal to one another. A profile's `DRAWN` can excuse only a drawn extension order and the lengths of fields drawn per connection. The captures for `firefox157` and `chrome155` ship in the package, and `--capture` takes one of your own, with or without its record header.
 - A command that needs a missing extra stops before sending anything, naming `pybrws[http3]` or `pybrws[measure]`.

@@ -94,17 +94,17 @@ pybrws verify --local --profile my_firefox.py --capture firefox.hex
 ```
 
 ```text
-cannot build a hello from profile 'my_firefox': ValueError: key_share for 0x11ec: expected 1216 bytes from 0x001d, got 32
+cannot build a hello from profile 'my_firefox': ValueError: key_share for 0x11ec: expected 1216 bytes from 0x001d, got 32 (firefox157.py:97)
 ```
 
-A connection stops at the same place, before any socket is opened, and says the same in one line:
+The line ends with the file and line where the error was raised: here inside firefox157's own `key_share`, and in your file when a function of yours raises it. A connection stops at the same place, before any socket is opened, and says the same in one line:
 
 ```console
 pybrws https://example.com/ --profile my_firefox.py
 ```
 
 ```text
-ProfileError: cannot build a hello from profile 'my_firefox': ValueError: key_share for 0x11ec: expected 1216 bytes from 0x001d, got 32
+ProfileError: cannot build a hello from profile 'my_firefox': ValueError: key_share for 0x11ec: expected 1216 bytes from 0x001d, got 32 (firefox157.py:97)
 ```
 
 For a list like that, write `key_share` in your file and put it in `EXTENSIONS`. In my_firefox.py, these lines take the place of the `KEY_SHARE_GROUPS` and `EXTENSIONS` lines:
@@ -179,7 +179,7 @@ def extension_order(ctx) -> list[int]:
 - **GREASE values belong to the connection.** `ctx.grease(slot)` draws a value once per connection for each slot name. `supported_groups` and `key_share` ask for the same slot, `"groups"`, which is how they carry the same value.
 - **The ECH payload size is drawn too:** 144, 208 or 240 bytes, with equal chance. chrome155 fills the ECH extension's 32-byte key field with a real x25519 public key, from a key pair drawn per connection. firefox157 fills it with random bytes.
 
-GREASE values need no declaration: `pybrws verify` compares any GREASE value as equal to any other, in every list that carries one. What else a browser draws per connection, the profile names in [`DRAWN`](../profiles.md#drawn), so that step 4 reports it as drawn, not as a failure. `DRAWN` can excuse an order of extensions or a size, nothing else. chrome155 names its extension order, its ECH payload's size, and with it the whole hello's length. For a Chrome of your own, start from chrome155. `from pybrws.profiles.chrome155 import *` copies every name, `DRAWN` included, and step 4 shows such a copy pass.
+GREASE values need no declaration: `pybrws verify` compares any GREASE value as equal to any other, in every list that carries one. What else a browser draws per connection, the profile names in [`DRAWN`](../profiles.md#drawn), so that step 4 reports it as drawn, not as a failure. `DRAWN` holds two kinds of key: `"extensions"` with a note, when the order is drawn, and a field drawn per connection with the lengths it is drawn from. chrome155's is `{"extensions": "order drawn per connection", "encrypted_client_hello": (144, 208, 240)}`. Anything else in it stops verify, and content is compared first, whatever `DRAWN` says. For a Chrome of your own, start from chrome155. `from pybrws.profiles.chrome155 import *` copies every name, `DRAWN` included, and step 4 shows such a copy pass.
 
 ## HTTP/2
 

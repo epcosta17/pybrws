@@ -1,7 +1,7 @@
 # 4. Proving it
 
 !!! abstract "TL;DR"
-    `pybrws verify --local --profile my_firefox.py --capture firefox.hex` builds the profile's hello for the capture's host and compares the two field by field, with no network. A pass ends with "same string as the capture" and exits 0. The fields drawn afresh for every connection are listed, each with the reason it must differ, and their sizes must still match. A GREASE value compares equal to any other, and nothing else is excused unless the profile's `DRAWN` names it. A JA4 alone misses a wrong order or a wrong size; verify catches both. Then `pybrws probe` asks an outside service what arrived over a real network.
+    `pybrws verify --local --profile my_firefox.py --capture firefox.hex` builds the profile's hello for the capture's host and compares the two field by field, with no network. A pass ends with "same string as the capture" and exits 0. The fields drawn afresh for every connection are listed, each with the reason it must differ, and their lengths must still match. Content is compared first. A GREASE value compares equal to any other, and the profile's `DRAWN` can excuse only a drawn extension order and drawn lengths. A JA4 alone misses a wrong order or a wrong size; verify catches both. Then `pybrws probe` asks an outside service what arrived over a real network.
 
 ## Byte for byte, offline
 
@@ -37,7 +37,7 @@ Line by line:
 
 - **The first line** repeats the command, so a report pasted somewhere says what produced it.
 - **`sni`**: verify builds the hello for the name in the capture's `server_name`. The name's length moves every length field that contains it, so a hello built for another host could not be compared byte for byte. `--hostname` sets another name, and the report then says so.
-- **`ours` and `real`**: the sizes of the two hellos. They must be equal, unless the profile's `DRAWN` names `length` and the sizes it excuses account for the difference.
+- **`ours` and `real`**: the sizes of the two hellos. They must be equal, unless the whole difference is lengths the profile's `DRAWN` excuses.
 - **`version`, `cipher suites`, `extensions`**: compared in order. `version` covers the record's version and the hello's. In a list that carries GREASE, each GREASE value compares equal to any other.
 - **`payloads`**: how many extension payloads are the same, byte for byte.
 - **Every field that differs**, with the reason. `must` marks a field drawn afresh for every connection: the random, the session id, the keys and the greased ECH. A hello that copied those from the capture would be broken, not closer. Their sizes are still compared.
@@ -45,7 +45,7 @@ Line by line:
 
 ## A browser that draws
 
-Chrome's hellos differ from each other, so a Chrome profile cannot match any one capture the way Firefox's does. Its GREASE values need nothing: verify compares any GREASE value as equal to any other. What else Chrome draws per connection, the order of its extensions and the size of its ECH payload, is named in the profile's `DRAWN`. A copy of chrome155 made with one import inherits it:
+Chrome's hellos differ from each other, so a Chrome profile cannot match any one capture the way Firefox's does. Its GREASE values need nothing: verify compares any GREASE value as equal to any other. What else Chrome draws per connection, the order of its extensions and the length of its ECH payload, is named in the profile's `DRAWN`. A copy of chrome155 made with one import inherits it:
 
 ```python
 from pybrws.profiles.chrome155 import *
@@ -64,7 +64,7 @@ $ pybrws verify --local --profile my_chrome.py --capture chrome-2.hex
 
 capture  chrome-2.hex
 sni      pybrws.127.0.0.1.nip.io   (taken from the capture)
-ours     1937 bytes   drawn (ECH payload length drawn from 144, 208, 240)
+ours     2033 bytes   drawn (encrypted_client_hello)
 real     2001 bytes
 
 version ....... match
@@ -85,8 +85,8 @@ Line by line, what changed from Firefox's report:
 
 - **The cipher suites match with their GREASE value**: one at the head, in both hellos.
 - **16 of the 18 payloads match.** Thirteen match byte for byte, as step 2 found between the captures themselves. The other three are `supported_groups`, `signature_algorithms` and `supported_versions`, the same lists once each GREASE value is normalised.
-- **`drawn` marks what the profile's `DRAWN` names**, with the reason it gives. The extensions are the same set in another order, and `DRAWN` excuses only the order: a missing or an extra extension would be `UNEXPECTED`.
-- **Two sizes are drawn too.** In this run the profile drew a 144-byte ECH payload where the capture has 208, so the hellos are 1937 and 2001 bytes. `DRAWN` names the ECH extension's size, and that one difference accounts for the whole hello's. In a run that draws the capture's size, both hellos are 2001 bytes and the ECH line reads `must (greased payload)`.
+- **`drawn` marks what the profile's `DRAWN` names**, with the reason it gives. The extensions are the same set in another order, with the GREASE extensions where the capture has them, and `DRAWN` excuses only the order: a missing or an extra extension, or a GREASE extension moved, would be `UNEXPECTED`.
+- **The ECH payload's length is drawn.** In this run the profile drew a 240-byte payload where the capture has 208. chrome155's `DRAWN` gives the lengths that payload is drawn from, `(144, 208, 240)`, and both are in it, so the ECH line reads `drawn`. The two hellos differ by those 32 bytes alone, 2033 against 2001, so the `ours` line is drawn too, and names the field. In a run that draws the capture's length, both hellos are 2001 bytes and the ECH line reads `must (greased payload)`.
 
 ## What a failure looks like
 
@@ -133,7 +133,7 @@ The JA4 still matches, because JA4 sorts the extensions before hashing them. ver
 
 ## A wrong size
 
-The bytes of a `must` field differ on every connection, whatever the profile does. Its size does not, so verify compares the sizes. Here is a copy of firefox157 whose greased ECH payload is 208 bytes where Firefox's is 240:
+The bytes of a `must` field differ on every connection, whatever the profile does. Its length does not, nor does the greased ECH's header, so verify compares those. Here is a copy of firefox157 whose greased ECH payload is 208 bytes where Firefox's is 240:
 
 ```python
 from pybrws.profiles import firefox157
@@ -172,7 +172,7 @@ payloads ...... 15 of 17   byte for byte
 random ........ differs   must (32 fresh random bytes)
 session_id .... differs   must (32 fresh random bytes)
 key_share ..... differs   must (a real keypair)
-encrypted_client_hello  differs   UNEXPECTED -- 250 bytes, 282 in the capture
+encrypted_client_hello  differs   UNEXPECTED -- ECH header: payload length 208, 240 in the capture
 
 ja4  t13d1517h2_8daaf6152771_3cbfd9057e0d
      same string as the capture
@@ -180,7 +180,7 @@ ja4  t13d1517h2_8daaf6152771_3cbfd9057e0d
 Something differs that should not. Not a pass.
 ```
 
-The JA4 still matches: it never reads the ECH extension. The sizes give it away, the hello's on the `ours` line and the field's on its own line: 250 bytes where the capture has 282, the 32 bytes missing from the payload. verify exits 1. A profile whose browser draws a size names it in `DRAWN`, as chrome155 does for its ECH payload, and verify then reports it as drawn.
+The JA4 still matches: JA4 counts the ECH extension and hashes its type, but never reads its payload. verify reads the ECH's header, the outer type, the KDF, the enc length and the payload length, and the payload length is 208 where the capture's is 240. firefox157 declares no `DRAWN`, so that length cannot be drawn, and the hello's 32 missing bytes are unexplained on the `ours` line too. verify exits 1. A profile whose browser draws the payload's length gives the lengths in `DRAWN`, as chrome155 does, and verify then accepts any two of them.
 
 ## Checking the checker
 
@@ -220,7 +220,7 @@ pybrws probe --profile my_firefox.py
 ```
 
 !!! note "Screenshot pending: probe-terminal"
-    The terminal after `pybrws probe --profile my_firefox.py`: the service's URL, the two arms and their profiles, the two status lines, and the first rows of the table, the JA4 rows, over TCP and over QUIC.
+    The terminal after `pybrws probe --profile my_firefox.py`: the service's URL, the two arms and their profiles, the two status lines, and the table's `ja4` row, over TCP and over QUIC.
 
 How I read it:
 

@@ -3,8 +3,8 @@
 
 A Session resumes by default, so most requests after the first send a
 resumed ClientHello, and that is a hello of its own. In Firefox 157's,
-fixtures/reference-firefox-157-windows-resumed.hex, pre_shared_key takes
-session_ticket's place. The count stays at 17 and JA4 at t13d1517h2, but the
+fixtures/reference-firefox-157-windows-resumed.hex, session_ticket is gone and
+pre_shared_key goes last. The count stays at 17 and JA4 at t13d1517h2, but the
 extension hash changes, from _3cbfd9057e0d to _e6dcd7ae0a9e, and the greased
 ECH extension grows by 288 bytes. A second identity has to be measured, not
 guessed.

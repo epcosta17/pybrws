@@ -26,7 +26,7 @@ No Firefox HTTP/3 POST has been captured, so there is no measured header set to 
 
 ## Why does `pybrws verify --local` print "differs" lines and still pass?
 
-The random, the session id, the key share and the greased ECH payload are drawn afresh for every connection, so their bytes must differ from any capture; their sizes must not. A browser that also draws its extension order or a size, as Chrome does, says so in the profile's [`DRAWN`](profiles.md#drawn). GREASE values compare equal to one another. verify passes when the JA4 matches the capture's and nothing differs that these rules do not explain. See [verify](cli.md#verify).
+The random, the session id, the key share and the greased ECH payload are drawn afresh for every connection, so their bytes must differ from any capture; their sizes must not. A browser that also draws its extension order, or the length of a field drawn per connection, as Chrome does for its ECH payload, says so in the profile's [`DRAWN`](profiles.md#drawn). GREASE values compare equal to one another. Everything else is compared, content first, and verify passes when the JA4 matches the capture's and nothing differs that these rules do not explain. See [verify](cli.md#verify).
 
 ## I get `CertificateError: certificate chain rejected`. What now?
 

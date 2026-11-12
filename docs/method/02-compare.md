@@ -132,7 +132,7 @@ JA4 is the fingerprint most services report for a hello. It has three parts:
 - the second is a hash of the cipher suites, sorted;
 - the third is a hash of the extensions, sorted, without `server_name` and ALPN, then the signature algorithms in the order sent.
 
-The sorting is the point. `ja4_o` hashes the same lists in the order sent. On the six Chrome captures:
+The sorting is the point. `ja4_o` hashes the cipher suites in the order sent, and every extension type in the order sent, `server_name` and ALPN included, GREASE left out. On the six Chrome captures:
 
 ```python
 from pybrws.hexio import load_hex
@@ -182,7 +182,7 @@ What JA4 cannot see matters as much. It reads three payloads: the signature algo
 
 The comparison sorts every field into one of two kinds, and [step 3](03-profile.md) writes each kind differently.
 
-- **The same in every capture:** a value, copied from the capture. Firefox's extension order, every payload but three, the cipher suites, the key share groups and their sizes, the ECH payload size.
+- **The same in every capture:** a value, copied from the capture. Firefox's extension order, the cipher suites, every payload but `key_share` and `encrypted_client_hello`, the key share groups and their sizes, the ECH payload size. `server_name` was the same in every capture too, but it carries the host the client connects to, so the profile builds it from that host.
 - **Drawn per connection:** a function of the connection. The random and session id, the keys, the greased ECH bytes, Firefox's ECH AEAD id, and for Chrome the order, every GREASE value and the ECH payload size.
 
 Over QUIC, Firefox draws its order too. `firefox157_quic` draws 13 extensions in a new order every time, then sends `quic_transport_parameters` and `encrypted_client_hello` last. `pybrws read-quic capture.pcapng --all` compares every hello in a packet capture in the same way.

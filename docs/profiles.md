@@ -191,7 +191,7 @@ Optional names, which the client reads when they are there:
 | `H2_COOKIE_BEFORE_FALLBACK` | the HTTP/2 header that `cookie` fields go before in a set that lacks `H2_COOKIE_BEFORE` | they go last |
 | `ech_growth_for_psk(size)` | how many bytes the greased ECH payload grows when a session ticket is offered | a resumed hello keeps the ECH payload's size |
 | `H1_POST_XHR_HEADERS`, `H2_POST_XHR_HEADERS`, `H1_POST_FORM_HEADERS`, `H2_POST_FORM_HEADERS`, `H1_POST_FORM_SCRIPT_HEADERS`, `H2_POST_FORM_SCRIPT_HEADERS`, `H1_IMAGE_HEADERS`, `H2_IMAGE_HEADERS` | the header sets of the other kinds of request | that kind of request raises `Unmeasured` |
-| `DRAWN` | what `pybrws verify` should expect to differ from a capture by design, the extension order or a size, and why | the profile is compared strictly |
+| `DRAWN` | what `pybrws verify` should expect to differ from a capture by design: the extension order, and the lengths of fields drawn per connection; see [DRAWN](#drawn) | the profile is compared strictly |
 
 ### Where cookies go
 
@@ -217,39 +217,38 @@ In the built-in profiles, where each set puts them, and whether a capture backs 
 
 ### DRAWN
 
-`DRAWN` names what a browser draws per connection beyond its random values, each with the reason that `pybrws verify --local` prints for it. `chrome155` declares it:
+`DRAWN` names what a browser draws per connection beyond its random values. `chrome155` declares it:
 
 ```python
 DRAWN = {
     "extensions": "order drawn per connection",
-    "encrypted_client_hello": "payload length drawn from 144, 208, 240",
-    "length": "ECH payload length drawn from 144, 208, 240",
+    "encrypted_client_hello": ECH_PAYLOAD_SIZES,    # (144, 208, 240)
 }
 ```
 
-verify compares every field of the hello it builds with the capture. These it always compares, and `DRAWN` cannot excuse them:
+`pybrws verify --local` applies one rule: content first. Every field of the hello it builds is compared with the capture's, and a field whose content differs fails, whatever `DRAWN` says:
 
-- the record version, the legacy version and the compression methods;
+- the legacy version, the compression methods, and the record version when the capture has its record header;
 - the cipher suites, in order;
-- the set of extension types: none missing, none added;
-- every extension's payload, byte for byte, apart from the fields below;
-- the lists inside `supported_groups`, `signature_algorithms` and `supported_versions`, in order, and the groups and key sizes in `key_share`;
-- the payloads of the GREASE extensions;
-- the size of every field, and of the whole hello.
+- the extension types: the same set, none missing, none added and none sent twice, in the same order unless `DRAWN` excuses the order, with the GREASE extensions at the capture's positions and with its payloads;
+- every extension's payload, byte for byte, apart from the fields drawn per connection;
+- the lists in `supported_groups`, `signature_algorithms` and `supported_versions`, in order; the groups and key sizes in `key_share`; and, when the capture's `key_share` carries the GREASE value its `supported_groups` offers, ours must too;
+- in the greased ECH, the outer type, the KDF, the enc length and the payload length.
 
 A GREASE value is drawn per connection, so in every list that carries one it compares equal to any other GREASE value. Where it stands, and every other value in the list, must be the capture's.
 
-Four fields are drawn afresh for every connection and are reported as `must (reason)`: the random, the session id, the keys in `key_share`, and the greased ECH's contents. Their bytes must differ from the capture's; their sizes must not.
+Some bytes are drawn afresh for every connection, and verify reports them as `must (reason)`: the random, the session id, the keys in `key_share`, the greased ECH's AEAD, config id, enc and payload, and the padding. They must differ from the capture's. Their lengths are still compared.
 
-`DRAWN` can excuse three things, and nothing else:
+`DRAWN` holds two kinds of key, and nothing else:
 
-| Key | Excuses | Reported as |
+| Key | Value | Excuses |
 |---|---|---|
-| `extensions` | the order of the extensions, not their set | `extensions .... differs   drawn (reason)` |
-| an extension's name, such as `encrypted_client_hello` | that extension's size | `drawn (reason)` on that extension's line |
-| `length` | the size of the whole hello, when the sizes `DRAWN` excuses account for every byte of the difference | `drawn (reason)` on the report's `ours` line |
+| `extensions` | a note, a `str` | the order of the extensions, and nothing else: their set and where the GREASE extensions stand are still compared |
+| a field drawn per connection: `random`, `session_id`, `key_share`, `encrypted_client_hello` or `padding` | the tuple of lengths the browser draws it from | that field's length, when ours and the capture's are both in the tuple. For `encrypted_client_hello`, it is the greased payload's length |
 
-Anything else that differs is `UNEXPECTED` and fails. A size is `UNEXPECTED -- N bytes, M in the capture`, and a list names what differs, such as `UNEXPECTED -- other groups` or `UNEXPECTED -- the same suites in another order`. chrome155 names the order of its extensions and the size of its ECH payload, both drawn per connection, and so the whole hello's length.
+The whole hello's size may differ only by the sum of what `DRAWN` excused, and the report's `ours` line names those fields. Any other key in `DRAWN`, or a value of the wrong kind, stops verify with one line that names the key and says what `DRAWN` can hold.
+
+Anything else that differs is `UNEXPECTED` and fails, and the line says what differs: `UNEXPECTED -- other groups (14 bytes, 12 in the capture)`, `UNEXPECTED -- the same suites in another order`, or `UNEXPECTED -- ECH header: payload length 100, 144 in the capture, not both in (144, 208, 240)`.
 
 `verify` reads `DRAWN` from the profile it loaded, so a copy made with `from pybrws.profiles.chrome155 import *` inherits it. `firefox157` declares none, and neither does the example file: a profile without `DRAWN` is compared strictly.
 
