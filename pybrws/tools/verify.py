@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import Counter
 
 from pybrws import data, profiles
 from pybrws.emitter import build_client_hello
@@ -65,12 +66,97 @@ MUST_DIFFER = {
     "padding": "sized to whatever precedes it",
 }
 
-# A profile that models a browser which varies declares DRAWN: the fields
-# that differ from one capture by design, and why. Without it a profile is
-# compared strictly. Pretending otherwise would report the model working as
-# the model failing; see pybrws/profiles/chrome155.py. A size that differs
-# needs DRAWN too: "length" for the whole hello, a field's own name for that
-# field.
+# A profile that models a browser which varies declares DRAWN: what differs
+# from one capture by design, and why; see pybrws/profiles/chrome155.py. It
+# can excuse three things and nothing else: the order of the extensions
+# ("extensions"), the size of the extension it names, and the size of the
+# whole hello ("length"). Everything else is compared every time:
+# - the versions and the compression methods;
+# - the cipher suites, in order;
+# - the set of extension types;
+# - every payload, byte for byte, except the fields drawn per connection;
+# - the size of every field.
+# A GREASE value compares equal to any other, in the lists that carry one.
+
+GREASED = "GREASE"
+EXT_SUPPORTED_GROUPS = 10
+EXT_SIGNATURE_ALGORITHMS = 13
+EXT_SUPPORTED_VERSIONS = 43
+EXT_KEY_SHARE = 51
+# The payloads compared in a parsed form rather than as bytes, and what the
+# report says when that form differs from the capture's.
+RESHAPED = {
+    EXT_SUPPORTED_GROUPS: "other groups",
+    EXT_SIGNATURE_ALGORITHMS: "other signature algorithms",
+    EXT_SUPPORTED_VERSIONS: "other versions",
+    EXT_KEY_SHARE: "other groups or key sizes",
+}
+SHAPED = tuple(RESHAPED)
+
+
+def _counted(values: list) -> str:
+    """A row's note: how many values, in order, and how many are GREASE."""
+    greased = values.count(GREASED)
+    return "%d, same order%s" % (len(values) - greased,
+                                 ", %d greased" % greased if greased else "")
+
+
+def normalised(values) -> list:
+    """`values` with every GREASE value replaced by one marker.
+
+    A browser draws its GREASE values per connection, so any one compares
+    equal to any other. Where they stand, and every other value in order,
+    must still be the capture's.
+    """
+    return [GREASED if value in GREASE_VALUES else value for value in values]
+
+
+def _vector(data: bytes, size: int) -> bytes:
+    """The body of a length-prefixed vector that fills `data` exactly."""
+    if (len(data) < size
+            or int.from_bytes(data[:size], "big") != len(data) - size):
+        raise ValueError("the length prefix does not match the payload")
+    return data[size:]
+
+
+def _u16s(data: bytes) -> list[int]:
+    if len(data) % 2:
+        raise ValueError("an odd number of bytes in a list of 16-bit values")
+    return [int.from_bytes(data[i:i + 2], "big")
+            for i in range(0, len(data), 2)]
+
+
+def shape(ext_type: int, data: bytes):
+    """What verify compares in an extension's payload.
+
+    The bytes, except in the lists that can carry GREASE values, which are
+    read with each one normalised, and in key_share, whose keys are new on
+    every connection: there the groups and the key sizes are compared. A
+    payload that does not parse is compared as bytes.
+    """
+    try:
+        if ext_type in (EXT_SUPPORTED_GROUPS, EXT_SIGNATURE_ALGORITHMS):
+            return normalised(_u16s(_vector(data, 2)))
+        if ext_type == EXT_SUPPORTED_VERSIONS:
+            return normalised(_u16s(_vector(data, 1)))
+        if ext_type == EXT_KEY_SHARE:
+            body, shares = _vector(data, 2), []
+            while body:
+                size = int.from_bytes(body[2:4], "big")
+                if len(body) < 4 + size:
+                    raise ValueError("a key share runs past the extension")
+                group = int.from_bytes(body[:2], "big")
+                shares.append((normalised([group])[0], size))
+                body = body[4 + size:]
+            return shares
+    except ValueError:
+        pass
+    return data
+
+
+def _record_version(hello) -> bytes:
+    """The record header's version, or nothing for a bare handshake message."""
+    return hello.raw[1:3] if hello.raw[:1] == b"\x16" else b""
 
 
 def sni_of(hello) -> str:
@@ -129,99 +215,156 @@ def local(profile_name: str, hostname: str | None,
         raise SystemExit("cannot build a hello from %s: %s: %s"
                          % (profile_name, type(error).__name__, error))
 
+    drawn = getattr(profile, "DRAWN", {})
+    # Each field whose size differs from the capture's, as (ours, real). Its
+    # bytes may differ by design; its size may not, unless DRAWN says why.
+    resized: dict[str, tuple[int, int]] = {}
+    # Why each field that differs in what it holds differs, as verify found it.
+    found: dict[str, str] = {}
+
+    # The record header's version is a version too, and a server reads it.
+    record, real_record = _record_version(ours), _record_version(captured)
+    if ours.legacy_version != captured.legacy_version:
+        found["version"] = ("legacy version 0x%04x, 0x%04x in the capture"
+                            % (ours.legacy_version, captured.legacy_version))
+    elif record != real_record:
+        found["version"] = ("record version 0x%s, 0x%s in the capture"
+                            % (record.hex(), real_record.hex()))
+    if len(ours.session_id) != len(captured.session_id):
+        resized["session_id"] = (len(ours.session_id),
+                                 len(captured.session_id))
+
+    suites = normalised(ours.cipher_suites)
+    real_suites = normalised(captured.cipher_suites)
+    if suites != real_suites:
+        found["cipher suites"] = ("the same suites in another order"
+                                  if Counter(suites) == Counter(real_suites)
+                                  else "other suites")
+
+    # The set of extension types is compared even where DRAWN excuses their
+    # order: a drawn order is no reason to miss an extension or add one.
+    mine = normalised(e.type for e in ours.extensions)
+    theirs = normalised(e.type for e in captured.extensions)
+    missing = Counter(theirs) - Counter(mine)
+    extra = Counter(mine) - Counter(theirs)
+    if missing or extra:
+        found["extensions"] = "; ".join(
+            "%s %s" % (word, ", ".join(kind if kind == GREASED
+                                       else extension_name(kind)
+                                       for kind in kinds.elements()))
+            for word, kinds in (("missing", missing), ("extra", extra))
+            if kinds)
+    elif mine != theirs and "extensions" not in drawn:
+        found["extensions"] = "the same extensions in another order"
+
+    # The fixed fields with no row of their own, named only when they differ.
+    if list(ours.compression_methods) != list(captured.compression_methods):
+        found["compression"] = ("%s, %s in the capture"
+                                % (list(ours.compression_methods),
+                                   list(captured.compression_methods)))
+    greased = [e.data for e in ours.extensions if e.type in GREASE_VALUES]
+    real_greased = [e.data for e in captured.extensions
+                    if e.type in GREASE_VALUES]
+    if greased != real_greased:
+        found["GREASE extensions"] = (
+            "payloads of %s bytes, %s in the capture"
+            % (" and ".join(str(len(d)) for d in greased) or "no",
+               " and ".join(str(len(d)) for d in real_greased) or "no"))
+
+    # Every extension's payload, so "same list" cannot hide a wrong body.
+    differing = []
+    byte_for_byte = greased_alike = 0
+    real = [kind for kind in theirs if kind != GREASED]
+    for ext_type in real:
+        a, b = ours.extension(ext_type), captured.extension(ext_type)
+        if a is None or b is None:
+            continue    # the extensions line names it
+        name = extension_name(ext_type)
+        if len(a.data) != len(b.data):
+            resized[name] = (len(a.data), len(b.data))
+        if a.data == b.data:
+            byte_for_byte += 1
+            continue
+        same_shape = shape(ext_type, a.data) == shape(ext_type, b.data)
+        if same_shape and name not in MUST_DIFFER:
+            greased_alike += 1      # the same list, once GREASE is normalised
+            continue
+        differing.append(name)
+        if not same_shape and ext_type in SHAPED:
+            found[name] = RESHAPED[ext_type]
+
+    # The whole hello's size is drawn only when DRAWN says so and every byte
+    # of the difference is in a field whose size DRAWN names.
+    difference = len(ours.raw) - len(captured.raw)
+    explained = sum(size - real_size
+                    for name, (size, real_size) in resized.items()
+                    if name in drawn)
+    length_unexplained = bool(difference) and (
+        "length" not in drawn or difference != explained)
+
+    def note_for(name: str) -> str:
+        sizes = resized.get(name)
+        if sizes:
+            return ("drawn (%s)" % drawn[name] if name in drawn
+                    else "UNEXPECTED -- %d bytes, %d in the capture" % sizes)
+        if name in found:
+            return "UNEXPECTED -- " + found[name]
+        if name == "extensions":    # the order alone, which DRAWN excuses
+            return "drawn (%s)" % drawn[name]
+        if name in MUST_DIFFER:
+            return "must (%s)" % MUST_DIFFER[name]
+        return "UNEXPECTED -- investigate"
+
+    rows: list[tuple[str, bool, str]] = [
+        ("version", "version" not in found, ""),
+        ("random", ours.random == captured.random, ""),
+        ("session_id", ours.session_id == captured.session_id,
+         "%d bytes each" % len(captured.session_id)),
+        ("cipher suites", suites == real_suites, _counted(real_suites)),
+        ("extensions", mine == theirs, _counted(theirs)),
+    ]
+    extras = [name for name in ("compression", "GREASE extensions")
+              if name in found]
+    changed = [name for name, ok, _ in rows if not ok] + extras + differing
+    notes = [(name, note_for(name)) for name in dict.fromkeys(changed)]
+
     print("$ pybrws verify --local --profile %s%s%s\n"
           % (profile_name, " --capture %s" % capture if capture else "",
              " --hostname %s" % hostname if given else ""))
     print("capture  %s" % capture_name)
     print("sni      %s   (%s)" % (hostname, "given with --hostname" if given
                                   else "taken from the capture"))
-    drawn = getattr(profile, "DRAWN", {})
-    same_length = len(ours.raw) == len(captured.raw)
-    if same_length:
+    if not difference:
         length_note = ""
-    elif "length" in drawn:
-        length_note = "   drawn (%s)" % drawn["length"]
-    else:
+    elif length_unexplained:
         length_note = "   UNEXPECTED -- investigate"
+    else:
+        length_note = "   drawn (%s)" % drawn["length"]
     print("ours     %d bytes%s" % (len(ours.raw), length_note))
     print("real     %d bytes" % len(captured.raw))
     print()
 
-    rows: list[tuple[str, bool, str]] = [
-        ("version", ours.legacy_version == captured.legacy_version, ""),
-        ("random", ours.random == captured.random, ""),
-        ("session_id", ours.session_id == captured.session_id,
-         "%d bytes each" % len(captured.session_id)),
-    ]
-    # Each field whose size differs from the capture's, as (ours, real). Its
-    # bytes may differ by design; its size may not, unless DRAWN says why.
-    resized: dict[str, tuple[int, int]] = {}
-    if len(ours.session_id) != len(captured.session_id):
-        resized["session_id"] = (len(ours.session_id),
-                                 len(captured.session_id))
-
-    def strip(values):
-        return [v for v in values if v not in GREASE_VALUES]
-
-    same_suites = strip(ours.cipher_suites) == strip(captured.cipher_suites)
-    rows.append(("cipher suites", same_suites,
-                 "%d, same order" % len(strip(captured.cipher_suites))))
-
-    mine = [e.type for e in ours.extensions]
-    theirs = [e.type for e in captured.extensions]
-    greased = sum(1 for t in theirs if t in GREASE_VALUES)
-    rows.append(("extensions", strip(mine) == strip(theirs),
-                 "%d, same order%s" % (len(strip(theirs)),
-                                       ", %d greased" % greased if greased
-                                       else "")))
-
-    # Every extension's payload, so "same list" cannot hide a wrong body.
-    differing = []
-    for ext_type in strip(theirs):
-        a, b = ours.extension(ext_type), captured.extension(ext_type)
-        if a is None or b is None or a.data != b.data:
-            differing.append(ext_type)
-        if a is not None and b is not None and len(a.data) != len(b.data):
-            resized[extension_name(ext_type)] = (len(a.data), len(b.data))
-    # Always reported, with the count, because "payloads match" next to a
-    # list of differing payloads is a contradiction and the number is the
-    # more useful fact anyway.
-    total = len(strip(theirs))
-    matched = total - len(differing)
-
     width = max(len(name) for name, _, _ in rows) + 2
-    expected, unexpected = [], []
     for name, ok, note in rows:
-        line = "%-*s %s   %s" % (width, (name + " ").ljust(width, "."),
-                                 "match" if ok else "differs", note)
-        (expected if ok else unexpected).append(line.rstrip())
-
-    for line in expected:
-        print(line)
+        if ok:
+            print(("%-*s %s   %s" % (width, (name + " ").ljust(width, "."),
+                                     "match", note)).rstrip())
     # A count, not a verdict: the payloads that differ are listed below with
     # the reason each one has to, so "match" or "differs" here would be
     # either a contradiction or a repetition.
-    print("%-*s %d of %d   byte for byte"
-          % (width, "payloads ".ljust(width, "."), matched, total))
+    print("%-*s %d of %d   %s"
+          % (width, "payloads ".ljust(width, "."),
+             byte_for_byte + greased_alike, len(real),
+             "byte for byte" if not greased_alike else
+             "%d byte for byte, %d with GREASE normalised"
+             % (byte_for_byte, greased_alike)))
 
     # One line per differing field, whether it came from the fixed rows or
     # from an extension payload. Printed in one place so nothing appears
     # twice, which the first version did for random and session_id.
-    changed = [name for name, ok, _ in rows if not ok]
-    changed += [extension_name(t) for t in differing]
-    if changed:
+    if notes:
         print()
-    for name in dict.fromkeys(changed):
-        sizes = resized.get(name)
-        if sizes:
-            note = ("drawn (%s)" % drawn[name] if name in drawn
-                    else "UNEXPECTED -- %d bytes, %d in the capture" % sizes)
-        elif name in MUST_DIFFER:
-            note = "must (%s)" % MUST_DIFFER[name]
-        elif name in drawn:
-            note = "drawn (%s)" % drawn[name]
-        else:
-            note = "UNEXPECTED -- investigate"
+    for name, note in notes:
         print("%-*s %s   %s"
               % (width, (name + " ").ljust(width, "."), "differs", note))
 
@@ -233,14 +376,9 @@ def local(profile_name: str, hostname: str | None,
                        if computed["ja4"] == reference["ja4"]
                        else "DIFFERS from the capture: " + reference["ja4"]))
 
-    allowed = set(MUST_DIFFER) | set(drawn)
-    surprises = [t for t in differing if extension_name(t) not in allowed]
-    surprises += [name for name, ok, _ in rows
-                  if not ok and name not in allowed]
-    surprises += [name for name in resized if name not in drawn]
-    if not same_length and "length" not in drawn:
-        surprises.append("length")
-    bad = surprises or computed["ja4"] != reference["ja4"]
+    bad = (length_unexplained
+           or any(note.startswith("UNEXPECTED") for _, note in notes)
+           or computed["ja4"] != reference["ja4"])
     if bad:
         print("\nSomething differs that should not. Not a pass.")
     return 1 if bad else 0
