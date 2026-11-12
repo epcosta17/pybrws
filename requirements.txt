@@ -9,3 +9,4 @@ curl_cffi
 jupyterlab
 nbclient
 zstandard; python_version < '3.14'
+certifi

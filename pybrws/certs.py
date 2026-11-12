@@ -123,18 +123,36 @@ def parse_certificate(body: bytes) -> list[bytes]:
     return chain
 
 
-def system_store() -> Store:
-    """The platform's trust anchors, as Python's ssl module sees them."""
-    context = ssl.create_default_context()
+def _parse_anchors(ders) -> list:
     anchors = []
     warnings.filterwarnings("ignore", message="Parsed a serial number")
-    for der in context.get_ca_certs(binary_form=True):
+    for der in ders:
         try:
             anchors.append(x509.load_der_x509_certificate(der))
         except Exception:
-            # Platform stores carry the occasional malformed anchor. One
+            # Bundles carry the occasional malformed anchor. One
             # unparseable certificate should not cost the other few hundred.
             continue
+    return anchors
+
+
+def system_store() -> Store:
+    """The platform's trust anchors, as Python's ssl module sees them.
+
+    Some Pythons ship with an empty platform store. Only then are the roots
+    of the certifi bundle used, so a machine that has roots never has them
+    replaced.
+    """
+    context = ssl.create_default_context()
+    anchors = _parse_anchors(context.get_ca_certs(binary_form=True))
+    if not anchors:
+        import certifi
+
+        with open(certifi.where(), "rb") as bundle:
+            try:
+                anchors = x509.load_pem_x509_certificates(bundle.read())
+            except ValueError:
+                anchors = []
     if not anchors:
         raise CertificateError("no trust anchors available from the system store")
     return Store(anchors)

@@ -1,31 +1,62 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pybrws"
 version = "0.1.0"
-description = "A from-scratch browser-fingerprinted TLS client"
+description = "An HTTPS client that sends what Firefox 157 and Chrome 155 send over TLS and HTTP/2, and what Firefox 157 sends over HTTP/3"
+readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ernesto" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+# Everything a request needs. zstd is in the standard library from 3.14.
+dependencies = [
+    "cryptography>=50",
+    "hpack",
+    "brotli",
+    "publicsuffixlist",
+    "idna",
+    "certifi",
+    "zstandard; python_version < '3.14'",
+]
 
 [project.optional-dependencies]
-# Everything the client itself needs beyond the standard library.
-client = ["cryptography>=50", "hpack", "brotli", "publicsuffixlist", "idna"]
-# Only for Python below 3.14, where zstd is not yet in the standard library.
-zstd = ["zstandard"]
-# Measurement and demo: httpx is the baseline every comparison runs against.
-# aioquic is the QUIC transport and, in the tests, the oracle the Initial
-# packet decryptor is checked against. pybrws.quic itself needs none of it:
-# reading Initial packets takes only cryptography, because the keys come from
-# a published salt.
-dev = ["httpx[http2]", "jupyterlab", "nbclient", "aioquic", "curl_cffi"]
+# Empty: the packages they used to name are now dependencies. Kept so that
+# `pip install "pybrws[client]"` and `pybrws[zstd]` keep working.
+client = []
+zstd = []
+# HTTP/3 transport.
+http3 = ["aioquic"]
+# The httpx baseline that `pybrws ab` compares against.
+measure = ["httpx[http2]"]
+# Building the documentation site.
+docs = ["zensical>=0.1.1,<0.2", "mkdocstrings-python"]
+# Running the test suite. aioquic is also the oracle the Initial packet
+# decryptor is checked against; pybrws.quic itself needs only cryptography.
+dev = ["aioquic", "httpx[http2]"]
 
-# Without this, setuptools sees two top-level directories -- `pybrws` and
-# `fixtures` -- refuses to guess which is the package, and `pip install -e .`
-# fails. It had never worked, and the install command in README and the
-# portability notes
-# was written without being run.
+[project.scripts]
+pybrws = "pybrws.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/epcosta17/pybrws"
+Documentation = "https://pybrws.readthedocs.io/"
+Source = "https://github.com/epcosta17/pybrws"
+Issues = "https://github.com/epcosta17/pybrws/issues"
+
+# Setuptools would otherwise see two top-level directories, `pybrws` and
+# `fixtures`, and refuse to guess which is the package, so the packages are
+# listed explicitly.
 [tool.setuptools]
 packages = ["pybrws", "pybrws.profiles", "pybrws.data", "pybrws.tools"]
 
