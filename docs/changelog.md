@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+### Fixed
+
+- `pybrws.h3.get`, `request` and `post` raised `RuntimeError: asyncio.run() cannot be called from a running event loop` when called where an event loop was already running, such as in a Jupyter cell. They now run their own loop in a worker thread there. Async code can `await pybrws.h3.fetch(...)` instead.
+
 ## 0.1.0
 
 The first release on PyPI.

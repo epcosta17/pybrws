@@ -124,6 +124,7 @@ print(response.status, response.http_version)
 - No resumption: every connection is a full handshake.
 - `h3.get` follows no redirects; `pybrws --http3` does.
 - It takes `headers`, `timeout` (30 s), `verify`, `cadata` and `max_body_size`.
+- `h3.get` blocks until the answer, in a Jupyter cell as well. In async code, `await h3.fetch(url)` instead, with the same arguments.
 
 Inside an event loop, `await h3.fetch(url)` does the same.
 

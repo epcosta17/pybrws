@@ -24,6 +24,7 @@ See `profiles/firefox157_quic.py` and
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 from urllib.parse import urlsplit
 
 from . import headers as header_tools
@@ -329,8 +330,20 @@ async def fetch(url: str, *, method: str = "GET", headers=None,
 
 
 def request(url: str, **kwargs) -> Response:
-    """One HTTP/3 request, synchronously. Runs its own event loop."""
-    return asyncio.run(fetch(url, **kwargs))
+    """One HTTP/3 request, synchronously: it blocks until the answer.
+
+    It runs the request on an event loop of its own. A thread can run only
+    one loop, so when it is called from a thread whose loop is already
+    running, as every Jupyter cell's is, it runs its own loop in a worker
+    thread and waits for it. Async code should `await fetch(...)` instead,
+    since this call blocks the caller's loop while it waits.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(fetch(url, **kwargs))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as worker:
+        return worker.submit(lambda: asyncio.run(fetch(url, **kwargs))).result()
 
 
 def get(url: str, **kwargs) -> Response:
