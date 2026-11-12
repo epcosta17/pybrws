@@ -6,6 +6,11 @@ fixtures/reference-*.txt -text
 fixtures/*.hex           -text
 fixtures/*.jsonl         -text
 
+# The captures packaged with the library are the same bytes as their
+# fixtures, and a test compares the two byte for byte. Translated on a
+# Windows checkout, the packaged copy would gain CRLF and the fixture not.
+pybrws/data/*.hex        -text
+
 # Source stays LF in the repository and is checked out natively.
 *.py      text eol=lf
 *.md      text eol=lf
