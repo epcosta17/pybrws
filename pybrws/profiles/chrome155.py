@@ -547,11 +547,9 @@ UNMEASURED = ("H1_IMAGE_HEADERS",)
 # has ever visited, so the measured sets are kept under CAPTURED_ names and
 # what goes on the wire is those sets without it.
 #
-# Tested against yelp.com, which refuses this profile 0 of 5 while serving
-# the Firefox one 5 of 5: removing this header changed nothing either way.
-# So it is a defect on its own merits and not the cause of that, and
-# presenting it as the cause would have been a convenient story rather than
-# a result.
+# The header is left out on its own merits: a client that sends it on every
+# request describes one that reloads every page, whatever any server does
+# with it.
 RELOAD_HEADER = "cache-control"
 
 
