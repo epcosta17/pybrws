@@ -125,7 +125,6 @@ def parse_certificate(body: bytes) -> list[bytes]:
 
 def _parse_anchors(ders) -> list:
     anchors = []
-    warnings.filterwarnings("ignore", message="Parsed a serial number")
     for der in ders:
         try:
             anchors.append(x509.load_der_x509_certificate(der))
@@ -136,25 +135,69 @@ def _parse_anchors(ders) -> list:
     return anchors
 
 
-def system_store() -> Store:
-    """The platform's trust anchors, as Python's ssl module sees them.
-
-    Some Pythons ship with an empty platform store. Only then are the roots
-    of the certifi bundle used, so a machine that has roots never has them
-    replaced.
-    """
+def _platform_roots() -> list[bytes]:
     context = ssl.create_default_context()
-    anchors = _parse_anchors(context.get_ca_certs(binary_form=True))
-    if not anchors:
-        import certifi
+    return list(context.get_ca_certs(binary_form=True))
 
-        with open(certifi.where(), "rb") as bundle:
-            try:
-                anchors = x509.load_pem_x509_certificates(bundle.read())
-            except ValueError:
-                anchors = []
+
+def _mozilla_roots() -> list[bytes]:
+    """The DER of each certificate in the certifi bundle, which is Mozilla's
+    root program. A bundle that cannot be read counts as having none."""
+    import certifi
+
+    try:
+        with open(certifi.where(), encoding="ascii") as bundle:
+            text = bundle.read()
+    except (OSError, UnicodeDecodeError):
+        return []
+    begin, end = "-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----"
+    ders = []
+    for block in text.split(end)[:-1]:
+        # The bundle puts a comment above each certificate.
+        _, found, body = block.partition(begin)
+        if not found:
+            continue
+        try:
+            ders.append(ssl.PEM_cert_to_DER_cert(begin + body + end + "\n"))
+        except ValueError:
+            continue
+    return ders
+
+
+def system_store() -> Store:
+    """The platform's trust anchors alone, as Python's ssl module sees them.
+
+    Raises:
+        CertificateError: if the platform has none.
+    """
+    warnings.filterwarnings("ignore", message="Parsed a serial number")
+    anchors = _parse_anchors(_platform_roots())
     if not anchors:
         raise CertificateError("no trust anchors available from the system store")
+    return Store(anchors)
+
+
+def default_store() -> Store:
+    """The roots a connection is verified against by default: Mozilla's
+    (the certifi bundle) plus whatever the platform adds, an enterprise CA
+    for example. It is the same mix Firefox uses.
+
+    A certificate that is in both counts once. A source that cannot be read
+    counts as having none.
+
+    Raises:
+        CertificateError: if both sources yield no anchors.
+    """
+    warnings.filterwarnings("ignore", message="Parsed a serial number")
+    seen = set()
+    unique = []
+    for der in _mozilla_roots() + _platform_roots():
+        if der not in seen:
+            seen.add(der)
+            unique.append(der)
+    anchors = _parse_anchors(unique)
+    if not anchors:
+        raise CertificateError("no trust anchors available from certifi or the system store")
     return Store(anchors)
 
 
@@ -173,7 +216,7 @@ def verify_chain(chain: list[bytes], hostname: str, store: Store | None = None):
         subject = x509.DNSName(hostname)
     verifier = (
         PolicyBuilder()
-        .store(store if store is not None else system_store())
+        .store(store if store is not None else default_store())
         .build_server_verifier(subject)
     )
     try:
