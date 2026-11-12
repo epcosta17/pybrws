@@ -20,12 +20,20 @@ The first release on PyPI.
 
 ### Limits and refusals
 
-- A request whose header set the profile lacks raises `Unmeasured`: Chrome's image request over HTTP/1.1. HTTP/3 refuses every method but GET and HEAD, and offers no session ticket. What is still sent without a capture behind it is listed under [Profiles](profiles.md#sent-without-a-capture).
-- A request goes again only when that is safe: any method if the server provably never processed it, otherwise GET, HEAD and OPTIONS before any answer arrived. A `Fetcher` whose `Retry` allows more than one attempt also asks again, for GET, HEAD and OPTIONS, after a 429, 500, 502, 503 or 504.
+- A request whose header set the profile lacks raises `Unmeasured`: Chrome's image request over HTTP/1.1. HTTP/3 refuses every method but GET and HEAD, and offers no session ticket.
+- Sent without a capture behind it, as [Profiles](profiles.md#sent-without-a-capture) details:
+    - chrome155's resumed hello;
+    - the hello after a HelloRetryRequest;
+    - firefox157's HTTP/2 form and image sets, derived from its HTTP/1.1 captures;
+    - cookies on a form POST, and on an HTTP/1.1 fetch POST;
+    - HEAD;
+    - an image request with any method but GET;
+    - methods other than GET, HEAD and POST.
+- A request goes again only when that is safe: any method if the server provably never processed it, otherwise only GET, HEAD and OPTIONS. A `Session` sends those again only if no part of the answer had arrived. A `Fetcher` whose `Retry` allows more than one attempt sends them again after an error, and after a 429, 500, 502, 503 or 504.
 - Bodies are decoded from gzip, deflate, br and zstd, and capped at 128 MiB as received and as decoded unless `max_body_size` says otherwise.
 - A compressed body cut short, or a TLS stream that ends without close_notify, raises instead of returning a short body.
 - On a protocol error over TCP the client raises and closes the connection, and sends nothing to the peer. A `Session` does not reuse it, over HTTP/1.1 or HTTP/2.
-- A header set captured carrying a cookie marks the place with a `{cookie}` slot: a `Session`'s cookies go there, and with none the header is left out.
+- A `Session` puts its cookies in a set's `{cookie}` slot, else before the profile's anchor, else, for firefox157 over HTTP/2, before `sec-fetch-dest`, else last. Every cookie position a capture shows is reproduced, and [Where cookies go](profiles.md#where-cookies-go) lists which sets have one. With no cookie, a slot's header is left out.
 
 ### Command line
 

@@ -54,8 +54,10 @@ These go on the wire although no capture backs their exact shape:
 - **chrome155's resumed ClientHello.** A `Session` offers a session ticket with any TCP profile, and the resumed hello is built the way Firefox 157's was captured: `pre_shared_key` takes the place of `session_ticket`. No resumed Chrome hello is among the captures chrome155 was built from.
 - **The second ClientHello after a HelloRetryRequest**, with either profile. No capture shows a browser answering one. When the server sends a cookie, the `cookie` extension goes after every other extension but `pre_shared_key`, which RFC 8446 requires to be last.
 - **firefox157's HTTP/2 form POSTs and image requests.** Those sets are derived from the HTTP/1.1 captures by one rule: drop Host and Connection, lower-case the names, add `te: trailers`. The rule reproduces the captured HTTP/2 `fetch()` POST field for field.
-- **Cookies in a POST set.** Their place was captured on navigations and image requests; a POST set takes them before the same anchor, or last when it has none.
-- **Methods other than GET, HEAD and POST**, such as PUT or DELETE. They send the POST set that `kind` names.
+- **Cookies on a form POST**, with either profile, **and on an HTTP/1.1 fetch POST.** No capture carries a cookie there. They go before the profile's anchor when the set has it, else last: see [Where cookies go](#where-cookies-go).
+- **HEAD.** It sends the GET navigation set, and no capture is of a HEAD request.
+- **An image request with any method but GET.** `kind="image"` picks the image set whatever the method, and every captured image request is a GET.
+- **Methods other than GET, HEAD and POST**, such as PUT or DELETE. They send the set `kind` names.
 
 ## Writing your own
 
@@ -141,7 +143,7 @@ A TCP profile defines every name in `profiles.REQUIRED_TCP`, and its extensions 
 | `H2_FIRST_STREAM_ID` | the first request's stream id | `3` |
 | `H2_PSEUDO_ORDER` | the order of `:method`, `:path`, `:authority` and `:scheme` | `:method :path :authority :scheme` |
 | `H2_NAVIGATION_HEADERS` | a navigation's HTTP/2 headers as `(name, value)`, in order | 11 headers |
-| `H2_COOKIE_BEFORE` | the HTTP/2 header that `cookie` fields go before, in a set with no `{cookie}` slot | `"upgrade-insecure-requests"` |
+| `H2_COOKIE_BEFORE` | the HTTP/2 header that `cookie` fields go before, in a set with no `{cookie}` slot; see [Where cookies go](#where-cookies-go) | `"upgrade-insecure-requests"` |
 | `H1_HEADERS` | a navigation's HTTP/1.1 headers, in order and in their case | 12 headers |
 | `H1_COOKIE_BEFORE` | the HTTP/1.1 header that `Cookie` goes before, in a set with no `{cookie}` slot; `None` puts it last | `"Upgrade-Insecure-Requests"` |
 
@@ -165,18 +167,39 @@ A payload of `None` leaves the extension out: `server_name` for an IP address, f
 | `ctx.once(key, factory)` | `factory()`, computed once per connection |
 | `ctx.key_exchange` | the key exchange behind `key_share`; a profile creates one when it is `None` |
 
-Header values may hold placeholders that are filled for each request: `{authority}`, `{content_length}`, `{content_type}`, `{origin}`, `{referer}` and `{cookie}`. A placeholder filled with an empty value removes its header.
-
-`{cookie}` marks where a set was captured carrying a cookie: firefox157's HTTP/1.1 image set, and the HTTP/2 one derived from it. A `Session` puts its cookies there, joined in one `Cookie` header over HTTP/1.1 and one `cookie` field each over HTTP/2. With no cookie the header is left out.
+Header values may hold placeholders that are filled for each request: `{authority}`, `{content_length}`, `{content_type}`, `{origin}`, `{referer}` and `{cookie}`. A placeholder filled with an empty value removes its header. `{cookie}` marks where a set was captured carrying a cookie: see [Where cookies go](#where-cookies-go).
 
 Optional names, which the client reads when they are there:
 
 | Name | What it is | Without it |
 |---|---|---|
 | `H2_HEADERS_PRIORITY` | the priority in the HTTP/2 HEADERS frame: `{"exclusive": ..., "depends_on": ..., "weight": ...}` | the frame carries no priority |
+| `H2_COOKIE_BEFORE_FALLBACK` | the HTTP/2 header that `cookie` fields go before in a set that lacks `H2_COOKIE_BEFORE` | they go last |
 | `ech_growth_for_psk(size)` | how many bytes the greased ECH payload grows when a session ticket is offered | a resumed hello keeps the ECH payload's size |
 | `H1_POST_XHR_HEADERS`, `H2_POST_XHR_HEADERS`, `H1_POST_FORM_HEADERS`, `H2_POST_FORM_HEADERS`, `H1_POST_FORM_SCRIPT_HEADERS`, `H2_POST_FORM_SCRIPT_HEADERS`, `H1_IMAGE_HEADERS`, `H2_IMAGE_HEADERS` | the header sets of the other kinds of request | that kind of request raises `Unmeasured` |
 | `DRAWN` | the fields `pybrws verify` should expect to differ from a capture, and why | the profile is compared strictly |
+
+### Where cookies go
+
+A `Session` sends its cookies joined in one `Cookie` header over HTTP/1.1, and as one `cookie` field each over HTTP/2. It puts them:
+
+1. in the set's `{cookie}` slot, if it has one; with no cookie, the slot's header is left out;
+2. otherwise before `H1_COOKIE_BEFORE` or `H2_COOKIE_BEFORE`, if the set has that header;
+3. otherwise, over HTTP/2, before `H2_COOKIE_BEFORE_FALLBACK`, if the profile names one and the set has it;
+4. otherwise last.
+
+In the built-in profiles, where each set puts them, and whether a capture backs that place:
+
+| Set | `firefox157` | `chrome155` |
+|---|---|---|
+| navigation, HTTP/1.1 | before Upgrade-Insecure-Requests: captured | last: captured |
+| navigation, HTTP/2 | before upgrade-insecure-requests: captured | before priority: captured |
+| image, HTTP/1.1 | the `{cookie}` slot, after Referer: captured | no set |
+| image, HTTP/2 | the `{cookie}` slot, after referer: derived from the HTTP/1.1 set | before priority: captured |
+| fetch POST, HTTP/2 | before sec-fetch-dest, the fallback: captured | before priority: captured |
+| fetch POST, HTTP/1.1 | last: not captured | last: not captured |
+| form POSTs, HTTP/1.1 | before Upgrade-Insecure-Requests: not captured | last: not captured |
+| form POSTs, HTTP/2 | before upgrade-insecure-requests: not captured | before priority: not captured |
 
 ### DRAWN
 

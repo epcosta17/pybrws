@@ -28,7 +28,7 @@ response = request("https://example.com/", method="HEAD")
 | `trust_store` | Mozilla's and the platform's roots | see [Trust stores](#trust-stores) |
 | `max_body_size` | 128 MiB | see [max_body_size](#max_body_size) |
 
-A GET or HEAD sends the profile's navigation headers, unless `kind="image"`. Any other method sends the POST set `kind` names: see [Sent without a capture](profiles.md#sent-without-a-capture).
+A GET or HEAD sends the profile's navigation headers, unless `kind="image"`. Any other method sends the set `kind` names. Only GET and POST requests were captured; [Sent without a capture](profiles.md#sent-without-a-capture) lists the rest.
 
 The response:
 
