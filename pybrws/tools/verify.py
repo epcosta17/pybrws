@@ -63,23 +63,10 @@ MUST_DIFFER = {
     "padding": "sized to whatever precedes it",
 }
 
-# A profile that models a browser which varies cannot be checked for byte
-# identity against one capture, and pretending otherwise would report the
-# model working as the model failing. Chrome draws its extension order per
-# connection and carries a greased value at the head of six separate lists,
-# so those lists differ by design and the total length moves with the ECH
-# payload size. Firefox varies in nothing but the four fields above.
-DRAWN = {
-    "chrome155": {
-        "extensions": "order drawn per connection",
-        "supported_groups": "greased value at the head",
-        "supported_versions": "greased value at the head",
-        "signature_algorithms": "greased value at the head",
-        "cipher suites": "greased value at the head",
-        "length": "ECH payload length drawn from 144, 208, 240",
-    },
-    "firefox157": {},
-}
+# A profile that models a browser which varies declares DRAWN: the fields
+# that differ from one capture by design, and why. Without it a profile is
+# compared strictly. Pretending otherwise would report the model working as
+# the model failing; see pybrws/profiles/chrome155.py.
 
 
 def sni_of(hello) -> str:
@@ -119,7 +106,7 @@ def local(profile_name: str, hostname: str | None,
     elif profile_name in CAPTURES:
         capture_name = CAPTURES[profile_name]
         captured = parse_client_hello(parse_hex(data.read_text(capture_name)))
-    elif profiles._is_path(profile_name):
+    elif profiles.is_path(profile_name):
         raise SystemExit("%s is your own profile, so there is no shipped "
                          "capture to compare it with; pass --capture FILE "
                          "with a hello from your browser" % profile_name)
@@ -130,10 +117,11 @@ def local(profile_name: str, hostname: str | None,
     hostname = hostname or sni_of(captured)
     ours = parse_client_hello(build_client_hello(hostname, profile=profile))
 
-    print("$ pybrws verify --local --profile %s\n" % profile_name)
+    print("$ pybrws verify --local --profile %s%s\n"
+          % (profile_name, " --capture %s" % capture if capture else ""))
     print("capture  %s" % capture_name)
     print("sni      %s   (taken from the capture)" % hostname)
-    drawn = DRAWN.get(profile_name, {})
+    drawn = getattr(profile, "DRAWN", {})
     same_length = len(ours.raw) == len(captured.raw)
     print("ours     %d bytes%s" % (len(ours.raw),
           "" if same_length or "length" not in drawn

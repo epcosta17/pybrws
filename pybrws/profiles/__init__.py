@@ -66,7 +66,7 @@ class WrongTransport(ProfileError):
         self.has = has
 
 
-def _is_path(spec) -> bool:
+def is_path(spec) -> bool:
     if isinstance(spec, os.PathLike):
         return True
     return Path(spec).suffix == ".py" or "/" in spec or "\\" in spec
@@ -154,7 +154,7 @@ def load(spec, *, transport: str = "tcp") -> types.ModuleType:
     """
     if isinstance(spec, types.ModuleType):
         return spec
-    if _is_path(spec):
+    if is_path(spec):
         module = _from_file(spec)
         _check(module, transport)
         return module
@@ -162,4 +162,4 @@ def load(spec, *, transport: str = "tcp") -> types.ModuleType:
 
 
 __all__ = ["chrome155", "firefox157", "firefox157_quic", "TCP", "QUIC",
-           "REQUIRED_TCP", "REQUIRED_QUIC", "ProfileError", "WrongTransport", "load"]
+           "REQUIRED_TCP", "REQUIRED_QUIC", "ProfileError", "WrongTransport", "is_path", "load"]

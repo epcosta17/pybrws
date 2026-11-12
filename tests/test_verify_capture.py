@@ -36,6 +36,30 @@ class VerifyCaptureTests(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("same string as the capture", out)
 
+    def test_copy_of_chrome155_against_a_chrome_capture(self):
+        path = write_profile(Path(self.profile).parent,
+                             "from pybrws.profiles.chrome155 import *\n"
+                             "NAME = 'my-chrome'\n", "my_chrome.py")
+        code, out = run(verify.main, ["--local", "--profile", str(path),
+                                      "--capture", CHROME])
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("UNEXPECTED", out)
+
+    def test_profile_without_drawn_is_compared_strictly(self):
+        code, out = run(verify.main, ["--local", "--profile", "firefox157",
+                                      "--capture", CHROME])
+        self.assertEqual(code, 1)
+
+    def test_echoed_command_names_the_capture(self):
+        _, out = run(verify.main, ["--local", "--profile", self.profile,
+                                   "--capture", FIREFOX])
+        self.assertEqual(out.splitlines()[0],
+                         "$ pybrws verify --local --profile %s --capture %s"
+                         % (self.profile, FIREFOX))
+        _, out = run(verify.main, ["--local"])
+        self.assertEqual(out.splitlines()[0],
+                         "$ pybrws verify --local --profile firefox157")
+
     def test_same_through_the_cli(self):
         code, out = run(cli.main, ["verify", "--local", "--profile",
                                    self.profile, "--capture", FIREFOX])

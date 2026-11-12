@@ -49,6 +49,17 @@ from ..wire import u8, u16, vector
 
 NAME = "chrome155"
 
+# What `pybrws verify` should expect to differ from any one capture, and why.
+# A copy made with `from pybrws.profiles.chrome155 import *` inherits it.
+DRAWN = {
+    "extensions": "order drawn per connection",
+    "supported_groups": "greased value at the head",
+    "supported_versions": "greased value at the head",
+    "signature_algorithms": "greased value at the head",
+    "cipher suites": "greased value at the head",
+    "length": "ECH payload length drawn from 144, 208, 240",
+}
+
 LEGACY_VERSION = 0x0303
 RECORD_VERSION = 0x0301
 SESSION_ID_SIZE = 32
