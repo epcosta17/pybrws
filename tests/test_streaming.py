@@ -50,9 +50,9 @@ def brotlied(body: bytes) -> bytes:
 
 
 def zstded(body: bytes) -> bytes:
-    from compression import zstd
+    from tests.hostile import zstd_compress
 
-    return zstd.compress(body)
+    return zstd_compress(body)
 
 
 ENCODINGS = [

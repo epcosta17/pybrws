@@ -8,12 +8,18 @@ attribute only restricts cross-site subrequests.
 
 from __future__ import annotations
 
+import functools
 import threading
 import time
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 
+from .hosts import is_ip_literal
+
 BOOLEAN_ATTRIBUTES = {"secure", "httponly"}
+
+# RFC 6265bis 5.6.1/5.6.2: no cookie outlives 400 days, whatever it asks for.
+MAX_COOKIE_AGE = 400 * 24 * 3600
 
 
 @dataclass
@@ -46,11 +52,24 @@ def default_path(request_path: str) -> str:
 
 
 def domain_matches(host: str, domain: str) -> bool:
+    """RFC 6265 5.1.3. The suffix case is for host names only: an IP address
+    matches nothing but itself."""
     host = host.lower().rstrip(".")
     domain = domain.lower().rstrip(".")
     if host == domain:
         return True
-    return host.endswith("." + domain)
+    return not is_ip_literal(host) and host.endswith("." + domain)
+
+
+@functools.lru_cache(maxsize=1)
+def _public_suffixes():
+    """Mozilla's Public Suffix List as `publicsuffixlist` bundles it, loaded
+    once, on the first Domain attribute. Both sections, ICANN and private
+    (github.io), as browsers use them; a TLD the list does not name is a
+    suffix too, by the list's default rule."""
+    from publicsuffixlist import PublicSuffixList
+
+    return PublicSuffixList()
 
 
 def path_matches(request_path: str, cookie_path: str) -> bool:
@@ -68,8 +87,19 @@ def _parse_expires(value: str) -> float | None:
         return None
 
 
+def _has_control(text: str) -> bool:
+    """A CTL other than HTAB: %x00-08 / %x0A-1F / %x7F. Only these: a byte
+    such as 0x82, part of a UTF-8 sequence held as latin-1, is not one."""
+    return any((ch < " " and ch != "\t") or ch == "\x7f" for ch in text)
+
+
 def parse_set_cookie(header: str, request_host: str, request_path: str) -> Cookie | None:
     """Turn one Set-Cookie value into a Cookie, or None if it is unusable."""
+    if _has_control(header):
+        # RFC 6265bis 5.6 step 1, as browsers do: the whole cookie is
+        # dropped. A CR or LF kept here would end a line of the Cookie header
+        # on whichever connection the cookie later rides, another site's too.
+        return None
     parts = header.split(";")
     name, separator, value = parts[0].partition("=")
     if not separator or not name.strip():
@@ -83,6 +113,7 @@ def parse_set_cookie(header: str, request_host: str, request_path: str) -> Cooki
     )
 
     max_age = None
+    domain_attribute = ""
     for attribute in parts[1:]:
         key, _, raw = attribute.partition("=")
         key = key.strip().lower()
@@ -90,11 +121,8 @@ def parse_set_cookie(header: str, request_host: str, request_path: str) -> Cooki
         if key in BOOLEAN_ATTRIBUTES:
             setattr(cookie, "secure" if key == "secure" else "http_only", True)
         elif key == "domain" and raw:
-            candidate = raw.lstrip(".").lower()
-            # A cookie may only widen to a domain the response host sits under.
-            if domain_matches(request_host, candidate):
-                cookie.domain = candidate
-                cookie.host_only = False
+            # The last Domain attribute is the one that counts (5.3 step 4).
+            domain_attribute = raw.lstrip(".").lower().rstrip(".")
         elif key == "path" and raw.startswith("/"):
             cookie.path = raw
         elif key == "expires" and raw:
@@ -107,9 +135,24 @@ def parse_set_cookie(header: str, request_host: str, request_path: str) -> Cooki
         elif key == "samesite":
             cookie.same_site = raw.lower()
 
+    if domain_attribute and _public_suffixes().is_public(domain_attribute):
+        # 5.3 step 5: a public suffix would reach every site under it. Only
+        # the suffix itself may set one, and then it is host-only.
+        if domain_attribute != cookie.domain.rstrip("."):
+            return None
+        domain_attribute = ""
+    # A cookie may only widen to a domain the response host sits under.
+    if domain_attribute and domain_matches(request_host, domain_attribute):
+        cookie.domain = domain_attribute
+        cookie.host_only = False
+
+    now = time.time()
     if max_age is not None:
-        # Max-Age wins over Expires, and a non-positive value deletes.
-        cookie.expires = time.time() + max_age if max_age > 0 else 0.0
+        # Max-Age wins over Expires, and a non-positive value deletes. Capped
+        # before adding: hundreds of digits overflow a float.
+        cookie.expires = now + min(max_age, MAX_COOKIE_AGE) if max_age > 0 else 0.0
+    elif cookie.expires is not None:
+        cookie.expires = min(cookie.expires, now + MAX_COOKIE_AGE)
     return cookie
 
 

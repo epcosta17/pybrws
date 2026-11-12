@@ -91,13 +91,22 @@ class TestRetryHandling(unittest.TestCase):
         self.assertEqual(int.from_bytes(transcript[1:4], "big"), len(digest))
         self.assertEqual(bytes(transcript[4:4 + len(digest)]), digest)
 
-    def test_the_retry_message_follows_the_synthetic_one(self):
-        _, _, transcript = self.retry(0x11EC)
-        self.assertTrue(bytes(transcript).endswith(self.raw_message))
+    def test_the_retry_and_the_second_hello_follow_the_synthetic_one(self):
+        # RFC 8446 section 4.4.1: message_hash, then the HelloRetryRequest,
+        # then the second ClientHello. This test used to assert the
+        # transcript *ended* with the retry request -- the defect itself:
+        # every handshake through a retry derived wrong keys. Corrected
+        # 2026-11-11 (review finding T2).
+        second, _, transcript = self.retry(0x11EC)
+        digest = transcript_hash(SUITE, self.first[5:])
+        synthetic = bytes([handshake.MESSAGE_HASH]) + len(digest).to_bytes(3, "big") + digest
+        self.assertEqual(bytes(transcript), synthetic + self.raw_message + second[5:])
 
-    def test_the_transcript_is_shorter_than_the_hello_it_replaces(self):
+    def test_the_first_hello_itself_is_not_in_the_transcript(self):
+        # What the old "shorter than the hello it replaces" test was after:
+        # the first hello is replaced by its hash, not kept.
         _, _, transcript = self.retry(0x11EC)
-        self.assertLess(len(transcript), len(self.first))
+        self.assertNotIn(self.first[5:], bytes(transcript))
 
     def test_a_group_already_offered_is_refused(self):
         # Answering would send the same thing again and invite a loop.

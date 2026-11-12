@@ -5,7 +5,7 @@ to produce a connected socket to the target. Nothing about the fingerprint
 changes above this layer.
 
 One thing does change below it: the TCP/IP signature a server sees becomes
-the proxy's, not this machine's. The p0f check in tools/verify.py will stop
+the proxy's, not this machine's. The p0f check in pybrws verify will stop
 matching, by design.
 """
 
@@ -14,9 +14,12 @@ from __future__ import annotations
 import base64
 import os
 import socket
+import ssl
 import struct
 from dataclasses import dataclass
 from urllib.parse import unquote, urlsplit
+
+from . import hosts
 
 DEFAULT_PORTS = {"http": 8080, "https": 8080, "socks5": 1080, "socks5h": 1080}
 SOCKS_VERSION = 0x05
@@ -96,16 +99,42 @@ def proxy_from_env() -> str | None:
     return None
 
 
-def resolve(proxy) -> Proxy | None:
+NO_PROXY_VARS = ("NO_PROXY", "no_proxy")
+
+
+def bypass(host: str, no_proxy: str | None = None) -> bool:
+    """Whether `host` goes direct under a NO_PROXY rule, read from the
+    environment when not given.
+
+    The rule is a comma list, as requests reads it: `*` for every host, or
+    names matching exactly or as a domain suffix, a leading dot optional.
+    `example.com` covers `api.example.com`, not `badexample.com`.
+    """
+    if no_proxy is None:
+        no_proxy = next((os.environ[name] for name in NO_PROXY_VARS
+                         if os.environ.get(name)), "")
+    host = host.strip("[]").lower().rstrip(".")
+    for entry in no_proxy.split(","):
+        entry = entry.strip().lower().lstrip(".").rstrip(".")
+        if entry == "*":
+            return True
+        if entry and (host == entry or host.endswith("." + entry)):
+            return True
+    return False
+
+
+def resolve(proxy, host: str | None = None) -> Proxy | None:
     """Turn a proxy argument into a Proxy, falling back to the environment.
 
     Pass False to force a direct connection regardless of the environment.
+    A proxy taken from the environment is skipped for a `host` NO_PROXY
+    exempts; one passed in explicitly is always used.
     """
     if proxy is False:
         return None
     if proxy is None:
         proxy = proxy_from_env()
-        if not proxy:
+        if not proxy or (host is not None and bypass(host)):
             return None
     return parse_proxy(proxy) if isinstance(proxy, str) else proxy
 
@@ -124,7 +153,8 @@ def _recv_exactly(sock: socket.socket, n: int) -> bytes:
 
 
 def _http_connect(sock: socket.socket, proxy: Proxy, host: str, port: int) -> None:
-    target = host + ":" + str(port)
+    # Authority form, port always (RFC 9110 9.3.6), an IPv6 literal bracketed.
+    target = hosts.authority_for(host, port, default_port=None)
     lines = ["CONNECT " + target + " HTTP/1.1", "Host: " + target]
     if proxy.username is not None:
         token = base64.b64encode(
@@ -204,7 +234,8 @@ def _socks5_connect(sock: socket.socket, proxy: Proxy, host: str, port: int) -> 
 
 
 def open_socket(host: str, port: int, *, proxy: Proxy | str | None = None,
-                timeout: float = 20.0) -> socket.socket:
+                timeout: float = 20.0,
+                proxy_ssl_context: ssl.SSLContext | None = None) -> socket.socket:
     """Return a socket connected to host:port, through `proxy` if given.
 
     Args:
@@ -213,16 +244,29 @@ def open_socket(host: str, port: int, *, proxy: Proxy | str | None = None,
         proxy: a Proxy, a proxy URL, None to read the environment, or False
             to force a direct connection.
         timeout: socket timeout in seconds.
+        proxy_ssl_context: for an https:// proxy, the context its
+            certificate is verified with. The system store by default.
 
     Raises:
-        ProxyError: if the proxy refuses or speaks unexpectedly.
+        ProxyError: if the proxy refuses, speaks unexpectedly, or (https://)
+            fails TLS or verification.
     """
-    proxy = resolve(proxy)
+    proxy = resolve(proxy, host)
     if proxy is None:
         return socket.create_connection((host, port), timeout=timeout)
 
     sock = socket.create_connection((proxy.host, proxy.port), timeout=timeout)
     try:
+        if proxy.scheme == "https":
+            # TLS to the proxy first, verified, so CONNECT and its
+            # Proxy-Authorization never cross the network in clear. The
+            # impersonated handshake runs inside the tunnel as with any
+            # proxy; the target never sees this outer one (D7).
+            context = proxy_ssl_context or ssl.create_default_context()
+            try:
+                sock = context.wrap_socket(sock, server_hostname=proxy.host)
+            except ssl.SSLError as exc:
+                raise ProxyError("TLS to the proxy failed: " + str(exc)) from exc
         if proxy.is_socks:
             _socks5_connect(sock, proxy, host, port)
         else:

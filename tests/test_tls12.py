@@ -15,15 +15,11 @@ import ssl
 import sys
 import threading
 import unittest
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
-
-import _selfsigned  # noqa: E402
-
-from pybrws import tls12  # noqa: E402
-from pybrws.handshake import HandshakeError, connect  # noqa: E402
-from pybrws.records import CHANGE_CIPHER_SPEC  # noqa: E402
+from pybrws import tls12
+from pybrws.handshake import HandshakeError, connect
+from pybrws.records import CHANGE_CIPHER_SPEC
+from pybrws.tools import _selfsigned
 
 HOSTNAME = "pybrws.test"
 

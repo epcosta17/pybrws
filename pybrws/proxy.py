@@ -17,8 +17,11 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import os
 import socket
 import ssl
+import stat
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -28,6 +31,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
+from . import headers as header_tools
 from .client import TooManyRedirects, UnsupportedUrl, get
 from .proxies import ProxyError
 from .message import Response
@@ -46,8 +50,41 @@ HOP_BY_HOP = frozenset(
 
 
 def _pem(path: Path, data: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """A public file (the CA certificate) in the CA's private directory."""
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.write_bytes(data)
+
+
+def _write_private(path: Path, data: bytes) -> None:
+    """Write a file only its owner can read: whoever reads the CA key can
+    mint certificates the owner's browser trusts.
+
+    The directory is created 0700, and the file is 0600 from its first
+    byte -- os.open with O_EXCL and the mode, not a write followed by a
+    chmod, which leaves a window at the umask's default. An existing file
+    is removed first: O_EXCL refuses it, and its mode must not carry over.
+    Best effort on Windows, where the mode only governs read-only.
+    """
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(data)
+
+
+def _tighten(path: Path) -> None:
+    """Take group and other access off an existing CA file or directory,
+    and say so: it was readable by other local users until now."""
+    if os.name != "posix":
+        return
+    current = stat.S_IMODE(path.stat().st_mode)
+    if current & 0o077:
+        os.chmod(path, current & ~0o077)
+        print("tightened %s from %o to %o: other users could read the CA"
+              % (path, current, current & ~0o077), file=sys.stderr)
 
 
 class CertificateAuthority:
@@ -61,6 +98,17 @@ class CertificateAuthority:
         self._lock = threading.Lock()
         self.certificate = self.key = None
         if self.cert_path.exists() and self.key_path.exists():
+            # A CA written by an earlier version sits at the umask's default.
+            # The key is always tightened. The directory only when it is the
+            # default one: a directory named with --ca-dir (., ~) belongs to
+            # the user, so it is warned about rather than chmod'ed.
+            _tighten(self.key_path)
+            if self.directory.resolve() == DEFAULT_CA_DIR.resolve():
+                _tighten(self.directory)
+            elif os.name == "posix" and stat.S_IMODE(self.directory.stat().st_mode) & 0o077:
+                print("left %s as it is: other users can list it, though the CA "
+                      "key in it is readable by you alone" % self.directory,
+                      file=sys.stderr)
             certificate = x509.load_pem_x509_certificate(self.cert_path.read_bytes())
             try:
                 certificate.extensions.get_extension_for_class(
@@ -107,7 +155,7 @@ class CertificateAuthority:
             .sign(key, hashes.SHA256())
         )
         _pem(self.cert_path, certificate.public_bytes(serialization.Encoding.PEM))
-        _pem(
+        _write_private(
             self.key_path,
             key.private_bytes(
                 serialization.Encoding.PEM,
@@ -202,9 +250,15 @@ def parse_head(head: bytes) -> tuple[str, str, list[tuple[str, str]]]:
 
 
 def serialise(response: Response) -> bytes:
+    """The upstream response as HTTP/1.1 for the local client.
+
+    Raises ValueError for a header carrying CR, LF or NUL: written here, it
+    would start a header line of the upstream's choosing (RFC 9112 5.5).
+    """
     lines = ["HTTP/1.1 " + str(response.status)]
     for name, value in response.headers:
         if name.lower() not in HOP_BY_HOP:
+            header_tools.check_field(name, value)
             lines.append(name + ": " + value)
     lines.append("Content-Length: " + str(len(response.body)))
     lines.append("Connection: close")
@@ -249,7 +303,10 @@ class Proxy:
         except OSError as exc:
             return error_response(504, str(exc))
         self.log("  %s -> %d, %d bytes" % (url, response.status, len(response.body)))
-        return serialise(response)
+        try:
+            return serialise(response)
+        except ValueError as exc:
+            return error_response(502, "upstream response: " + str(exc))
 
     def handle(self, client: socket.socket, peer) -> None:
         client.settimeout(self.timeout)

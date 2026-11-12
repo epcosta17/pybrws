@@ -8,13 +8,16 @@ fingerprint a server sees. HPACK encoding is delegated to `hpack`.
 from __future__ import annotations
 
 from hpack import Decoder, Encoder
+from hpack.exceptions import HPACKError
 
 from . import headers as header_tools
 from .handshake import Connection
 from .message import (
+    DEFAULT_MAX_BODY,
     ContentEncodingError,
     IncrementalDecoder,
     Response,
+    body_too_large,
     decompress,
 )
 from .profiles import firefox157
@@ -36,6 +39,15 @@ SETTING_HEADER_TABLE_SIZE = 0x01
 SETTING_INITIAL_WINDOW_SIZE = 0x04
 SETTING_MAX_CONCURRENT_STREAMS = 0x03
 SETTING_MAX_FRAME_SIZE = 0x05
+SETTING_ENABLE_PUSH = 0x02
+
+# RFC 9113 section 6.5.2: the legal range of the values checked below.
+MIN_MAX_FRAME = 16384
+MAX_MAX_FRAME = 2**24 - 1
+MAX_WINDOW = 2**31 - 1
+# A header block may span CONTINUATION frames without end; this caps what is
+# buffered before it decodes. The HTTP/1.1 head cap, for the same reason.
+MAX_HEADER_BLOCK = 1 << 18
 
 # RFC 7540 defaults, in force until the peer's SETTINGS arrive.
 DEFAULT_WINDOW = 65535
@@ -54,17 +66,66 @@ class Http2Error(Exception):
     pass
 
 
+class StreamRefused(Http2Error):
+    """Requests the server provably never processed: above a GOAWAY's
+    last_stream_id, or reset with REFUSED_STREAM (RFC 9113 6.8, 8.7).
+
+    `requests` carries them, in order, so a caller can send them again
+    elsewhere -- safely for any method, since none of them was processed.
+    `settled` holds requests of the same batch that were dealt with in the
+    meantime, as (request, response or error): not to be sent again.
+    """
+
+    def __init__(self, message: str, requests=None) -> None:
+        super().__init__(message)
+        self.requests = list(requests or [])
+        self.settled: list = []
+
+
 class _Stream:
     """What has arrived for one request so far."""
 
-    __slots__ = ("header_block", "fields", "body", "done", "error")
+    __slots__ = ("header_block", "fields", "trailers", "body", "done", "error")
 
     def __init__(self) -> None:
         self.header_block = bytearray()
         self.fields: list[tuple[str, str]] = []
+        self.trailers: list[tuple[str, str]] = []
         self.body = bytearray()
         self.done = False
         self.error: Exception | None = None
+
+
+def _status_of(fields) -> int:
+    for name, value in fields:
+        if name == ":status":
+            try:
+                return int(value)
+            except ValueError:
+                raise Http2Error("malformed :status %r" % value)
+    return 0
+
+
+def _strip_padding(flags: int, payload: bytes, *, priority: bool) -> bytes:
+    """The content of a DATA or HEADERS payload, padding and priority removed.
+
+    RFC 9113 6.1 and 6.2: with PADDED the payload starts with a pad length
+    and ends with that much padding, and with PRIORITY (HEADERS only) five
+    bytes of priority follow the pad length. A pad length that is not below
+    the payload's is a connection error.
+    """
+    if flags & FLAG_PADDED:
+        if not payload:
+            raise Http2Error("PROTOCOL_ERROR: padded frame with no pad length")
+        pad = payload[0]
+        if pad >= len(payload):
+            raise Http2Error(
+                "PROTOCOL_ERROR: pad length %d is not below the frame payload "
+                "of %d bytes (RFC 9113 6.1)" % (pad, len(payload)))
+        payload = payload[1:len(payload) - pad]
+    if priority:
+        payload = payload[5:]
+    return payload
 
 
 def frame(frame_type: int, flags: int, stream_id: int, payload: bytes = b"") -> bytes:
@@ -79,11 +140,18 @@ def frame(frame_type: int, flags: int, stream_id: int, payload: bytes = b"") -> 
 class Http2Connection:
     """Drives one HTTP/2 connection over an established TLS Connection."""
 
-    def __init__(self, tls: Connection, *, profile=firefox157) -> None:
+    def __init__(self, tls: Connection, *, profile=firefox157,
+                 max_body_size: int | None = DEFAULT_MAX_BODY) -> None:
+        """`max_body_size` caps what a stream may hold buffered, and what a
+        buffered response decodes to (BodyTooLarge); None lifts the cap."""
         if tls.alpn != "h2":
             raise Http2Error("ALPN negotiated " + repr(tls.alpn) + ", expected 'h2'")
         self.tls = tls
         self.profile = profile
+        self.max_body_size = max_body_size
+        # Whether any frame of the answer to `request`'s stream has arrived.
+        self.response_started = False
+        self._current: int | None = None
         self.encoder = Encoder()
         self.decoder = Decoder()
         # The profile advertises a HEADER_TABLE_SIZE, which tells the peer how
@@ -101,10 +169,23 @@ class Http2Connection:
         # protocol defaults until its SETTINGS say otherwise.
         self.peer_window = DEFAULT_WINDOW
         self.peer_max_frame_size = DEFAULT_MAX_FRAME
+        # What this client advertised it will accept: RFC 9113 4.2 makes a
+        # larger frame a FRAME_SIZE_ERROR, checked before buffering it.
+        self.local_max_frame = dict(profile.H2_SETTINGS).get(
+            SETTING_MAX_FRAME_SIZE, DEFAULT_MAX_FRAME)
         self._stream_windows: dict[int, int] = {}
         self._open: dict[int, _Stream] = {}
+        # Header blocks arriving for streams no longer tracked, until whole.
+        self._orphan_blocks: dict[int, bytearray] = {}
         self._peer_initial_window = DEFAULT_WINDOW
         self.peer_max_streams = DEFAULT_MAX_STREAMS
+        # Set once the connection can no longer be trusted to carry another
+        # request -- its header table is unknown, or the peer is closing it.
+        # A pool holding it drops it.
+        self.broken = False
+        # The last stream id a GOAWAY said the peer will process; None until
+        # one arrives. No new stream may be opened after it.
+        self.goaway_last: int | None = None
         self._send_preamble()
 
     def _send_preamble(self) -> None:
@@ -124,7 +205,15 @@ class Http2Connection:
         # peer treats an uppercase one as a protocol error. Casing is part of
         # the fingerprint over HTTP/1.1 and is simply not expressible here.
         ordered += [(name.lower(), value) for name, value in headers]
-        return self.encoder.encode(ordered)
+        # Before encoding: the encoder's table changes as it encodes, so a
+        # refused field must stop the block before any of it is encoded.
+        for name, value in ordered:
+            header_tools.check_field(name, value)
+        # Bytes, not str: hpack would encode a str as UTF-8, and a value is
+        # the bytes it arrived as (headers.to_wire). Identical for ASCII.
+        return self.encoder.encode(
+            [(header_tools.to_wire(name), header_tools.to_wire(value))
+             for name, value in ordered])
 
     def _next_frame(self) -> tuple[int, int, int, bytes]:
         """The next frame, preferring any deferred while a body was sent."""
@@ -141,6 +230,11 @@ class Http2Connection:
         while True:
             if len(self._buffer) >= 9:
                 length = int.from_bytes(self._buffer[:3], "big")
+                if length > self.local_max_frame:
+                    raise self._connection_error(
+                        "FRAME_SIZE_ERROR: a %d-byte frame, above the %d this "
+                        "client advertised (RFC 9113 4.2)"
+                        % (length, self.local_max_frame))
                 if len(self._buffer) >= 9 + length:
                     frame_type = self._buffer[3]
                     flags = self._buffer[4]
@@ -148,14 +242,32 @@ class Http2Connection:
                     payload = bytes(self._buffer[9 : 9 + length])
                     del self._buffer[: 9 + length]
                     return frame_type, flags, stream_id, payload
-            self._buffer += self.tls.recv()
+            chunk = self.tls.recv()
+            if not chunk:
+                # close_notify at a frame boundary: no frame is coming, so
+                # whatever is still waiting for one has failed.
+                raise Http2Error("connection closed")
+            self._buffer += chunk
 
     def request(self, method: str, path: str, authority: str, *, headers=None,
                 body: bytes = b"", context=None) -> Response:
         """Send one request and read its complete response."""
-        stream_id = self.send_request(method, path, authority, headers=headers,
-                                      body=body, context=context)
-        return self._read_response(stream_id)
+        self.response_started = False
+        unsent = self.next_stream_id
+        try:
+            stream_id = self.send_request(method, path, authority, headers=headers,
+                                          body=body, context=context)
+            self._current = stream_id
+            return self._read_response(stream_id)
+        except BaseException:
+            # Once the stream has gone out, whatever this was -- a TLS error
+            # under the frames, a reset, a cap, a timeout, an interrupt --
+            # leaves the connection in a state nothing vouches for, as over
+            # HTTP/1.1, so a pool holding it drops it. A header refused before
+            # anything was encoded or sent leaves it as it was.
+            if self.next_stream_id != unsent:
+                self.broken = True
+            raise
 
     def send_request(self, method: str, path: str, authority: str, *,
                      headers=None, body: bytes = b"", context=None) -> int:
@@ -164,11 +276,10 @@ class Http2Connection:
         Returns the stream id, which `read_response` takes back. Several may
         be in flight at once, which is what HTTP/2 is for.
         """
-        stream_id = self.next_stream_id
-        self.next_stream_id += 2
-        self._stream_windows[stream_id] = self._peer_initial_window
-        self._open[stream_id] = _Stream()
-
+        if self.goaway_last is not None:
+            raise StreamRefused("the peer sent GOAWAY, so no new stream may "
+                                "be opened (RFC 9113 6.8)",
+                                requests=[(method, path, authority)])
         pseudo = {
             ":method": method,
             ":path": path,
@@ -177,13 +288,22 @@ class Http2Connection:
         }
         if headers is None:
             headers = self.profile.H2_NAVIGATION_HEADERS
-        fields = {"authority": authority, "content_length": str(len(body))}
+        # No cookie unless the context gives one: a {cookie} slot nobody
+        # filled is left out, never sent as written.
+        fields = {"authority": authority, "content_length": str(len(body)),
+                  "cookie": ""}
         if context:
             fields.update(context)
         headers = header_tools.fill(headers, **fields)
         if body and not header_tools.has(headers, "content-length"):
             headers = list(headers) + [("content-length", str(len(body)))]
+        # The block first: a refused header raises before a stream exists.
         block = self._header_block(pseudo, headers)
+
+        stream_id = self.next_stream_id
+        self.next_stream_id += 2
+        self._stream_windows[stream_id] = self._peer_initial_window
+        self._open[stream_id] = _Stream()
 
         flags = FLAG_END_HEADERS if body else FLAG_END_STREAM | FLAG_END_HEADERS
         payload = block
@@ -237,9 +357,7 @@ class Http2Connection:
                     if stream.body:
                         raw = bytes(stream.body)
                         stream.body.clear()
-                        decoded = decoder.feed(raw)
-                        if decoded:
-                            yield decoded
+                        yield from decoder.pieces(raw)
                     elif stream.done:
                         break
                     else:
@@ -249,46 +367,91 @@ class Http2Connection:
                 tail = decoder.finish()
                 if tail:
                     yield tail
+                response.trailers = list(stream.trailers)
             finally:
                 self._open.pop(stream_id, None)
                 self._stream_windows.pop(stream_id, None)
 
         return response, chunks()
 
-    def request_many(self, requests) -> list[Response]:
-        """Send several requests over this connection and collect them all.
+    def request_many(self, requests):
+        """Send several requests over this connection; yield their responses.
 
         Each entry is (method, path, authority) or a mapping of the keyword
         arguments `send_request` takes. They go out before any reply is
         read, which is the whole point: one round trip for the batch rather
-        than one each.
+        than one each. Responses are yielded in request order.
+
+        If the peer refuses some -- a GOAWAY below them, or REFUSED_STREAM --
+        everything before the first refused one is yielded, then
+        StreamRefused is raised. Its `requests` are the ones the server
+        never processed: those refused, and those not yet sent. A refusal
+        of one stream says nothing about its neighbours, so the requests
+        after it that were answered meanwhile are not among them; they are
+        on its `settled` attribute, each as (request, response or error).
+        Before this it waited for refused streams forever.
         """
         batch = list(requests)
-        limit = max(1, min(self.peer_max_streams, len(batch)))
-        results: dict[int, Response] = {}
-        order: list[int] = []
+        limit = max(1, min(self.peer_max_streams, len(batch))) if batch else 1
+        outcomes: dict[int, object] = {}
         queue = list(enumerate(batch))
         in_flight: dict[int, int] = {}
 
-        def start(index, spec):
-            if isinstance(spec, dict):
-                stream_id = self.send_request(**spec)
-            else:
-                stream_id = self.send_request(*spec)
+        def start(index, spec) -> None:
+            try:
+                if isinstance(spec, dict):
+                    stream_id = self.send_request(**spec)
+                else:
+                    stream_id = self.send_request(*spec)
+            except StreamRefused as exc:
+                outcomes[index] = exc
+                return
             in_flight[stream_id] = index
-            order.append(stream_id)
 
-        while queue and len(in_flight) < limit:
-            start(*queue.pop(0))
-        while in_flight:
-            finished = self._pump()
-            if finished is None or finished not in in_flight:
-                continue
-            index = in_flight.pop(finished)
-            results[index] = self._finish(finished)
-            if queue:
+        def fill() -> None:
+            while queue and len(in_flight) < limit:
                 start(*queue.pop(0))
-        return [results[i] for i in range(len(batch))]
+
+        def collect() -> list[int]:
+            # Every stream that is now done, not only the one the last frame
+            # belonged to: a GOAWAY finishes several at once.
+            done = [sid for sid in in_flight if self._open[sid].done]
+            for stream_id in done:
+                index = in_flight.pop(stream_id)
+                try:
+                    outcomes[index] = self._finish(stream_id)
+                except Exception as exc:   # kept, raised in request order
+                    outcomes[index] = exc
+            return done
+
+        fill()
+        for wanted in range(len(batch)):
+            while wanted not in outcomes:
+                if not in_flight:
+                    fill()
+                    if wanted in outcomes or not in_flight:
+                        break
+                self._pump()
+                if collect():
+                    fill()
+            outcome = outcomes.pop(wanted)
+            if isinstance(outcome, StreamRefused):
+                # Before saying what was never processed, let what is in
+                # flight finish: those answered are not to be sent again.
+                while in_flight:
+                    self._pump()
+                    collect()
+                unprocessed = sorted([wanted] + [index for index, _spec in queue]
+                                     + [index for index, value in outcomes.items()
+                                        if isinstance(value, StreamRefused)])
+                error = StreamRefused(str(outcome),
+                                      requests=[batch[i] for i in unprocessed])
+                error.settled = [(batch[i], outcomes[i]) for i in sorted(outcomes)
+                                 if i not in unprocessed]
+                raise error
+            if isinstance(outcome, Exception):
+                raise outcome
+            yield outcome
 
     def get(self, path: str, authority: str, *, headers=None) -> Response:
         return self.request("GET", path, authority, headers=headers)
@@ -298,6 +461,9 @@ class Http2Connection:
         offset = 0
         while offset < len(body):
             room = self._await_window(stream_id)
+            if room == 0:
+                # The server already answered and told us to stop.
+                return
             size = min(room, self.peer_max_frame_size, len(body) - offset)
             chunk = body[offset : offset + size]
             offset += size
@@ -323,11 +489,80 @@ class Http2Connection:
                     self._apply_settings(payload)
                     self.tls.send(frame(SETTINGS, FLAG_ACK, 0))
             elif frame_type == GOAWAY:
-                raise Http2Error("GOAWAY while sending the request body")
+                # As anywhere else: above `last` this stream was never
+                # processed, and a POST may go again; at or below it the
+                # server is still serving it, so the upload goes on.
+                self._on_goaway(payload)
+                if self._open[stream_id].error is not None:
+                    raise self._abandon_upload(stream_id)
             elif frame_type == RST_STREAM and frame_stream == stream_id:
-                raise Http2Error("stream reset while sending the request body")
+                code = int.from_bytes(payload[:4], "big")
+                if code == 0 and self._answered(stream_id):
+                    # RFC 9113 8.1: a complete response followed by
+                    # RST_STREAM(NO_ERROR) means "stop sending, here is the
+                    # answer". The answer is in the deferred frames.
+                    return 0
+                self._on_reset(self._open[stream_id], code)
+                raise self._abandon_upload(stream_id)
             else:
                 self._pending.append((frame_type, flags, frame_stream, payload))
+
+    def _orphan(self, frame_type: int, flags: int, stream_id: int,
+                payload: bytes) -> None:
+        """A frame for a stream no longer tracked: a streaming response the
+        caller stopped reading, whose frames keep coming since nothing tells
+        the server to stop (D10). Nothing in it is wanted, but two things it
+        carries still count. Its header blocks change the HPACK table every
+        later block is read against, so they are decoded; skipping one made
+        later responses decode the wrong headers. And its DATA used up
+        connection window, which is credited back so the connection does
+        not stall."""
+        if frame_type in (HEADERS, CONTINUATION):
+            block = (_strip_padding(flags, payload, priority=bool(flags & FLAG_PRIORITY))
+                     if frame_type == HEADERS else payload)
+            pending = self._orphan_blocks.setdefault(stream_id, bytearray())
+            if len(pending) + len(block) > MAX_HEADER_BLOCK:
+                raise self._connection_error(
+                    "a header block past %d bytes (CONTINUATION without end)"
+                    % MAX_HEADER_BLOCK)
+            pending += block
+            if flags & FLAG_END_HEADERS:
+                self._decode(bytes(self._orphan_blocks.pop(stream_id)))
+        elif frame_type == DATA and payload:
+            self.tls.send(frame(WINDOW_UPDATE, 0, 0, len(payload).to_bytes(4, "big")))
+
+    def _on_goaway(self, payload: bytes) -> None:
+        code = int.from_bytes(payload[4:8], "big")
+        last = int.from_bytes(payload[:4], "big") & 0x7FFFFFFF
+        # The peer is closing. Streams up to `last` may still complete;
+        # those above it were never processed and never will be.
+        self.goaway_last = last
+        self.broken = True
+        for open_id, stream in self._open.items():
+            if open_id > last and not stream.done:
+                stream.error = StreamRefused(
+                    "GOAWAY (error code %d) above stream %d" % (code, last))
+                stream.done = True
+
+    @staticmethod
+    def _on_reset(stream: _Stream, code: int) -> None:
+        if code == 0x7:   # REFUSED_STREAM: never processed (RFC 9113 8.7)
+            stream.error = StreamRefused("stream refused by the peer")
+        else:
+            stream.error = Http2Error("stream reset, error code " + str(code))
+        stream.done = True
+
+    def _abandon_upload(self, stream_id: int) -> Exception:
+        """The error that ends an upload, its stream forgotten: the caller
+        never got the stream id, so nothing would collect it."""
+        self._stream_windows.pop(stream_id, None)
+        return self._open.pop(stream_id).error
+
+    def _answered(self, stream_id: int) -> bool:
+        """Whether the deferred frames already end this stream's response."""
+        return any(kind in (HEADERS, DATA) and owner == stream_id
+                   and flags & FLAG_END_STREAM
+                   for kind, flags, owner, _payload in self._pending)
 
     def _credit(self, stream_id: int, increment: int) -> None:
         if stream_id == 0:
@@ -335,11 +570,41 @@ class Http2Connection:
         elif stream_id in self._stream_windows:
             self._stream_windows[stream_id] += increment
 
+    def can_reuse(self) -> bool:
+        """Whether another request may be opened here: not after a GOAWAY or
+        a connection error."""
+        return not self.broken
+
+    def _connection_error(self, message: str) -> Http2Error:
+        self.broken = True
+        return Http2Error(message)
+
     def _apply_settings(self, payload: bytes) -> None:
-        """Adopt the peer's limits: what it will decode, and what it will accept."""
-        for offset in range(0, len(payload) - 5, 6):
+        """Adopt the peer's limits: what it will decode, and what it will accept.
+
+        Values outside RFC 9113's ranges are connection errors. A
+        MAX_FRAME_SIZE of 0, accepted, made the body writer send empty DATA
+        frames forever without reading.
+        """
+        if len(payload) % 6:
+            raise self._connection_error(
+                "FRAME_SIZE_ERROR: a SETTINGS payload of %d bytes is not a "
+                "multiple of 6 (RFC 9113 6.5)" % len(payload))
+        for offset in range(0, len(payload), 6):
             identifier = int.from_bytes(payload[offset:offset + 2], "big")
             value = int.from_bytes(payload[offset + 2:offset + 6], "big")
+            if identifier == SETTING_ENABLE_PUSH and value not in (0, 1):
+                raise self._connection_error(
+                    "PROTOCOL_ERROR: SETTINGS_ENABLE_PUSH %d (RFC 9113 6.5.2)" % value)
+            if identifier == SETTING_INITIAL_WINDOW_SIZE and value > MAX_WINDOW:
+                raise self._connection_error(
+                    "FLOW_CONTROL_ERROR: SETTINGS_INITIAL_WINDOW_SIZE %d "
+                    "(RFC 9113 6.5.2)" % value)
+            if (identifier == SETTING_MAX_FRAME_SIZE
+                    and not MIN_MAX_FRAME <= value <= MAX_MAX_FRAME):
+                raise self._connection_error(
+                    "PROTOCOL_ERROR: SETTINGS_MAX_FRAME_SIZE %d outside "
+                    "16384..16777215 (RFC 9113 6.5.2)" % value)
             if identifier == SETTING_HEADER_TABLE_SIZE:
                 self.encoder.header_table_size = value
             elif identifier == SETTING_INITIAL_WINDOW_SIZE:
@@ -376,40 +641,63 @@ class Http2Connection:
                 self.tls.send(frame(PING, FLAG_ACK, 0, payload))
             return None
         if frame_type == GOAWAY:
-            code = int.from_bytes(payload[4:8], "big")
-            last = int.from_bytes(payload[:4], "big")
-            for open_id, stream in self._open.items():
-                if open_id > last:
-                    stream.error = Http2Error("GOAWAY, error code " + str(code))
-                    stream.done = True
-            if not self._open:
-                raise Http2Error("GOAWAY, error code " + str(code))
+            self._on_goaway(payload)
             return None
 
         stream = self._open.get(stream_id)
         if stream is None:
+            self._orphan(frame_type, flags, stream_id, payload)
             return None
+        if stream_id == self._current and frame_type in (HEADERS, CONTINUATION, DATA):
+            self.response_started = True
 
         if frame_type == RST_STREAM:
-            code = int.from_bytes(payload[:4], "big")
-            stream.error = Http2Error("stream reset, error code " + str(code))
-            stream.done = True
+            self._on_reset(stream, int.from_bytes(payload[:4], "big"))
         elif frame_type in (HEADERS, CONTINUATION):
-            block = payload[5:] if (frame_type == HEADERS
-                                    and flags & FLAG_PRIORITY) else payload
+            block = (_strip_padding(flags, payload,
+                                    priority=bool(flags & FLAG_PRIORITY))
+                     if frame_type == HEADERS else payload)
+            if len(stream.header_block) + len(block) > MAX_HEADER_BLOCK:
+                raise self._connection_error(
+                    "a header block past %d bytes (CONTINUATION without end)"
+                    % MAX_HEADER_BLOCK)
             stream.header_block += block
             if flags & FLAG_END_HEADERS:
                 # Decoded here, not when the stream finishes. One HPACK
                 # decoder serves the whole connection and its table evolves
                 # with every block in wire order, so decoding in completion
                 # order corrupts every header after the first reordering.
-                stream.fields = self._decode(bytes(stream.header_block))
+                fields = self._decode(bytes(stream.header_block))
                 stream.header_block = bytearray()
+                status = _status_of(fields)
+                if _status_of(stream.fields) >= 200:
+                    # A block after the final head is trailers (RFC 9113
+                    # 8.1); it used to overwrite the head, status and all.
+                    stream.trailers = [(n, v) for n, v in fields
+                                       if not n.startswith(":")]
+                elif 100 <= status < 200 and status != 101:
+                    pass   # informational, such as 103 Early Hints
+                else:
+                    stream.fields = fields
             if flags & FLAG_END_STREAM:
                 stream.done = True
         elif frame_type == DATA:
-            stream.body += payload
+            data = _strip_padding(flags, payload, priority=False)
+            if stream.error is not None:
+                pass   # refused already; what still arrives is dropped
+            elif (self.max_body_size is not None
+                    and len(stream.body) + len(data) > self.max_body_size):
+                # Refused before it is held whole. Nothing can tell the peer
+                # to stop (D10), so the connection goes with the stream.
+                stream.error = body_too_large(self.max_body_size)
+                stream.body = bytearray()
+                stream.done = True
+                self.broken = True
+            else:
+                stream.body += data
             if payload:
+                # The whole payload, padding included, counts against flow
+                # control (RFC 9113 6.9.1), so the whole payload is credited.
                 # Both windows need replenishing. Topping up only the
                 # connection stalls any response whose compressed size
                 # passes the per-stream INITIAL_WINDOW_SIZE we advertised.
@@ -423,12 +711,26 @@ class Http2Connection:
         return stream_id if stream.done else None
 
     def _decode(self, block: bytes) -> list[tuple[str, str]]:
+        # latin-1 both ways (headers.from_wire): a header is bytes, and
+        # decoding as UTF-8 crashed on a latin-1 byte and changed the bytes
+        # the proxy sidecar passed on.
+        try:
+            fields = self.decoder.decode(block, raw=True)
+        except HPACKError as exc:
+            # The shared header table is now in an unknown state, so every
+            # later block on this connection would decode wrongly.
+            self.broken = True
+            raise Http2Error("COMPRESSION_ERROR: " + str(exc)) from exc
+        for name, value in fields:
+            if any(c in part for part in (name, value) for c in (b"\r", b"\n", b"\x00")):
+                # RFC 9113 8.2.1: a malformed response. Its stream would be
+                # reset, but nothing is sent (D10), so the connection goes.
+                raise self._connection_error(
+                    "PROTOCOL_ERROR: response field %r carries CR, LF or NUL "
+                    "(RFC 9113 8.2.1)" % header_tools.from_wire(name))
         return [
-            (
-                name.decode() if isinstance(name, bytes) else name,
-                value.decode() if isinstance(value, bytes) else value,
-            )
-            for name, value in self.decoder.decode(block, raw=True)
+            (header_tools.from_wire(name), header_tools.from_wire(value))
+            for name, value in fields
         ]
 
     def _finish(self, stream_id: int) -> Response:
@@ -447,8 +749,10 @@ class Http2Connection:
                 headers.append((name, value))
 
         response = Response(status=status, headers=headers, http_version="h2")
+        response.trailers = list(stream.trailers)
         response.body = decompress(bytes(stream.body),
-                                   response.header("content-encoding") or "")
+                                   response.header("content-encoding") or "",
+                                   max_size=self.max_body_size)
         return response
 
     def _read_response(self, stream_id: int) -> Response:

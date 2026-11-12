@@ -17,7 +17,7 @@ connections in the same capture. What differs from the TCP profile:
 - Three cipher suites, the TLS 1.3 ones only, since QUIC forbids TLS 1.2.
 - An empty legacy session id. The TCP hello sends 32 bytes for middlebox
   compatibility, which QUIC has no need of.
-- Five supported groups, against the TCP profile's six.
+- The same five supported groups as over TCP, in the same order.
 - `quic_transport_parameters`, which has no TCP equivalent: fourteen values
   in an order of the client's own, not sorted the way a library's are.
 """
@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 from typing import Callable
 
+from .. import hosts
 from ..wire import u8, u16, vector
 
 # QUIC requires TLS 1.3, so the TLS 1.2 suites the TCP profile offers are not
@@ -250,8 +251,12 @@ def greased_ech(rng: Callable[[int], bytes] = os.urandom) -> bytes:
     )
 
 
-def server_name(hostname: str) -> bytes:
-    host = hostname.encode("idna")
+def server_name(hostname: str | None) -> bytes | None:
+    """None for an IP literal, which Firefox leaves out of server_name, as
+    RFC 6066 3 requires. aioquic hands the writer None for one already."""
+    if hostname is None or hosts.is_ip_literal(hostname):
+        return None
+    host = hosts.ascii_host(hostname).encode("ascii")
     return vector(u8(0x00) + vector(host, 2), 2)
 
 

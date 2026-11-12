@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import traceback
 from typing import Callable, Sequence
 
+from .keyexchange import KeyExchange
 from .model import Extension, GREASE_DRAW
-from .profiles import firefox157
+from .profiles import ProfileError, firefox157
 from .wire import u8, u16, u24, extension, vector
 
 HANDSHAKE_CLIENT_HELLO = 0x01
@@ -85,18 +87,56 @@ def build_extensions(profile, ctx: Context) -> bytes:
     Keeping the stored kind is not backwards compatibility for its own sake:
     a stored order is a stronger claim than a drawn one, and flattening both
     into a draw would lose the distinction that was measured.
+
+    A payload of None leaves the extension out: server_name for an IP
+    literal, which RFC 6066 forbids and neither browser sends.
     """
     if hasattr(profile, "extension_order"):
-        out = bytearray()
-        for ext_type in profile.extension_order(ctx):
-            out += extension(ext_type, profile.payload_for(ext_type, ctx))
-        return bytes(out)
-
+        pairs = ((ext_type, profile.payload_for(ext_type, ctx))
+                 for ext_type in profile.extension_order(ctx))
+    else:
+        pairs = ((ext_type, payload(ctx) if callable(payload) else payload)
+                 for ext_type, payload in profile.EXTENSIONS)
     out = bytearray()
-    for ext_type, payload in profile.EXTENSIONS:
-        data = payload(ctx) if callable(payload) else payload
-        out += extension(ext_type, data)
+    for ext_type, data in pairs:
+        if data is not None:
+            out += extension(ext_type, data)
     return bytes(out)
+
+
+def _cannot_build(profile, error: Exception) -> ProfileError:
+    """A profile whose own values or functions cannot make a hello.
+
+    One line for whoever wrote the profile: the error, then the file and
+    line where it was raised, which is often in their own file.
+    """
+    name = getattr(profile, "NAME", None) or getattr(profile, "__name__", "?")
+    frames = traceback.extract_tb(error.__traceback__)
+    place = (" (%s:%d)" % (os.path.basename(frames[-1].filename),
+                           frames[-1].lineno) if frames else "")
+    return ProfileError("cannot build a hello from profile %r: %s: %s%s"
+                        % (name, type(error).__name__, error, place))
+
+
+def key_exchange_for(profile):
+    """The key exchange for the profile's own KEY_SHARE_GROUPS, or None.
+
+    It is the one `handshake.connect` makes and the one `build_client_hello`
+    makes when it is given none, so the hello `pybrws verify` builds is the
+    hello a connection sends. Groups come from the profile passed in, not
+    from whichever module its key_share function was written in: a copy of
+    firefox157 that names other groups keeps firefox157's function.
+
+    Raises:
+        ProfileError: a group no key exchange here knows.
+    """
+    groups = getattr(profile, "KEY_SHARE_GROUPS", None)
+    if not groups:
+        return None
+    try:
+        return KeyExchange([group for group, _ in groups])
+    except Exception as error:
+        raise _cannot_build(profile, error) from error
 
 
 def build_client_hello(
@@ -112,13 +152,28 @@ def build_client_hello(
         hostname: the name to put in the `server_name` extension.
         profile: a module describing the client to imitate.
         rng: returns n random bytes; defaults to `os.urandom`.
-        key_exchange: supplies the key_share entries. A profile creates its
-            own when this is None; pass one to keep the private keys.
+        key_exchange: supplies the key_share entries. When it is None, the
+            one `key_exchange_for(profile)` makes, as `handshake.connect`
+            does; pass one to keep the private keys.
 
     Returns:
         The record, ready to write to a socket.
+
+    Raises:
+        ProfileError: the profile's values or functions cannot make a hello,
+            such as a firefox157 key_share handed groups firefox157 does not
+            send. The message names the profile and the error.
     """
-    ctx = Context(hostname, rng or os.urandom, key_exchange)
+    if key_exchange is None:
+        key_exchange = key_exchange_for(profile)
+    try:
+        return _build(hostname, profile, rng or os.urandom, key_exchange)
+    except Exception as error:
+        raise _cannot_build(profile, error) from error
+
+
+def _build(hostname: str, profile, rng: Rng, key_exchange) -> bytes:
+    ctx = Context(hostname, rng, key_exchange)
 
     # A profile whose cipher list carries a per-connection GREASE value
     # supplies a callable; one with a fixed list supplies the list.
@@ -155,33 +210,50 @@ def serialise(hello, record_version: int = 0x0301) -> bytes:
     return u8(CONTENT_TYPE_HANDSHAKE) + u16(record_version) + vector(handshake, 2)
 
 
-def retry_hello(original: bytes, group: int, share: bytes,
-                cookie: bytes | None = None) -> bytes:
+def retry_hello(original: bytes, group: int | None, share: bytes | None,
+                cookie: bytes | None = None, *, binder_context: bytes = b"",
+                tickets=None, suite=None) -> bytes:
     """The second ClientHello a HelloRetryRequest asks for.
 
     RFC 8446 section 4.1.2: it must equal the first except for the key_share,
     which carries one entry for the group the server chose, plus the server's
-    cookie if it sent one. Rebuilding from the original bytes rather than
-    re-emitting from the profile is what guarantees "except".
+    cookie if it sent one, plus a pre_shared_key brought up to date. Rebuilding
+    from the original bytes rather than re-emitting from the profile is what
+    guarantees "except".
+
+    `group=None` is a retry that only carries a cookie: the key shares stay.
+
+    A PSK cannot be copied across. Its binder signs the transcript, and the
+    transcript now starts with the first hello's hash and the retry request,
+    which is what `binder_context` holds; its age has moved on too. So any old
+    pre_shared_key is removed, and with `tickets` it is re-attached, last,
+    with fresh ages and binders over the new transcript (RFC 8446 4.2.11.2).
+    Without `tickets` it stays removed, which the RFC allows for a PSK the
+    server's suite cannot use.
 
     The cookie's position is UNMEASURED. No capture of a browser answering a
-    HelloRetryRequest exists here, so it goes last, which is legal and may
-    not be what Firefox does.
+    HelloRetryRequest exists here, so it goes at the end of everything but
+    the pre_shared_key, which RFC 8446 requires to be last.
     """
     from .parser import parse_client_hello
 
     hello = parse_client_hello(original)
-    entry = u16(group) + vector(share, 2)
     rebuilt = []
     for existing in hello.extensions:
-        if existing.type == EXT_KEY_SHARE:
+        if existing.type == EXT_PRE_SHARED_KEY:
+            continue
+        if existing.type == EXT_KEY_SHARE and group is not None:
+            entry = u16(group) + vector(share, 2)
             rebuilt.append(Extension(EXT_KEY_SHARE, vector(entry, 2)))
         else:
             rebuilt.append(existing)
     if cookie is not None and not any(e.type == EXT_COOKIE for e in rebuilt):
         rebuilt.append(Extension(EXT_COOKIE, cookie))
     hello.extensions = rebuilt
-    return serialise(hello, int.from_bytes(original[1:3], "big"))
+    record = serialise(hello, int.from_bytes(original[1:3], "big"))
+    if tickets:
+        return _attach_psk(record, tickets, suite, binder_context)
+    return record
 
 
 def grow_ech(data: bytes, extra: int, rng: Callable[[int], bytes]) -> bytes:
@@ -216,18 +288,12 @@ def with_psk(original: bytes, tickets, suite, *, profile=firefox157,
     session_ticket is dropped on the way, which the RFC does not ask for but
     the browser does.
     """
-    from .keyschedule import psk_binder
     from .parser import parse_client_hello
 
     hello = parse_client_hello(original)
     if any(e.type == EXT_PRE_SHARED_KEY for e in hello.extensions):
         raise ValueError("this ClientHello already offers a pre-shared key")
 
-    identities = b"".join(
-        vector(t.identity, 2) + t.obfuscated_age().to_bytes(4, "big")
-        for t in tickets
-    )
-    placeholder = b"".join(vector(bytes(suite.hash_size), 1) for _ in tickets)
     # Measured: Firefox does not merely append the extension, it *swaps*
     # session_ticket for it, so a resumed hello carries the same number of
     # extensions as a fresh one. Appending without dropping would leave us at
@@ -236,8 +302,6 @@ def with_psk(original: bytes, tickets, suite, *, profile=firefox157,
     # by counting, without hashing anything.
     # fixtures/reference-firefox-157-windows-resumed.hex
     kept = [e for e in hello.extensions if e.type != EXT_SESSION_TICKET]
-    psk = Extension(EXT_PRE_SHARED_KEY,
-                    vector(identities, 2) + vector(placeholder, 2))
 
     # The greased ECH payload stands in for an encrypted inner ClientHello,
     # which now carries a pre_shared_key of its own, so the browser's grows
@@ -245,23 +309,57 @@ def with_psk(original: bytes, tickets, suite, *, profile=firefox157,
     # shorter than the capture.
     growth = getattr(profile, "ech_growth_for_psk", None)
     if growth is not None:
-        extra = growth(len(psk.data) + 4)
+        extra = growth(_psk_extension_size(tickets, suite) + 4)
         kept = [
             Extension(e.type, grow_ech(e.data, extra, rng))
             if e.type == EXT_ENCRYPTED_CLIENT_HELLO else e
             for e in kept
         ]
 
-    hello.extensions = kept + [psk]
-
+    hello.extensions = kept
     record = serialise(hello, int.from_bytes(original[1:3], "big"))
+    return _attach_psk(record, tickets, suite)
+
+
+def _psk_extension_size(tickets, suite) -> int:
+    """The pre_shared_key payload's size: identities, then binders."""
+    identities = sum(2 + len(t.identity) + 4 for t in tickets)
+    binders = sum(1 + suite.hash_size for _ in tickets)
+    return 2 + identities + 2 + binders
+
+
+def _attach_psk(record: bytes, tickets, suite, binder_context: bytes = b"") -> bytes:
+    """Append a pre_shared_key offering `tickets`, binders filled in.
+
+    The binders are an HMAC over the transcript up to where they begin, so
+    the hello is serialised once with the right lengths and empty binders,
+    hashed together with `binder_context` -- empty for a first hello, the
+    first hello's hash and the HelloRetryRequest for a second one -- and the
+    binders written into the space reserved for them. The ages are computed
+    now, which on a second hello is the point.
+    """
+    from .keyschedule import psk_binder
+    from .parser import parse_client_hello
+
+    hello = parse_client_hello(record)
+    identities = b"".join(
+        vector(t.identity, 2) + t.obfuscated_age().to_bytes(4, "big")
+        for t in tickets
+    )
+    placeholder = b"".join(vector(bytes(suite.hash_size), 1) for _ in tickets)
+    psk = Extension(EXT_PRE_SHARED_KEY,
+                    vector(identities, 2) + vector(placeholder, 2))
+    hello.extensions = list(hello.extensions) + [psk]
+
+    record = serialise(hello, int.from_bytes(record[1:3], "big"))
     message = record[5:]
     # The binders, and the two-byte length in front of them, are the tail.
     tail = 2 + len(placeholder)
     truncated = message[:-tail]
 
     binders = b"".join(
-        vector(psk_binder(suite, t.psk, truncated), 1) for t in tickets
+        vector(psk_binder(suite, t.psk, binder_context + truncated), 1)
+        for t in tickets
     )
     if len(binders) != len(placeholder):
         raise ValueError("binders did not fill the space reserved for them")

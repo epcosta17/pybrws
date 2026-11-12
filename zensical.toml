@@ -1,0 +1,40 @@
+[project]
+site_name = "pybrws"
+site_url = "https://pybrws.readthedocs.io/"
+repo_url = "https://github.com/epcosta17/pybrws"
+nav = [
+  { "Home" = "index.md" },
+  { "Quick Start" = "quickstart.md" },
+  { "Profiles" = "profiles.md" },
+  { "Command line" = "cli.md" },
+  { "Advanced topics" = "advanced.md" },
+  { "The method" = [
+    "method/index.md",
+    { "1. Capture" = "method/01-capture.md" },
+    { "2. Compare" = "method/02-compare.md" },
+    { "3. Profile" = "method/03-profile.md" },
+    { "4. Verify" = "method/04-verify.md" },
+    { "5. Measure" = "method/05-measure.md" },
+  ] },
+  { "API reference" = [
+    { "Client" = "api/client.md" },
+    { "Session" = "api/session.md" },
+    { "Pool" = "api/pool.md" },
+    { "HTTP/3" = "api/h3.md" },
+    { "Profiles" = "api/profiles.md" },
+    { "Messages" = "api/message.md" },
+  ] },
+  { "FAQ" = "faq.md" },
+  { "Changelog" = "changelog.md" },
+]
+
+[project.plugins.mkdocstrings.handlers.python]
+paths = ["."]
+
+[project.plugins.mkdocstrings.handlers.python.options]
+docstring_style = "google"
+# Parameters such as `profile` and `headers` are described in the docstring
+# and left unannotated in the signature.
+docstring_options = { warn_missing_types = false }
+show_root_heading = true
+show_source = false

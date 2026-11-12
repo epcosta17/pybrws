@@ -8,6 +8,7 @@ until it matters.
 
 from __future__ import annotations
 
+import ipaddress
 import ssl
 import warnings
 
@@ -17,6 +18,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519, padding, rsa
 from cryptography.x509.verification import PolicyBuilder, Store
 
+from . import hosts
 from .parser import _Reader
 
 # RFC 8879
@@ -50,31 +52,55 @@ class CertificateError(Exception):
 
 
 def decompress_certificate(message: bytes) -> bytes:
-    """Turn an RFC 8879 CompressedCertificate body into a Certificate body."""
+    """Turn an RFC 8879 CompressedCertificate body into a Certificate body.
+
+    The output is bounded by the declared length *while* decompressing.
+    Checking it afterwards would be too late: this message arrives before the
+    server has proved anything, and a kilobyte of brotli can expand to a
+    gigabyte. RFC 8879 section 4 asks for exactly this bound. The declared
+    length is a uint24, so its own ceiling of 2**24 - 1 holds by construction.
+    """
     reader = _Reader(message, "CompressedCertificate")
     algorithm = reader.uint(2)
     expected = reader.uint(3)
     compressed = reader.vector(3)
+    # One byte past the declared length is enough to know it was a lie.
+    limit = expected + 1
 
-    if algorithm == COMPRESSION_ZLIB:
-        import zlib
+    try:
+        if algorithm == COMPRESSION_ZLIB:
+            import zlib
 
-        plain = zlib.decompress(compressed)
-    elif algorithm == COMPRESSION_BROTLI:
-        import brotli
+            plain = zlib.decompressobj().decompress(compressed, limit)
+        elif algorithm == COMPRESSION_BROTLI:
+            import brotli
 
-        plain = brotli.decompress(compressed)
-    elif algorithm == COMPRESSION_ZSTD:
-        try:
-            from compression import zstd
-        except ImportError:
-            import zstandard
+            # Bounded to within one internal block of the limit, which is
+            # enough: the length check below rejects anything past it.
+            plain = brotli.Decompressor().process(
+                compressed, output_buffer_limit=limit)
+        elif algorithm == COMPRESSION_ZSTD:
+            try:
+                from compression import zstd
+            except ImportError:
+                import io
 
-            plain = zstandard.ZstdDecompressor().decompress(compressed)
+                import zstandard
+
+                with zstandard.ZstdDecompressor().stream_reader(
+                        io.BytesIO(compressed)) as source:
+                    plain = source.read(limit)
+            else:
+                plain = zstd.ZstdDecompressor().decompress(
+                    compressed, max_length=limit)
         else:
-            plain = zstd.decompress(compressed)
-    else:
-        raise CertificateError("unknown certificate compression " + str(algorithm))
+            raise CertificateError(
+                "unknown certificate compression " + str(algorithm))
+    except CertificateError:
+        raise
+    except Exception as exc:
+        raise CertificateError(
+            "certificate decompression failed: " + str(exc)) from exc
 
     if len(plain) != expected:
         raise CertificateError(
@@ -97,20 +123,83 @@ def parse_certificate(body: bytes) -> list[bytes]:
     return chain
 
 
-def system_store() -> Store:
-    """The platform's trust anchors, as Python's ssl module sees them."""
-    context = ssl.create_default_context()
+def _parse_anchors(ders) -> list:
     anchors = []
-    warnings.filterwarnings("ignore", message="Parsed a serial number")
-    for der in context.get_ca_certs(binary_form=True):
+    for der in ders:
         try:
             anchors.append(x509.load_der_x509_certificate(der))
         except Exception:
-            # Platform stores carry the occasional malformed anchor. One
+            # Bundles carry the occasional malformed anchor. One
             # unparseable certificate should not cost the other few hundred.
             continue
+    return anchors
+
+
+def _platform_roots() -> list[bytes]:
+    context = ssl.create_default_context()
+    return list(context.get_ca_certs(binary_form=True))
+
+
+def _mozilla_roots() -> list[bytes]:
+    """The DER of each certificate in the certifi bundle, which is Mozilla's
+    root program. A bundle that cannot be read counts as having none."""
+    import certifi
+
+    try:
+        with open(certifi.where(), encoding="ascii") as bundle:
+            text = bundle.read()
+    except (OSError, UnicodeDecodeError):
+        return []
+    begin, end = "-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----"
+    ders = []
+    for block in text.split(end)[:-1]:
+        # The bundle puts a comment above each certificate.
+        _, found, body = block.partition(begin)
+        if not found:
+            continue
+        try:
+            ders.append(ssl.PEM_cert_to_DER_cert(begin + body + end + "\n"))
+        except ValueError:
+            continue
+    return ders
+
+
+def system_store() -> Store:
+    """The platform's trust anchors alone, as Python's ssl module sees them.
+
+    Raises:
+        CertificateError: if the platform has none.
+    """
+    warnings.filterwarnings("ignore", message="Parsed a serial number")
+    anchors = _parse_anchors(_platform_roots())
     if not anchors:
         raise CertificateError("no trust anchors available from the system store")
+    return Store(anchors)
+
+
+def default_store() -> Store:
+    """The roots a connection is verified against by default: Mozilla's
+    (the certifi bundle) plus whatever the platform adds, an enterprise CA
+    for example. That is close to Firefox's mix: Firefox adds only the roots
+    an administrator or user installed on the system, not the platform's
+    whole root program.
+
+    A certificate that is in both counts once. A source that cannot be read
+    counts as having none.
+
+    Raises:
+        CertificateError: if both sources yield no anchors.
+    """
+    warnings.filterwarnings("ignore", message="Parsed a serial number")
+    seen = set()
+    unique = []
+    for der in _mozilla_roots() + _platform_roots():
+        if der not in seen:
+            seen.add(der)
+            unique.append(der)
+    anchors = _parse_anchors(unique)
+    if not anchors:
+        raise CertificateError("no trust anchors available from certifi or the system store")
     return Store(anchors)
 
 
@@ -122,10 +211,15 @@ def verify_chain(chain: list[bytes], hostname: str, store: Store | None = None):
     """
     certificates = [x509.load_der_x509_certificate(der) for der in chain]
     leaf, intermediates = certificates[0], certificates[1:]
+    if hosts.is_ip_literal(hostname):
+        # An address is matched against an IP address SAN, never a DNS one.
+        subject = x509.IPAddress(ipaddress.ip_address(hostname.strip("[]")))
+    else:
+        subject = x509.DNSName(hostname)
     verifier = (
         PolicyBuilder()
-        .store(store if store is not None else system_store())
-        .build_server_verifier(x509.DNSName(hostname))
+        .store(store if store is not None else default_store())
+        .build_server_verifier(subject)
     )
     try:
         verifier.verify(leaf, intermediates)

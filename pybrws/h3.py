@@ -4,22 +4,18 @@ aioquic is asyncio and the rest of this client is not, so this module offers
 both: `Http3Client` for anyone already in an event loop, and `get`/`request`,
 which run one of their own. The synchronous pair is what makes an HTTP/3
 fetch look like the HTTP/2 one from the caller's side, which is the point --
-a scraper should not have to be rewritten because a host offers h3.
+a caller should not have to be rewritten because a host offers h3.
 
-The request is measured now, which it was not at first. The first version of
-this module sent the HTTP/2 navigation set with the HTTP/2 pseudo-header
-order, on the reasoning that HTTP/3 is HTTP/2 over QUIC. Two of the three
-parts of that guess were wrong, and curl_cffi disagreeing is what prompted
-the capture:
+The request is the one captured from a browser over QUIC, not the HTTP/2
+set carried over. HTTP/3 differs from HTTP/2 in the first fields of every
+request:
 
 - the pseudo-header order is `:method :scheme :authority :path` over QUIC
   against `:method :path :authority :scheme` over TCP;
 - `te: trailers` is not sent, `te` being an HTTP/2 mechanism;
-- `alt-used` is, carrying the authority.
+- `alt-used` is sent, carrying the authority.
 
-The ten shared headers do keep their HTTP/2 values and order, so the guess
-was not worthless -- but the two it got wrong are both in the first four
-fields of every request, which is the first thing anything looks at.
+The ten remaining headers keep their HTTP/2 values and order.
 
 See `profiles/firefox157_quic.py` and
 `fixtures/reference-firefox-157-quic-request.txt`.
@@ -31,8 +27,9 @@ import asyncio
 from urllib.parse import urlsplit
 
 from . import headers as header_tools
+from . import hosts
 from . import quic_impersonate
-from .message import Response, decompress, encode_body
+from .message import DEFAULT_MAX_BODY, Response, body_too_large, decompress, encode_body
 from .profiles import firefox157, firefox157_quic
 
 DEFAULT_PORT = 443
@@ -55,6 +52,23 @@ def _pseudo(method: str, path: str, authority: str,
     return [(name.encode(), values[name]) for name in (order or PSEUDO_ORDER)]
 
 
+def request_fields(method: str, path: str, authority: str, headers=(),
+                   pseudo_order=None) -> list[tuple[bytes, bytes]]:
+    """The request's field list as bytes: pseudo-headers, then `headers`
+    lowercased, each value the bytes it was received as (headers.to_wire).
+
+    Raises ValueError for a field carrying CR, LF or NUL (headers.check_field).
+    """
+    headers = list(headers)
+    for name, value in [(":method", method), (":path", path),
+                        (":authority", authority), *headers]:
+        header_tools.check_field(name, value)
+    fields = _pseudo(method, path, authority, pseudo_order)
+    fields += [(header_tools.to_wire(name.lower()), header_tools.to_wire(value))
+               for name, value in headers]
+    return fields
+
+
 def _protocol():
     """The aioquic protocol subclass, imported late.
 
@@ -64,7 +78,8 @@ def _protocol():
     from aioquic.asyncio.protocol import QuicConnectionProtocol
     from aioquic.h3.connection import H3Connection
     from aioquic.h3.events import DataReceived, HeadersReceived
-    from aioquic.quic.events import ProtocolNegotiated
+    from aioquic.quic.events import (ConnectionTerminated, HandshakeCompleted,
+                                     ProtocolNegotiated, StreamReset)
 
     class Protocol(QuicConnectionProtocol):
         """One connection, several requests, each on its own stream."""
@@ -74,20 +89,26 @@ def _protocol():
             self._http = None
             self._pending: dict[int, asyncio.Future] = {}
             self._parts: dict[int, tuple[list, bytearray]] = {}
+            # The most a response body may be, received or decoded; None
+            # lifts it. open_connection sets it from the caller's.
+            self.max_body_size: int | None = DEFAULT_MAX_BODY
+            # Ours rather than aioquic's wait_connected(), which awaits a
+            # shielded future: cancelling that wait on a timeout left an
+            # exception in it that asyncio then logged as never retrieved.
+            self.handshake = self._loop.create_future()
 
         # -- requests -------------------------------------------------------
 
         def send(self, method: str, path: str, authority: str,
                  headers=(), body: bytes = b"",
                  pseudo_order=None) -> asyncio.Future:
+            # First, so a refused field raises before a stream is taken.
+            fields = request_fields(method, path, authority, headers, pseudo_order)
             if self._http is None:
                 # ProtocolNegotiated normally gets here first; a caller that
                 # sends before the handshake settles should still work.
                 self._http = H3Connection(self._quic)
             stream_id = self._quic.get_next_available_stream_id()
-            fields = _pseudo(method, path, authority, pseudo_order)
-            fields += [(name.lower().encode(), value.encode())
-                       for name, value in headers]
             self._http.send_headers(stream_id, fields, end_stream=not body)
             if body:
                 self._http.send_data(stream_id, body, end_stream=True)
@@ -100,6 +121,23 @@ def _protocol():
         # -- events ---------------------------------------------------------
 
         def quic_event_received(self, event) -> None:
+            # A request whose stream or connection ends without an answer
+            # fails now; it used to wait out its timeout, or forever.
+            if isinstance(event, HandshakeCompleted) and not self.handshake.done():
+                self.handshake.set_result(None)
+            if isinstance(event, ConnectionTerminated):
+                reason = "error 0x%x: %s" % (event.error_code,
+                                            event.reason_phrase or "no reason given")
+                if not self.handshake.done():
+                    self.handshake.set_exception(Http3Error(
+                        "the connection closed during the handshake (%s)" % reason))
+                self._fail_all(Http3Error(
+                    "the connection closed before the response was complete "
+                    "(%s)" % reason))
+                return
+            if isinstance(event, StreamReset):
+                self._fail(event.stream_id, Http3Error(
+                    "the server reset the stream (error 0x%x)" % event.error_code))
             if isinstance(event, ProtocolNegotiated):
                 self._http = H3Connection(self._quic)
             if self._http is None:
@@ -113,29 +151,56 @@ def _protocol():
                 if isinstance(http_event, HeadersReceived):
                     fields.extend(http_event.headers)
                 elif isinstance(http_event, DataReceived):
+                    if (self.max_body_size is not None
+                            and len(body) + len(http_event.data) > self.max_body_size):
+                        # Refused before it is held whole, as over TCP; what
+                        # still arrives for the stream is dropped above.
+                        self._fail(stream_id, body_too_large(self.max_body_size))
+                        continue
                     body.extend(http_event.data)
                 if http_event.stream_ended:
                     self._finish(stream_id)
+
+        def _fail(self, stream_id: int, error: Exception) -> None:
+            self._parts.pop(stream_id, None)
+            waiter = self._pending.pop(stream_id, None)
+            if waiter is not None and not waiter.done():
+                waiter.set_exception(error)
+
+        def _fail_all(self, error: Exception) -> None:
+            for stream_id in list(self._pending):
+                self._fail(stream_id, error)
 
         def _finish(self, stream_id: int) -> None:
             fields, body = self._parts.pop(stream_id)
             waiter = self._pending.pop(stream_id, None)
             if waiter is None or waiter.done():
                 return
+            try:
+                waiter.set_result(self._response(fields, body))
+            except Exception as exc:
+                # This request's error, not the event loop's: raised here it
+                # escaped into asyncio, and the caller waited out its timeout.
+                waiter.set_exception(exc)
+
+        def _response(self, fields, body: bytearray) -> Response:
             status = 0
             headers = []
             for name, value in fields:
-                name = name.decode("ascii", "replace")
-                value = value.decode("ascii", "replace")
+                name = header_tools.from_wire(name)
+                value = header_tools.from_wire(value)
                 if name == ":status":
+                    if not (len(value) == 3 and value.isascii() and value.isdigit()):
+                        raise Http3Error("malformed :status %r" % value)
                     status = int(value)
                 elif not name.startswith(":"):
                     headers.append((name, value))
             response = Response(status=status, headers=headers,
                                 http_version="h3")
             encoding = response.header("content-encoding") or ""
-            response.body = decompress(bytes(body), encoding)
-            waiter.set_result(response)
+            response.body = decompress(bytes(body), encoding,
+                                       max_size=self.max_body_size)
+            return response
 
         def connection_lost(self, exc) -> None:
             for waiter in self._pending.values():
@@ -156,12 +221,12 @@ def split_target(url: str) -> tuple[str, int, str, str]:
     if not parts.hostname:
         raise Http3Error("no host in " + repr(url))
     port = parts.port or DEFAULT_PORT
-    authority = (parts.hostname if port == DEFAULT_PORT
-                 else "%s:%d" % (parts.hostname, port))
+    host = hosts.ascii_host(parts.hostname)
+    authority = hosts.authority_for(host, port, DEFAULT_PORT)
     path = parts.path or "/"
     if parts.query:
         path += "?" + parts.query
-    return parts.hostname, port, authority, path
+    return host, port, authority, path
 
 
 class Http3Client:
@@ -191,19 +256,31 @@ class Http3Client:
 
 
 async def open_connection(url: str, *, profile=firefox157_quic,
-                          verify: bool = True, timeout: float = 30.0):
-    """Connect and hand back (client, closer). The caller closes."""
+                          verify: bool = True, timeout: float = 30.0,
+                          cadata: bytes | None = None,
+                          max_body_size: int | None = DEFAULT_MAX_BODY):
+    """Connect and hand back (client, closer). The caller closes.
+
+    `cadata`: PEM certificates to trust as anchors, as aioquic takes them.
+    `max_body_size`: the most a response body may be, received or decoded,
+    before BodyTooLarge; None lifts it.
+    """
     from aioquic.asyncio import connect
 
-    quic_impersonate.install(profile=profile)
+    quic_impersonate.install()
     host, port, authority, _path = split_target(url)
     configuration = quic_impersonate.configuration(host, profile=profile,
-                                                   verify=verify)
+                                                   verify=verify, cadata=cadata)
+    # aioquic's connect() can wait for the handshake itself, but with no
+    # limit: a silent server held the caller until the idle timeout. So it
+    # only opens the socket here, and the wait is ours, bounded.
     manager = connect(host, port, configuration=configuration,
-                      create_protocol=_protocol())
+                      create_protocol=_protocol(), wait_connected=False)
     protocol = await manager.__aenter__()
+    protocol.max_body_size = max_body_size
+    protocol.transmit()   # the first flight, which wait_connected=False holds
     try:
-        await asyncio.wait_for(protocol.wait_connected(), timeout=timeout)
+        await asyncio.wait_for(protocol.handshake, timeout=timeout)
     except BaseException:
         await manager.__aexit__(None, None, None)
         raise
@@ -212,20 +289,39 @@ async def open_connection(url: str, *, profile=firefox157_quic,
 
 async def fetch(url: str, *, method: str = "GET", headers=None,
                 data=None, json=None, profile=firefox157_quic,
-                verify: bool = True, timeout: float = 30.0) -> Response:
-    """One request on its own connection, from inside a loop."""
+                verify: bool = True, timeout: float = 30.0,
+                cadata: bytes | None = None,
+                max_body_size: int | None = DEFAULT_MAX_BODY) -> Response:
+    """One request on its own connection, from inside a loop.
+
+    Raises:
+        client.Unmeasured: for any method but GET and HEAD. No Firefox
+            HTTP/3 POST has been captured, and sending the navigation set
+            with a body attached is a request no browser makes (D8).
+    """
+    if method.upper() not in ("GET", "HEAD"):
+        from .client import Unmeasured
+
+        raise Unmeasured(
+            "no Firefox HTTP/3 %s has been captured, so there is no measured "
+            "header set to send. pybrws capture quic takes one; until then "
+            "send it over TCP." % method.upper())
     body, content_type = encode_body(data, json)
     _host, _port, authority, _path = split_target(url)
     merged = header_tools.merge(profile.navigation_headers(authority), headers)
     if content_type and not header_tools.has(merged, "content-type"):
         merged = merged + [("Content-Type", content_type)]
 
-    client, manager = await open_connection(url, profile=profile,
-                                            verify=verify, timeout=timeout)
+    # One deadline for the whole operation, handshake and answer together.
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    client, manager = await open_connection(url, profile=profile, verify=verify,
+                                            timeout=timeout, cadata=cadata,
+                                            max_body_size=max_body_size)
     try:
         _host, _port, _authority, path = split_target(url)
-        response = await client.request(method, path, headers=merged,
-                                        body=body, timeout=timeout)
+        response = await client.request(method, path, headers=merged, body=body,
+                                        timeout=max(0.0, deadline - loop.time()))
         response.url = url
         return response
     finally:

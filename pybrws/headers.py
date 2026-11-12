@@ -15,6 +15,35 @@ Headers = Sequence[tuple[str, str]]
 Overrides = Mapping[str, str] | Iterable[tuple[str, str]] | None
 
 
+def to_wire(value: str) -> bytes:
+    """A header value as the bytes that go on the wire.
+
+    Header values are bytes, not text. Everywhere in this client a value is
+    held as a str whose characters are those bytes one to one (latin-1), so
+    whatever arrived -- UTF-8, latin-1, anything -- goes back out unchanged.
+    """
+    return value.encode("latin-1")
+
+
+def from_wire(raw: bytes) -> str:
+    """The str form of header bytes received from the wire; see `to_wire`."""
+    return raw.decode("latin-1") if isinstance(raw, (bytes, bytearray)) else raw
+
+
+def check_field(name: str, value: str) -> None:
+    """Refuse a header that would split the message it is written into.
+
+    CR and LF end a header line in HTTP/1.1, so a value carrying them writes
+    a second header -- or a second request -- of the sender's choosing; NUL
+    is refused by every HTTP version. Checked for every header sent,
+    whatever its source: a caller's, a profile's, or a cookie a server set.
+    """
+    for part in (name, value):
+        if "\r" in part or "\n" in part or "\x00" in part:
+            raise ValueError("header %r carries CR, LF or NUL, which would "
+                             "split the message" % name)
+
+
 def as_pairs(overrides: Overrides) -> list[tuple[str, str]]:
     if overrides is None:
         return []
@@ -81,6 +110,32 @@ def insert_all_before(headers: Headers, name: str, values,
     if not placed:
         out.extend(added)
     return out
+
+
+#: Marks where a header set was captured carrying a cookie.
+COOKIE_SLOT = "{cookie}"
+
+
+def place_cookies(headers: Headers, name: str, values, *anchors: str | None):
+    """Put a request's cookie headers where its header set says they go.
+
+    A set with a `{cookie}` slot was captured carrying a cookie there, so the
+    values take the slot, under its name, and with no values the slot's
+    header is left out. A set without one takes them before the first of
+    `anchors` it has, or last if it has none of them, and with no values
+    stays as it is.
+    """
+    headers = list(headers)
+    for index, (slot_name, value) in enumerate(headers):
+        if COOKIE_SLOT in value:
+            return (headers[:index] + [(slot_name, cookie) for cookie in values]
+                    + headers[index + 1:])
+    if not values:
+        return headers
+    present = {existing.lower() for existing, _ in headers}
+    anchor = next((anchor for anchor in anchors
+                   if anchor is not None and anchor.lower() in present), None)
+    return insert_all_before(headers, name, values, anchor)
 
 
 def get(headers: Headers, name: str) -> str | None:

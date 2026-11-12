@@ -7,16 +7,37 @@ from pathlib import Path
 
 _NOT_HEX = re.compile(r"[^0-9a-fA-F]")
 
+# One line of `hexdump`: an 8-digit offset, the bytes, then |text|.
+_HEXDUMP_LINE = re.compile(r"^[0-9a-fA-F]{8}  (?P<hex>[0-9a-fA-F ]*?)\s*\|.*\|$")
 
-def load_hex(path: str | Path) -> bytes:
-    """Read a hex dump, ignoring whitespace, colons, 0x prefixes and comments."""
-    text = Path(path).read_text(encoding="utf-8")
-    text = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+
+def parse_hex(text: str) -> bytes:
+    """Parse a hex dump, ignoring whitespace, colons, 0x prefixes and comments.
+
+    `hexdump`'s own layout is recognised line by line and only its byte
+    column read: the offset and the text column are not data, and the text
+    can hold digits, A-F and a '#' that would pass for data or a comment.
+    """
+    lines = []
+    for line in text.splitlines():
+        dumped = _HEXDUMP_LINE.match(line.rstrip("\r"))
+        lines.append(dumped.group("hex") if dumped else line.split("#", 1)[0])
+    text = "\n".join(lines)
     text = text.replace("0x", "").replace("0X", "")
     cleaned = _NOT_HEX.sub("", text)
     if len(cleaned) % 2:
-        raise ValueError(f"{path}: odd number of hex digits ({len(cleaned)})")
+        raise ValueError(f"odd number of hex digits ({len(cleaned)})")
     return bytes.fromhex(cleaned)
+
+
+def load_hex(path: str | Path) -> bytes:
+    """Read a hex dump file; see `parse_hex` for the layouts accepted."""
+    try:
+        return parse_hex(Path(path).read_text(encoding="utf-8"))
+    except ValueError as exc:
+        if str(exc).startswith("odd number of hex digits"):
+            raise ValueError(f"{path}: {exc}") from None
+        raise
 
 
 def save_hex(path: str | Path, data: bytes, width: int = 32) -> None:

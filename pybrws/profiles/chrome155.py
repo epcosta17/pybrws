@@ -23,15 +23,22 @@ Firefox is nearly everything:
   (0x44cd), a constant 186-byte list of five-byte identifiers at 0xca34 whose
   shape matches trust anchor ids, and two constant bytes at 0x12e0 whose
   purpose is unknown. Named here from their shape, not from a standard.
-- **A different HTTP/2 fingerprint in every field.** Not one value matches
-  Firefox's, down to which settings are sent at all.
+- **A different HTTP/2 fingerprint.** The first two settings, header table
+  size 65536 and push 0, are Firefox's. The window sizes, the first stream,
+  the priority and the pseudo-header order are not, and Chrome sends setting
+  6 where Firefox sends 5.
 - **Mixed header casing over HTTP/1.1.** The client hints are lower case and
   everything else is capitalised, which is a fingerprint and not a style.
 
-Not measured, and so not here: resumption, HelloRetryRequest, the image and
-cookie-carrying request variants, and anything over QUIC. Chrome's QUIC
-hello was seen once in a capture that was taken for Firefox -- eleven
-extensions and Google transport parameters -- and that is all.
+Measured beyond the hello: a navigation over HTTP/1.1 and over HTTP/2, each
+also carrying cookies; fetch and form POSTs over both, the HTTP/2 fetch POST
+also carrying cookies; and an image request over HTTP/2. Not measured: the
+HTTP/1.1 image request (see UNMEASURED), cookies on a form POST or an
+HTTP/1.1 POST, a resumed hello, HelloRetryRequest, and anything over QUIC.
+A Session still resumes with this profile, in the shape measured for
+Firefox. Chrome's QUIC hello was seen once in a capture that was taken for
+Firefox -- eleven extensions and Google transport parameters -- and that is
+all.
 """
 
 from __future__ import annotations
@@ -39,6 +46,9 @@ from __future__ import annotations
 import os
 from typing import Callable
 
+from cryptography.hazmat.primitives.asymmetric import x25519
+
+from .. import hosts
 from .. import headers as header_tools
 from ..keyexchange import KeyExchange
 from ..model import GREASE_DRAW
@@ -151,13 +161,22 @@ ECH_ENC_SIZE = 32
 # as undermeasured. More captures of the hello alone would settle it.
 ECH_PAYLOAD_SIZES = (144, 208, 240)
 
+# What `pybrws verify` should expect to differ from any one capture: the
+# extension order, and the ECH payload's length, drawn from the lengths
+# above. A copy made with `from pybrws.profiles.chrome155 import *`
+# inherits it.
+DRAWN = {
+    "extensions": "order drawn per connection",
+    "encrypted_client_hello": ECH_PAYLOAD_SIZES,
+}
+
 # Two constants, not one, because they are two different facts.
 #
 # CAPTURED_ACCEPT_LANGUAGE is what the capture holds, and the fixture tests
 # compare against it. It is the locale of the machine the capture was taken
 # on, which makes it a fingerprint of a person rather than of a browser:
-# shipping it would mark every request as coming from one particular Chrome
-# in Mexico.
+# shipping it would mark every request as coming from one particular
+# machine's Chrome.
 #
 # ACCEPT_LANGUAGE is what this profile actually sends. The common default,
 # which is the point -- a header meant to blend in should not be unusual.
@@ -275,8 +294,11 @@ def payload_for(kind: int, ctx) -> bytes:
     raise ValueError("chrome155 has no payload for extension %d" % kind)
 
 
-def server_name(hostname: str) -> bytes:
-    host = hostname.encode("idna")
+def server_name(hostname: str) -> bytes | None:
+    """None for an IP literal, which Chrome leaves out of server_name."""
+    if hosts.is_ip_literal(hostname):
+        return None
+    host = hosts.ascii_host(hostname).encode("ascii")
     return vector(u8(0x00) + vector(host, 2), 2)
 
 
@@ -302,21 +324,34 @@ def key_share(ctx) -> bytes:
 
 
 def greased_ech(ctx) -> bytes:
-    size = ECH_PAYLOAD_SIZES[ctx.random(1)[0] % len(ECH_PAYLOAD_SIZES)]
+    """Chrome's GREASE ECH extension.
+
+    `enc` is a real X25519 public key, from a key pair drawn per connection:
+    all six captures carry one, which random bytes would be one time in
+    4096, and three random `enc`s in four are values no X25519 key can take
+    -- a test anyone watching can run. Firefox's are random bytes, and
+    firefox157 sends random bytes. The size index is drawn without modulus
+    bias, as every other draw here is.
+    """
+    size = ECH_PAYLOAD_SIZES[_below(ctx, len(ECH_PAYLOAD_SIZES))]
+    config_id = ctx.random(1)[0]
+    enc = (x25519.X25519PrivateKey.from_private_bytes(ctx.random(32))
+           .public_key().public_bytes_raw())
+    assert len(enc) == ECH_ENC_SIZE
     return (
         u8(ECH_OUTER)
         + u16(ECH_KDF_ID)
         + u16(ECH_AEAD_ID)
-        + u8(ctx.random(1)[0])
-        + vector(ctx.random(ECH_ENC_SIZE), 2)
+        + u8(config_id)
+        + vector(enc, 2)
         + vector(ctx.random(size), 2)
     )
 
 
 # -- HTTP/2 ------------------------------------------------------------------
 
-# Not one of these matches Firefox, down to which settings are sent: Chrome
-# sends 6 (max header list size) where Firefox sends 5 (max frame size).
+# Settings 1 and 2 hold Firefox's values; the window size does not, and
+# Chrome sends 6 (max header list size) where Firefox sends 5 (max frame size).
 H2_SETTINGS = ((1, 65536), (2, 0), (4, 6291456), (6, 262144))
 H2_CONNECTION_WINDOW_UPDATE = 15663105
 H2_FIRST_STREAM_ID = 1
@@ -517,11 +552,9 @@ UNMEASURED = ("H1_IMAGE_HEADERS",)
 # has ever visited, so the measured sets are kept under CAPTURED_ names and
 # what goes on the wire is those sets without it.
 #
-# Tested against yelp.com, which refuses this profile 0 of 5 while serving
-# the Firefox one 5 of 5: removing this header changed nothing either way.
-# So it is a defect on its own merits and not the cause of that, and
-# presenting it as the cause would have been a convenient story rather than
-# a result.
+# The header is left out on its own merits: a client that sends it on every
+# request describes one that reloads every page, whatever any server does
+# with it.
 RELOAD_HEADER = "cache-control"
 
 

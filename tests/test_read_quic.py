@@ -1,4 +1,4 @@
-"""Tests for tools/read_quic.py, the capture reader.
+"""Tests for pybrws.tools.read_quic, the capture reader.
 
 Packet parsing is fiddly in a way that fails quietly: an off-by-one in an IP
 header length yields a payload that simply is not QUIC, which looks exactly
@@ -12,11 +12,8 @@ import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
-
-import read_quic  # noqa: E402
-
-from pybrws.parser import parse_client_hello  # noqa: E402
+from pybrws.parser import parse_client_hello
+from pybrws.tools import read_quic
 
 try:
     from tests.test_quic import client_first_flight

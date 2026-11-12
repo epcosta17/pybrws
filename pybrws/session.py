@@ -7,25 +7,47 @@ request has a distinguishable rhythm no matter how right the bytes are.
 
 from __future__ import annotations
 
+import socket
 from urllib.parse import urljoin, urlsplit
 
-from .client import REDIRECT_STATUSES, TooManyRedirects, UnsupportedUrl
+from . import hosts
+from .client import (REDIRECT_STATUSES, TooManyRedirects, UnsupportedUrl,
+                     header_set, origin_of, redirect_headers)
 from . import headers as header_tools
 from .cookies import CookieJar
 from .tickets import TicketStore
 from .handshake import connect
 from .http1 import Http1Connection, Http1Error
-from .http2 import Http2Connection, Http2Error
-from .message import Response, encode_body
+from .http2 import Http2Connection, Http2Error, StreamRefused
+from .message import DEFAULT_MAX_BODY, Response, encode_body
 from .profiles import firefox157
 from .proxies import resolve
 from .records import TlsAlert
 
 DEFAULT_PORT = 443
-# A pooled connection the peer has already closed surfaces as any of these.
-# The retry is guarded on the connection having been reused, so the same
-# failure on a fresh connection still propagates.
-RETRYABLE = (EOFError, TlsAlert, Http1Error, Http2Error, ConnectionError, OSError)
+# Transport failures: a pooled connection the peer has already closed
+# surfaces as any of these. Whether one is retried is `may_retry`'s call.
+RETRYABLE =(EOFError, TlsAlert, Http1Error, Http2Error, ConnectionError, OSError)
+
+# Safe to send twice: repeating one cannot repeat an action (D5).
+IDEMPOTENT = frozenset({"GET", "HEAD", "OPTIONS"})
+# Failures after which the server is known never to have processed the
+# request: a stream refused or above a GOAWAY (RFC 9113 6.8, 8.7), a
+# connection refused, a name that did not resolve.
+NEVER_PROCESSED = (StreamRefused, ConnectionRefusedError, socket.gaierror)
+
+
+def may_retry(method: str, error: Exception, response_started: bool) -> bool:
+    """Whether a request that failed with `error` may be sent again.
+
+    If the server never processed it, any method may go again, POST
+    included. Otherwise it may have acted on it -- a timeout or a reset says
+    nothing either way -- so only GET, HEAD and OPTIONS go again, and only
+    if no part of an answer had arrived.
+    """
+    if isinstance(error, NEVER_PROCESSED):
+        return True
+    return method.upper() in IDEMPOTENT and not response_started
 
 
 def split_url(url: str) -> tuple[str, int, str, str]:
@@ -36,11 +58,12 @@ def split_url(url: str) -> tuple[str, int, str, str]:
     if not parts.hostname:
         raise UnsupportedUrl("no host in " + repr(url))
     port = parts.port or DEFAULT_PORT
-    authority = parts.hostname if port == DEFAULT_PORT else parts.hostname + ":" + str(port)
+    host = hosts.ascii_host(parts.hostname)
+    authority = hosts.authority_for(host, port, DEFAULT_PORT)
     path = parts.path or "/"
     if parts.query:
         path += "?" + parts.query
-    return parts.hostname, port, authority, path
+    return host, port, authority, path
 
 
 def insert_header(headers, name: str, value: str, before: str):
@@ -67,8 +90,10 @@ class Session:
 
     def __init__(self, *, profile=firefox157, proxy=None, timeout: float = 20.0,
                  follow_redirects: int = 5, verify: bool = True,
-                 trust_store=None) -> None:
+                 trust_store=None,
+                 max_body_size: int | None = DEFAULT_MAX_BODY) -> None:
         self.profile = profile
+        self.max_body_size = max_body_size
         self.proxy = proxy
         self.timeout = timeout
         self.follow_redirects = follow_redirects
@@ -81,7 +106,7 @@ class Session:
     # -- connections -------------------------------------------------------
 
     def _key(self, host: str, port: int) -> tuple:
-        proxy = resolve(self.proxy)
+        proxy = resolve(self.proxy, host)
         return (host, port, str(proxy) if proxy else None)
 
     def _open(self, host: str, port: int, timeout: float | None = None):
@@ -90,16 +115,22 @@ class Session:
                       proxy=self.proxy, verify=self.verify,
                       trust_store=self.trust_store, tickets=self.tickets)
         if tls.alpn == "h2":
-            http = Http2Connection(tls, profile=self.profile)
+            http = Http2Connection(tls, profile=self.profile,
+                                   max_body_size=self.max_body_size)
         else:
-            http = Http1Connection(tls, profile=self.profile)
+            http = Http1Connection(tls, profile=self.profile,
+                                   max_body_size=self.max_body_size)
         return tls, http
 
     def _connection(self, host: str, port: int, timeout: float | None = None):
         key = self._key(host, port)
         existing = self._pool.get(key)
         if existing is not None:
-            return existing, True
+            reusable = getattr(existing[1], "can_reuse", None)
+            if reusable is None or reusable():
+                return existing, True
+            # The server closed it, or it cannot carry another request.
+            self._discard(host, port)
         created = self._open(host, port, timeout)
         self._pool[key] = created
         return created, False
@@ -128,55 +159,86 @@ class Session:
 
     # -- requests ----------------------------------------------------------
 
-    def _headers_for(self, host: str, path: str, http2: bool, override):
-        base = header_tools.merge(
-            self.profile.H2_NAVIGATION_HEADERS if http2 else self.profile.H1_HEADERS,
-            override,
-        )
+    def _headers_for(self, host: str, path: str, http2: bool, override,
+                     method: str = "GET", kind: str = "xhr"):
+        # The measured set for this kind of request, as client.request picks
+        # it: a navigation for GET and HEAD, a fetch or a form for a POST.
+        base = header_tools.merge(header_set(self.profile, method, kind, http2),
+                                  override)
         cookies = self.cookies.matching(host, path.split("?", 1)[0])
-        if not cookies:
-            return base
+        # The cookies take the set's {cookie} slot if it has one: firefox157's
+        # HTTP/1.1 image set was captured carrying a cookie there, and its
+        # HTTP/2 image set is derived from it. Otherwise they go before the
+        # profile's anchor, or before its HTTP/2 fallback when the set lacks
+        # the anchor, else last. Captures back that place on both profiles'
+        # navigations and HTTP/2 fetch POSTs, and on chrome155's HTTP/2 image
+        # request. No capture carries a cookie on a form POST or an HTTP/1.1
+        # POST: there the same rule applies, unmeasured.
         if http2:
             # Measured: Firefox sends one `cookie` field per cookie over
             # HTTP/2, which HPACK makes cheaper than one joined header.
-            return header_tools.insert_all_before(
-                base, "cookie",
-                [c.name + "=" + c.value for c in cookies],
+            return header_tools.place_cookies(
+                base, "cookie", [c.name + "=" + c.value for c in cookies],
                 self.profile.H2_COOKIE_BEFORE,
-            )
-        joined = "; ".join(c.name + "=" + c.value for c in cookies)
-        return header_tools.insert_before(base, "Cookie", joined,
+                getattr(self.profile, "H2_COOKIE_BEFORE_FALLBACK", None))
+        joined = ["; ".join(c.name + "=" + c.value for c in cookies)] if cookies else []
+        return header_tools.place_cookies(base, "Cookie", joined,
                                           self.profile.H1_COOKIE_BEFORE)
 
+    def _send(self, host: str, port: int, http, method: str, path: str,
+              authority: str, headers, body: bytes, context=None) -> Response:
+        try:
+            return http.request(method, path, authority, headers=headers,
+                                body=body, context=context)
+        except BaseException:
+            # A failure that is not worth a retry can still leave the
+            # connection mid-message -- a body refused for its size is
+            # still on the wire -- and then the pool must not offer it again.
+            if getattr(http, "broken", False):
+                self._discard(host, port)
+            raise
+
     def _once(self, url: str, headers, method: str = "GET",
-              body: bytes = b"", timeout: float | None = None) -> Response:
+              body: bytes = b"", timeout: float | None = None,
+              kind: str = "xhr", context=None) -> Response:
         host, port, authority, path = split_url(url)
         (tls, http), reused = self._connection(host, port, timeout)
         request_headers = self._headers_for(host, path,
-                                            isinstance(http, Http2Connection), headers)
+                                            isinstance(http, Http2Connection),
+                                            headers, method, kind)
         try:
-            response = http.request(method, path, authority,
-                                    headers=request_headers, body=body)
-        except RETRYABLE:
+            response = self._send(host, port, http, method, path, authority,
+                                  request_headers, body, context)
+        except RETRYABLE as error:
+            started = getattr(http, "response_started", False)
             self._discard(host, port)
-            if not reused:
+            # Once, on a fresh connection. A request the server never saw
+            # goes again wherever it failed; any other failure is retried
+            # only on a pooled connection -- how one the peer had already
+            # closed shows itself -- and only as may_retry allows.
+            if not may_retry(method, error, started):
                 raise
-            # A pooled connection the peer had already closed. One retry on a
-            # fresh one, which is what a browser does rather than failing.
+            if not reused and not isinstance(error, NEVER_PROCESSED):
+                raise
             (tls, http), _ = self._connection(host, port, timeout)
             request_headers = self._headers_for(
-                host, path, isinstance(http, Http2Connection), headers
+                host, path, isinstance(http, Http2Connection), headers, method, kind
             )
-            response = http.request(method, path, authority,
-                                    headers=request_headers, body=body)
+            response = self._send(host, port, http, method, path, authority,
+                                  request_headers, body, context)
 
+        if getattr(http, "broken", False):
+            # The peer is closing it, or its header state is lost: it may
+            # not carry the next request, so the pool lets it go now.
+            self._discard(host, port)
         self.cookies.absorb(response.headers, host, path.split("?", 1)[0])
         response.url = url
         return response
 
     def request(self, url: str, *, method: str = "GET", headers=None,
                 data=None, json=None, timeout: float | None = None,
-                follow_redirects: int | None = None) -> Response:
+                follow_redirects: int | None = None, kind: str = "xhr",
+                referer: str | None = None) -> Response:
         """Send a request, carrying and collecting cookies.
 
         Args:
@@ -188,6 +250,12 @@ class Session:
             json: an object to serialise as JSON.
             timeout: overrides the session default for this request.
             follow_redirects: overrides the session default.
+            kind: which measured header set to send, as in client.request:
+                "xhr" (what `fetch` produces), "form" (a person submitting),
+                "form-script" (a page submitting), "image" (a subresource).
+                A GET or HEAD is a navigation unless kind is "image".
+            referer: the page a browser would have come from. Defaults to
+                the target's own origin, as every captured POST carries one.
 
         Returns:
             The final response.
@@ -196,14 +264,20 @@ class Session:
             TooManyRedirects: if the budget runs out while still redirecting.
         """
         body, content_type = encode_body(data, json)
-        if content_type and not header_tools.has(header_tools.as_pairs(headers),
-                                                 "content-type"):
-            headers = header_tools.as_pairs(headers) + [("Content-Type", content_type)]
+        # The same slots client.request fills: a measured POST set carries
+        # Origin, Referer and Content-Type in the places the capture put
+        # them, instead of a Content-Type tacked on at the end.
+        origin = origin_of(url)
+        context = {
+            "origin": origin,
+            "referer": origin + "/" if referer is None else referer,
+            "content_type": content_type or "application/octet-stream",
+        }
 
         budget = self.follow_redirects if follow_redirects is None else follow_redirects
         seen = []
         for hop in range(budget + 1):
-            response = self._once(url, headers, method, body, timeout)
+            response = self._once(url, headers, method, body, timeout, kind, context)
             response.history = list(seen)
             location = response.header("location")
             if response.status not in REDIRECT_STATUSES or not location:
@@ -216,7 +290,9 @@ class Session:
                     + repr(urljoin(url, location))
                 )
             seen.append(response)
-            url = urljoin(url, location)
+            next_url = urljoin(url, location)
+            headers = redirect_headers(headers, url, next_url)
+            url = next_url
             if response.status in (301, 302, 303) and method != "HEAD":
                 method, body = "GET", b""
 

@@ -61,16 +61,27 @@ The two are separated here.
 The stub is also where this will break first if aioquic changes, so there is
 a test that asserts the seams still exist rather than only that the result
 looks right.
+
+**Scope.** The patches are process-wide, but they act only on connections
+whose configuration came from `configuration()`, which marks it with the
+profile to imitate. Any other aioquic connection in the process -- a DNS
+over QUIC client, a test server -- gets aioquic's own behaviour. The state a
+hello needs lives on its QuicConnection, handed to each tls.Context that
+**`QuicConnection._initialize`** creates (a Retry makes a second one), and
+the little that must cross
+from a method to a module function (the writer, `decode_public_key`) goes
+through context variables, so threads and tasks do not see each other's.
 """
 
 from __future__ import annotations
 
+import contextvars
 import os
 from typing import Callable
 
 from cryptography.hazmat.primitives.asymmetric import x25519
 
-from .certs import decompress_certificate
+from .certs import CertificateError, decompress_certificate
 from .keyexchange import KeyExchange
 from .profiles import firefox157_quic
 from .quic import parse_transport_parameters
@@ -83,27 +94,48 @@ HANDSHAKE_COMPRESSED_CERTIFICATE = 0x19   # RFC 8879
 PARAMETER_SOURCE_CONNECTION_ID = 0x0F
 
 
+# The aioquic release requirements-lock.txt pins, which the seams below are
+# tested against. The http3 extra allows it and the later 1.x releases.
+TESTED_AIOQUIC = "1.3.0"
+
+
 class NotInstalled(Exception):
-    pass
+    """aioquic does not look the way the patches here expect. The message
+    ends with the aioquic release pybrws is tested with."""
+
+    def __str__(self) -> str:
+        return "%s (pybrws is tested with aioquic %s)" % (super().__str__(),
+                                                          TESTED_AIOQUIC)
 
 
 class _Connection:
     """Per-connection state the patched functions share."""
 
-    __slots__ = ("kex", "server_share", "profile", "rng")
+    __slots__ = ("kex", "server_share", "profile", "rng", "hello")
 
     def __init__(self, profile, rng) -> None:
         self.profile = profile
         self.rng = rng
         self.kex = KeyExchange(list(group for group, _ in profile.KEY_SHARE_GROUPS))
         self.server_share: tuple[int, bytes] | None = None
+        # The ClientHello as first sent. RFC 9000 17.2.5.3: after a Retry "a
+        # client MUST use the same cryptographic handshake message", and
+        # aioquic rebuilds it from scratch -- new random, new draw, new grease.
+        self.hello: bytes | None = None
 
 
-# Set for the duration of one _client_send_hello call. aioquic builds a hello
-# synchronously with no await inside, so two connections in one event loop
-# cannot interleave here; the assertion holds that to be true rather than
-# assuming it.
-_current: _Connection | None = None
+# The connection whose hello is being written, set for the duration of one
+# _client_send_hello call; and the one whose ServerHello is being read, for
+# one _client_handle_hello call. Context variables, not module globals: each
+# thread and each task sees its own, so concurrent handshakes do not collide.
+_current: contextvars.ContextVar[_Connection | None] = contextvars.ContextVar(
+    "pybrws_quic_hello", default=None)
+_decoding: contextvars.ContextVar[_Connection | None] = contextvars.ContextVar(
+    "pybrws_quic_decoding", default=None)
+
+# The source of random bytes for connection ids and greased values; install()
+# sets it.
+_rng: Callable[[int], bytes] = os.urandom
 
 _DUMMY_PUBLIC_KEY = x25519.X25519PrivateKey.generate().public_key()
 
@@ -194,10 +226,12 @@ def build_hello(connection: _Connection, hello) -> bytes:
         + vector(b"".join(u16(suite) for suite in profile.CIPHER_SUITES), 2)
         + vector(bytes(profile.LEGACY_COMPRESSION_METHODS), 1)
     )
-    extensions = b"".join(
-        extension(kind, _payload(connection, kind, hello))
-        for kind in profile.extension_order(connection.rng)
-    )
+    # A payload of None leaves the extension out: server_name for an IP
+    # literal, which aioquic still verifies the certificate against.
+    payloads = ((kind, _payload(connection, kind, hello))
+                for kind in profile.extension_order(connection.rng))
+    extensions = b"".join(extension(kind, data) for kind, data in payloads
+                          if data is not None)
     body += vector(extensions, 2)
     return u8(HANDSHAKE_CLIENT_HELLO) + u24(len(body)) + body
 
@@ -212,9 +246,13 @@ def _buffer_over(data: bytes):
 _originals: dict[str, object] = {}
 
 
-def install(profile=firefox157_quic,
-            rng: Callable[[int], bytes] = os.urandom) -> None:
-    """Patch aioquic in place. Idempotent.
+def install(profile=None, rng: Callable[[int], bytes] = os.urandom) -> None:
+    """Patch aioquic in place, once; a later call only replaces `rng`.
+
+    The patches act on connections made from `configuration()` alone, each
+    with the profile its configuration names. `profile` is accepted for
+    compatibility and ignored: the profile is chosen per connection, by
+    `configuration(profile=...)`.
 
     Raises:
         NotInstalled: if aioquic does not look the way this module expects,
@@ -223,6 +261,8 @@ def install(profile=firefox157_quic,
     """
     import aioquic.tls as tls
 
+    global _rng
+    _rng = rng
     if _originals:
         return
 
@@ -243,13 +283,20 @@ def install(profile=firefox157_quic,
 
     from aioquic.quic.connection import QuicConnection
 
-    for name in ("_peer_cid", "_original_destination_connection_id"):
+    for name in ("_peer_cid", "_original_destination_connection_id",
+                 "_configuration", "_is_client"):
         # Set in __init__, so the check is against an instance's slots rather
         # than the class.
         if name not in QuicConnection.__init__.__code__.co_names:
             raise NotInstalled("aioquic's QuicConnection no longer sets %s"
                                % name)
+    if not hasattr(QuicConnection, "_initialize"):
+        raise NotInstalled("aioquic's QuicConnection has no _initialize")
+    if "tls" not in QuicConnection._initialize.__code__.co_names:
+        raise NotInstalled("aioquic's QuicConnection._initialize no longer "
+                           "creates self.tls")
     _originals["QuicConnection.__init__"] = QuicConnection.__init__
+    _originals["QuicConnection._initialize"] = QuicConnection._initialize
 
     _originals["push_client_hello"] = tls.push_client_hello
     _originals["decode_public_key"] = tls.decode_public_key
@@ -259,38 +306,40 @@ def install(profile=firefox157_quic,
         tls.Context._handle_reassembled_message)
 
     def push_client_hello(buf, hello) -> None:
-        global _current
-        if _current is None:
+        connection = _current.get()
+        if connection is None:
             # Not a connection we set up: leave aioquic's own behaviour
             # alone rather than guessing.
             _originals["push_client_hello"](buf, hello)
             return
-        buf.push_bytes(build_hello(_current, hello))
+        if connection.hello is None:
+            connection.hello = build_hello(connection, hello)
+        buf.push_bytes(connection.hello)
 
-    # Both wrappers take *args: their job is to bracket a call, not to know
+    # The wrappers take *args: their job is to bracket a call, not to know
     # its signature, and getting that wrong cost a handshake to find out.
     def client_send_hello(self, *args, **kwargs):
-        global _current
-        if _current is not None:
-            raise NotInstalled(
-                "two hellos are being built at once, which this module "
-                "assumed could not happen"
-            )
-        connection = _Connection(profile, rng)
-        self._pybrws_connection = connection
-        _current = connection
+        connection = getattr(self, "_pybrws_connection", None)
+        if connection is None:
+            return _originals["_client_send_hello"](self, *args, **kwargs)
+        if _current.get() is not None:
+            raise NotInstalled("a hello is being built inside another one")
+        if connection.hello is not None:
+            # A rebuild after a Retry: the bytes sent will be the first
+            # hello's, so this Context's random is made to match them.
+            # (type 1, length 3, version 2, then the 32-byte random)
+            self.client_random = connection.hello[6:38]
+        token = _current.set(connection)
         try:
             return _originals["_client_send_hello"](self, *args, **kwargs)
         finally:
-            _current = None
+            _current.reset(token)
 
     # decode_public_key is a module function with no access to the Context,
     # so the connection is handed to it the same way the writer gets one:
     # set for the duration of a single _client_handle_hello call.
-    _decoding: dict[str, _Connection | None] = {"current": None}
-
     def decode_public_key(key_share):
-        connection = _decoding["current"]
+        connection = _decoding.get()
         if connection is not None:
             connection.server_share = (key_share[0], bytes(key_share[1]))
             return _DUMMY_PUBLIC_KEY
@@ -298,55 +347,105 @@ def install(profile=firefox157_quic,
 
     def client_handle_hello(self, *args, **kwargs):
         connection = getattr(self, "_pybrws_connection", None)
-        _decoding["current"] = connection
+        if connection is None:
+            return _originals["_client_handle_hello"](self, *args, **kwargs)
+        self._x25519_private_key = _StubExchange(connection)
+        token = _decoding.set(connection)
         try:
-            if connection is not None:
-                self._x25519_private_key = _StubExchange(connection)
             return _originals["_client_handle_hello"](self, *args, **kwargs)
         finally:
-            _decoding["current"] = None
+            _decoding.reset(token)
 
     def handle_reassembled_message(self, message_type, input_buf, *args,
                                    **kwargs):
-        if message_type != HANDSHAKE_COMPRESSED_CERTIFICATE:
+        if (message_type != HANDSHAKE_COMPRESSED_CERTIFICATE
+                or getattr(self, "_pybrws_connection", None) is None):
             return _originals["_handle_reassembled_message"](
                 self, message_type, input_buf, *args, **kwargs)
 
+        # A CompressedCertificate stands for a Certificate, so it is taken
+        # only where aioquic's own dispatcher would take one. Anywhere else
+        # -- before the ServerHello, after the handshake -- it is what
+        # aioquic answers any misplaced message with.
+        if self.state not in (
+                tls.State.CLIENT_EXPECT_CERTIFICATE_REQUEST_OR_CERTIFICATE,
+                tls.State.CLIENT_EXPECT_CERTIFICATE):
+            raise tls.AlertUnexpectedMessage
+
+        # Every failure below is an alert: aioquic turns an Alert into a
+        # connection close and lets anything else escape into the event
+        # loop, where the caller waits for a handshake that will never end.
         # The whole message, header included, which is what the transcript
         # takes. RFC 8879 section 5: the compressed message is hashed, not the
         # certificate it expands to.
         compressed = bytes(input_buf.data_slice(0, input_buf.capacity))
-        body = decompress_certificate(compressed[4:])
+        try:
+            body = decompress_certificate(compressed[4:])
+        except CertificateError as exc:
+            # RFC 8879 section 4: cannot be decompressed, or not to the
+            # length it announced. Decompression is bounded by that length.
+            raise tls.AlertBadCertificate(str(exc)) from exc
+        except ValueError as exc:
+            # Its own lengths do not add up (RFC 8446 6.2).
+            raise tls.AlertDecodeError(str(exc)) from exc
         plain = (u8(HANDSHAKE_CERTIFICATE) + u24(len(body)) + body)
 
-        certificate = tls.pull_certificate(_buffer_over(plain))
+        try:
+            certificate = tls.pull_certificate(_buffer_over(plain))
+        except ValueError as exc:   # BufferReadError among them
+            raise tls.AlertDecodeError("the decompressed Certificate does not "
+                                       "parse: %s" % exc) from exc
+        if not certificate.certificates:
+            # aioquic's own handler would take the first entry blindly and
+            # raise IndexError; RFC 8446 4.4.2.4 names decode_error.
+            raise tls.AlertDecodeError("the server's Certificate holds no "
+                                       "certificate (RFC 8446 4.4.2.4)")
+        try:
+            self._set_peer_certificate(certificate)
+        except ValueError as exc:   # DER that is no certificate
+            raise tls.AlertBadCertificate(str(exc)) from exc
         self.key_schedule.update_hash(compressed)
-        self._set_peer_certificate(certificate)
         self._set_state(tls.State.CLIENT_EXPECT_CERTIFICATE_VERIFY)
 
     def quic_connection_init(self, *args, **kwargs):
         _originals["QuicConnection.__init__"](self, *args, **kwargs)
-        if not self._is_client:
-            return
+        profile = getattr(self._configuration, "_pybrws_profile", None)
+        if profile is None or not self._is_client:
+            return   # not ours: aioquic's own connection, untouched
+        # Kept on the QuicConnection, not the tls.Context: aioquic builds a
+        # new Context on every _initialize, a Retry included.
+        self._pybrws_connection = _Connection(profile, _rng)
         size = getattr(profile, "INITIAL_DESTINATION_ID_SIZE", None)
         if size is None or len(self._peer_cid.cid) == size:
             return
         # Both have to change together: the Initial keys are derived from the
         # destination id in the packet, so the recorded original and the id
         # actually sent must be the same bytes.
-        self._peer_cid.cid = rng(size)
+        self._peer_cid.cid = _rng(size)
         self._original_destination_connection_id = self._peer_cid.cid
+
+    def quic_connection_initialize(self, *args, **kwargs):
+        _originals["QuicConnection._initialize"](self, *args, **kwargs)
+        connection = getattr(self, "_pybrws_connection", None)
+        if connection is not None:
+            self.tls._pybrws_connection = connection
+            # No ticket is offered: Firefox's resumed QUIC hello is
+            # unmeasured, and aioquic serialises a PSK hello into a buffer
+            # our 1.9 KB hello overflows. One set on the configuration after
+            # configuration() refused it ends here.
+            self.tls.session_ticket = None
 
     tls.push_client_hello = push_client_hello
     tls.decode_public_key = decode_public_key
     tls.Context._handle_reassembled_message = handle_reassembled_message
     QuicConnection.__init__ = quic_connection_init
+    QuicConnection._initialize = quic_connection_initialize
     tls.Context._client_send_hello = client_send_hello
     tls.Context._client_handle_hello = client_handle_hello
 
 
 def configuration(server_name: str, *, profile=firefox157_quic,
-                  verify: bool = True, **overrides):
+                  verify: bool = True, cadata: bytes | None = None, **overrides):
     """A QuicConfiguration whose behaviour matches what the profile says.
 
     The hello is only half of it. The transport parameters announce a
@@ -362,6 +461,10 @@ def configuration(server_name: str, *, profile=firefox157_quic,
     """
     from aioquic.quic.configuration import QuicConfiguration
 
+    if overrides.get("session_ticket") is not None:
+        raise ValueError(
+            "QUIC resumption is unmeasured: no resumed Firefox QUIC hello has "
+            "been captured, so no session ticket is offered over QUIC")
     settings = dict(
         is_client=True,
         alpn_protocols=list(profile.ALPN_PROTOCOLS),
@@ -374,8 +477,14 @@ def configuration(server_name: str, *, profile=firefox157_quic,
     )
     if not verify:
         settings["verify_mode"] = 0
+    if cadata is not None:
+        settings["cadata"] = cadata   # PEM: aioquic trusts these instead of certifi's roots
     settings.update(overrides)
-    return QuicConfiguration(**settings)
+    config = QuicConfiguration(**settings)
+    # The mark the patches look for: only connections made from this
+    # configuration are impersonated, and with this profile.
+    config._pybrws_profile = profile
+    return config
 
 
 def uninstall() -> None:
@@ -391,6 +500,7 @@ def uninstall() -> None:
     from aioquic.quic.connection import QuicConnection
 
     QuicConnection.__init__ = _originals["QuicConnection.__init__"]
+    QuicConnection._initialize = _originals["QuicConnection._initialize"]
     tls.Context._client_send_hello = _originals["_client_send_hello"]
     tls.Context._client_handle_hello = _originals["_client_handle_hello"]
     _originals.clear()

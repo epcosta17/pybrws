@@ -152,7 +152,8 @@ class TestSessionRequests(unittest.TestCase):
         self.calls = []
 
     def scripted(self, responses):
-        def _once(url, headers, method="GET", body=b"", timeout=None):
+        def _once(url, headers, method="GET", body=b"", timeout=None,
+                  kind="xhr", context=None):
             self.calls.append((url, method))
             return responses[len(self.calls) - 1]
 

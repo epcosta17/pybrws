@@ -42,6 +42,12 @@ class TlsAlert(Exception):
         self.description = description
 
 
+class UnexpectedRecord(Exception):
+    """A record that cannot legally arrive now (RFC 8446 section 5:
+    unexpected_message): plaintext after the keys changed, or a
+    ChangeCipherSpec after the handshake."""
+
+
 class Cipher:
     """One direction of an AEAD-protected record stream."""
 
@@ -85,6 +91,12 @@ class RecordLayer:
         # ChangeCipherSpec is a real message that says when to start
         # decrypting, rather than the padding TLS 1.3 sends for middleboxes.
         self.legacy = False
+        # TLS 1.3, set by the handshake. Once the handshake read key is in
+        # place every record arrives encrypted, so a plaintext one is an
+        # injection by whoever is on the path; and once the server Finished
+        # has verified, not even the compatibility ChangeCipherSpec may come.
+        self.encrypted_only = False
+        self.handshake_done = False
 
     def _recv_exactly(self, n: int) -> bytes:
         chunks = []
@@ -117,8 +129,18 @@ class RecordLayer:
             elif content_type == APPLICATION_DATA and self.read_cipher is not None:
                 content_type, body = self.read_cipher.decrypt(header, body)
             elif content_type == CHANGE_CIPHER_SPEC:
-                # Middlebox compatibility only; carries no meaning in TLS 1.3.
+                # Middlebox compatibility only; carries no meaning in TLS 1.3,
+                # and is legal only as the single byte 0x01, only before the
+                # handshake is over (RFC 8446 section 5).
+                if self.handshake_done or body != b"\x01":
+                    raise UnexpectedRecord(
+                        "ChangeCipherSpec after the handshake or not 0x01 "
+                        "(RFC 8446 5: unexpected_message)")
                 continue
+            elif self.encrypted_only:
+                raise UnexpectedRecord(
+                    "plaintext record of type %d after the keys changed "
+                    "(RFC 8446 5: unexpected_message)" % content_type)
 
             if content_type == ALERT:
                 raise TlsAlert(body[0], body[1])
