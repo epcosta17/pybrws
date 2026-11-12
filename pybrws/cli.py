@@ -36,30 +36,11 @@ def parse_header(raw: str) -> tuple[str, str]:
 
 
 def resolve_profile(name: str, http3: bool):
-    """The profile for the transport actually being used.
-
-    A profile belongs to a transport. Handing the QUIC profile to the TCP
-    client would build a hello with three cipher suites and QUIC transport
-    parameters over TCP, which no browser sends and which would be a worse
-    fingerprint than not trying. So the two sets are kept apart and asking
-    for one from the other side says which flag to use instead.
-    """
-    table = profiles.QUIC if http3 else profiles.TCP
-    if name in table:
-        return table[name]
-
-    other = profiles.TCP if http3 else profiles.QUIC
-    hint = ""
-    if name in other:
-        hint = ("; " + repr(name) + " is a "
-                + ("TCP" if http3 else "QUIC") + " profile, so "
-                + ("drop --http3" if http3 else "add --http3"))
-    elif not http3 and name.replace("-", "").replace("_", "").endswith("quic"):
-        # The name people reach for first, without the underscore.
-        hint = "; for HTTP/3 use --http3"
-    raise SystemExit("unknown profile " + repr(name) + "; available over "
-                     + ("QUIC" if http3 else "TCP") + ": "
-                     + ", ".join(sorted(table)) + hint)
+    """The profile for the transport actually being used."""
+    try:
+        return profiles.load(name, transport="quic" if http3 else "tcp")
+    except profiles.ProfileError as error:
+        raise SystemExit(str(error))
 
 
 def fetch_http3(args, profile, overrides) -> Response:
