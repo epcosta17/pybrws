@@ -54,6 +54,18 @@ class ProfileError(ValueError):
     """A profile could not be found, imported or does not meet the contract."""
 
 
+class WrongTransport(ProfileError):
+    """A built-in profile of the other transport was asked for.
+
+    `has` is the transport the named profile belongs to ("tcp" or "quic"),
+    for a front end to turn into advice about its own flags.
+    """
+
+    def __init__(self, message: str, *, has: str):
+        super().__init__(message)
+        self.has = has
+
+
 def _is_path(spec) -> bool:
     if isinstance(spec, os.PathLike):
         return True
@@ -73,21 +85,24 @@ def _by_name(name: str, transport: str) -> types.ModuleType:
     # A profile belongs to a transport. Handing the QUIC profile to the TCP
     # client would build a hello with three cipher suites and QUIC transport
     # parameters over TCP, which no browser sends and which would be a worse
-    # fingerprint than not trying. So asking for one from the other side says
-    # which flag to use instead.
+    # fingerprint than not trying. So asking for one from the other side
+    # says which transport is needed; a front end that has a flag for it
+    # adds the flag (see WrongTransport.has).
     http3 = transport == "quic"
     other = TCP if http3 else QUIC
-    hint = ""
+    needed, have = ("QUIC", "TCP") if http3 else ("TCP", "QUIC")
     if name in other:
-        hint = ("; " + repr(name) + " is a "
-                + ("TCP" if http3 else "QUIC") + " profile, so "
-                + ("drop --http3" if http3 else "add --http3"))
-    elif not http3 and name.replace("-", "").replace("_", "").endswith("quic"):
-        # The name people reach for first, without the underscore.
-        hint = "; for HTTP/3 use --http3"
+        raise WrongTransport(
+            repr(name) + " is a " + have + " profile; this needs a " + needed
+            + " profile: " + ", ".join(sorted(table)), has=have.lower())
     label = {"tcp": "TCP", "quic": "QUIC", "any": "any transport"}[transport]
-    raise ProfileError("unknown profile " + repr(name) + "; available over "
-                       + label + ": " + ", ".join(sorted(table)) + hint)
+    message = ("unknown profile " + repr(name) + "; available over " + label
+               + ": " + ", ".join(sorted(table)))
+    if not http3 and name.replace("-", "").replace("_", "").endswith("quic"):
+        # The name people reach for first, without the underscore.
+        raise WrongTransport(message + "; the QUIC profiles are: "
+                             + ", ".join(sorted(QUIC)), has="quic")
+    raise ProfileError(message)
 
 
 def _from_file(spec) -> types.ModuleType:
@@ -147,4 +162,4 @@ def load(spec, *, transport: str = "tcp") -> types.ModuleType:
 
 
 __all__ = ["chrome155", "firefox157", "firefox157_quic", "TCP", "QUIC",
-           "REQUIRED_TCP", "REQUIRED_QUIC", "ProfileError", "load"]
+           "REQUIRED_TCP", "REQUIRED_QUIC", "ProfileError", "WrongTransport", "load"]

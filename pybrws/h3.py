@@ -308,7 +308,7 @@ async def fetch(url: str, *, method: str = "GET", headers=None,
 
         raise Unmeasured(
             "no Firefox HTTP/3 %s has been captured, so there is no measured "
-            "header set to send. tools/catch_quic.py takes one; until then "
+            "header set to send. pybrws capture quic takes one; until then "
             "send it over TCP." % method.upper())
     body, content_type = encode_body(data, json)
     _host, _port, authority, _path = split_target(url)

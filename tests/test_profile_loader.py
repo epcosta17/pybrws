@@ -29,11 +29,26 @@ class TestProfileLoader(unittest.TestCase):
         self.assertIs(load(firefox157), firefox157)
 
     def test_wrong_transport_says_which_flag(self):
+        # The flag is the fetch CLI's business: only it has --http3. The
+        # library names the transport needed and the profiles that fit.
+        from pybrws.cli import resolve_profile
+
         with self.assertRaises(ProfileError) as caught:
             load("firefox157_quic")
-        self.assertIn("add --http3", str(caught.exception))
+        message = str(caught.exception)
+        self.assertNotIn("--http3", message)
+        self.assertIn("is a QUIC profile; this needs a TCP profile: "
+                      "chrome155, firefox157", message)
         with self.assertRaises(ProfileError) as caught:
             load("chrome155", transport="quic")
+        self.assertNotIn("--http3", str(caught.exception))
+        self.assertIn("is a TCP profile; this needs a QUIC profile: "
+                      "firefox157_quic", str(caught.exception))
+        with self.assertRaises(SystemExit) as caught:
+            resolve_profile("firefox157_quic", False)
+        self.assertIn("add --http3", str(caught.exception))
+        with self.assertRaises(SystemExit) as caught:
+            resolve_profile("chrome155", True)
         self.assertIn("drop --http3", str(caught.exception))
 
     def test_profile_from_a_file(self):

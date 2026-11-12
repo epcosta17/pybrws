@@ -28,6 +28,67 @@ REPORTED = (UnsupportedUrl, TooManyRedirects, TlsAlert, ProxyError, CertificateE
             HandshakeError, Tls12Error, UnexpectedRecord, UnicodeError)
 
 
+# `pybrws <name> ...` runs one of the method's tools; each module has
+# main(argv) -> int. `capture` takes a second word, the kind of capture.
+SUBCOMMANDS = {
+    "read-quic": "pybrws.tools.read_quic",
+    "ja4": "pybrws.tools.ja4",
+    "verify": "pybrws.tools.verify",
+    "probe": "pybrws.tools.probe_fingerprint",
+    "ab": "pybrws.tools.ab_test",
+    "isolate": "pybrws.tools.isolate",
+    "waf": "pybrws.tools.detect_waf",
+}
+CAPTURE_KINDS = {
+    "hello": "pybrws.tools.catch_hello",
+    "request": "pybrws.tools.catch_request",
+    "h2": "pybrws.tools.catch_h2",
+    "quic": "pybrws.tools.catch_quic",
+    "resumed": "pybrws.tools.catch_resumed",
+}
+# The optional dependency to name when an import of it fails.
+EXTRA_FOR = {"httpx": "measure", "aioquic": "http3"}
+
+
+def missing_extra(error: ModuleNotFoundError, what: str):
+    """SystemExit naming the extra to install, or None for any other module."""
+    extra = EXTRA_FOR.get((error.name or "").split(".")[0])
+    if extra is None:
+        return None
+    return SystemExit("pybrws %s needs %s: pip install 'pybrws[%s]'"
+                      % (what, error.name.split(".")[0], extra))
+
+
+def run_tool(module_name: str, argv: list[str], what: str) -> int:
+    import importlib
+
+    try:
+        return importlib.import_module(module_name).main(argv)
+    except ModuleNotFoundError as error:
+        exit_ = missing_extra(error, what)
+        if exit_ is None:
+            raise
+        raise exit_ from None
+
+
+def dispatch(argv: list[str]) -> int | None:
+    """Run a subcommand if `argv` names one; None means it is a fetch."""
+    if not argv:
+        return None
+    if argv[0] in SUBCOMMANDS:
+        return run_tool(SUBCOMMANDS[argv[0]], argv[1:], argv[0])
+    if argv[0] == "capture":
+        kinds = ", ".join(CAPTURE_KINDS)
+        if len(argv) < 2 or argv[1] in ("-h", "--help"):
+            print("usage: pybrws capture KIND [options]\n\nKIND is one of: " + kinds)
+            return 0
+        if argv[1] not in CAPTURE_KINDS:
+            raise SystemExit("pybrws capture: unknown kind %r; one of: %s"
+                             % (argv[1], kinds))
+        return run_tool(CAPTURE_KINDS[argv[1]], argv[2:], "capture " + argv[1])
+    return None
+
+
 def parse_header(raw: str) -> tuple[str, str]:
     name, separator, value = raw.partition(":")
     if not separator:
@@ -39,6 +100,10 @@ def resolve_profile(name: str, http3: bool):
     """The profile for the transport actually being used."""
     try:
         return profiles.load(name, transport="quic" if http3 else "tcp")
+    except profiles.WrongTransport as error:
+        # Only this front end has --http3, so only it can name the flag.
+        raise SystemExit(str(error) + ("; add --http3" if error.has == "quic"
+                                       else "; drop --http3"))
     except profiles.ProfileError as error:
         raise SystemExit(str(error))
 
@@ -106,6 +171,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pybrws",
         description="Fetch an https URL with a browser's protocol fingerprint.",
+        epilog="subcommands (pybrws <name> --help): capture {%s}, %s"
+               % (",".join(CAPTURE_KINDS), ", ".join(SUBCOMMANDS)),
     )
     parser.add_argument("url", help="the https URL to fetch")
     parser.add_argument("-X", "--request", default=None, metavar="METHOD",
@@ -152,6 +219,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    done = dispatch(list(argv))
+    if done is not None:
+        return done
     args = build_parser().parse_args(argv)
     if args.request is None:
         args.request = "POST" if args.data else "GET"
@@ -189,6 +261,11 @@ def main(argv: list[str] | None = None) -> int:
                 verify=not args.insecure,
                 max_body_size=args.max_body_size,
             )
+    except ModuleNotFoundError as exc:
+        exit_ = missing_extra(exc, "--http3")
+        if exit_ is None:
+            raise
+        raise exit_ from None
     except REPORTED as exc:
         raise SystemExit(type(exc).__name__ + ": " + str(exc))
     except OSError as exc:

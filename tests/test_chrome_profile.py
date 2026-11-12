@@ -420,7 +420,7 @@ class TestWhatIsNotMeasured(unittest.TestCase):
             header_set(profile, "GET", "image", False)
         message = str(caught.exception)
         self.assertIn("H1_IMAGE_HEADERS", message)
-        self.assertIn("catch_request.py", message)
+        self.assertIn("pybrws capture request", message)
 
     def test_the_image_kind_routes_to_the_image_set(self):
         # It was measured in both profiles and unreachable in both: nothing

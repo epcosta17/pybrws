@@ -108,7 +108,7 @@ def _set(profile, name: str):
     if headers is None:
         raise Unmeasured(
             "%s has no %s: that request kind was never captured for this "
-            "browser. tools/catch_request.py and tools/catch_h2.py take it."
+            "browser. pybrws capture request and pybrws capture h2 take it."
             % (getattr(profile, "__name__", profile), name)
         )
     return headers

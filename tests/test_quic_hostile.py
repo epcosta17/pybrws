@@ -337,7 +337,7 @@ class TestHttp3Post(unittest.TestCase):
             with self.assertRaises(Unmeasured) as caught:
                 h3.post("https://example.com/", data=b"amount=1")
         self.assertIn("HTTP/3 POST", str(caught.exception))
-        self.assertIn("tools/catch_quic.py", str(caught.exception))
+        self.assertIn("pybrws capture quic", str(caught.exception))
 
     def test_cli_http3_with_a_body_refuses(self):
         # It used to call h3.get whatever -X and -d said: a silent GET.

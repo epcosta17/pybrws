@@ -5,7 +5,7 @@ to produce a connected socket to the target. Nothing about the fingerprint
 changes above this layer.
 
 One thing does change below it: the TCP/IP signature a server sees becomes
-the proxy's, not this machine's. The p0f check in tools/verify.py will stop
+the proxy's, not this machine's. The p0f check in pybrws verify will stop
 matching, by design.
 """
 
